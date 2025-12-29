@@ -93,8 +93,8 @@ let examineState = {
 let cameraLookState = {
   isLooking: true,   // Always enabled by default (FPS-style)
   sensitivity: 0.002,
-  yaw: 0,            // Horizontal rotation
-  pitch: -0.5,       // Vertical rotation (initial tilt down towards desk - looking at center)
+  yaw: 0,            // Horizontal rotation (looking straight ahead)
+  pitch: -0.57,      // Vertical rotation - matches original lookAt (0, 0, -1.5) from camera position
   minPitch: -1.0,    // Looking down limit (towards desk, not past it)
   maxPitch: 0.1,     // Looking up limit (slightly above horizontal)
   minYaw: -0.8,      // Limit horizontal rotation to left (seated person can't turn head too far)
@@ -635,12 +635,12 @@ function createLamp(options = {}) {
   bulb.name = 'bulb';
   group.add(bulb);
 
-  // SpotLight for tight focused beam under the lamp
+  // SpotLight for focused beam under the lamp (wider coverage)
   const spotLight = new THREE.SpotLight(
     new THREE.Color(group.userData.accentColor),
     3.0,           // High intensity for visible beam
     6,             // Distance the light reaches
-    Math.PI / 6,   // Narrow cone angle (~30 degrees)
+    Math.PI / 4,   // Wider cone angle (~45 degrees) for broader spotlight area
     0.3,           // Soft edge (penumbra)
     1.5            // Decay
   );

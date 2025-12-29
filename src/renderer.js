@@ -1,24 +1,26 @@
 // Focus Desktop Simulator - Main Renderer
 // Uses Three.js for 3D isometric desk simulation
-
-const THREE = require('three');
+// Three.js is loaded locally in index.html (available as global THREE)
+// Includes pixel art post-processing effect (Signalis-style)
 
 // ============================================================================
 // CONFIGURATION
 // ============================================================================
 const CONFIG = {
   camera: {
-    fov: 45,
+    // Top-down view like looking at a PC desktop
+    fov: 50,
     near: 0.1,
     far: 1000,
-    position: { x: 8, y: 10, z: 8 },
+    position: { x: 0, y: 8, z: 0 },  // Straight above, looking down
     lookAt: { x: 0, y: 0, z: 0 }
   },
   desk: {
-    width: 6,
-    depth: 4,
-    height: 0.15,
-    legHeight: 2,
+    // Desk surface only (no legs), fills most of the view
+    width: 10,
+    depth: 7,
+    height: 0.1,
+    legHeight: 0,  // No legs - like a PC desktop surface
     color: 0x8b6914
   },
   physics: {
@@ -32,6 +34,13 @@ const CONFIG = {
     ambient: 0x404060,
     directional: 0xffffff,
     ground: 0x2d3748
+  },
+  // Pixel art post-processing settings (Signalis-style)
+  pixelation: {
+    enabled: true,
+    pixelSize: 4,           // Size of pixels (higher = more pixelated)
+    normalEdgeStrength: 0.3, // Edge detection based on normals
+    depthEdgeStrength: 0.4   // Edge detection based on depth
   }
 };
 
@@ -49,6 +58,21 @@ let mouse;
 let previousMousePosition = { x: 0, y: 0 };
 let objectIdCounter = 0;
 
+// Pixel art post-processing state
+let pixelRenderTarget, normalRenderTarget;
+let pixelatedMaterial, normalMaterial;
+let fsQuad, fsCamera, fsGeometry;
+let renderResolution = new THREE.Vector2();
+
+// Interaction modal state
+let interactionObject = null;
+let timerState = {
+  active: false,
+  running: false,
+  remainingSeconds: 0,
+  intervalId: null
+};
+
 // ============================================================================
 // INITIALIZATION
 // ============================================================================
@@ -63,13 +87,18 @@ function init() {
   camera.position.set(CONFIG.camera.position.x, CONFIG.camera.position.y, CONFIG.camera.position.z);
   camera.lookAt(CONFIG.camera.lookAt.x, CONFIG.camera.lookAt.y, CONFIG.camera.lookAt.z);
 
-  // Create renderer
-  renderer = new THREE.WebGLRenderer({ antialias: true });
+  // Create renderer - disable antialiasing for pixel art effect
+  renderer = new THREE.WebGLRenderer({ antialias: !CONFIG.pixelation.enabled });
   renderer.setSize(window.innerWidth, window.innerHeight);
-  renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+  renderer.setPixelRatio(CONFIG.pixelation.enabled ? 1 : Math.min(window.devicePixelRatio, 2));
   renderer.shadowMap.enabled = true;
   renderer.shadowMap.type = THREE.PCFSoftShadowMap;
   document.getElementById('canvas-container').appendChild(renderer.domElement);
+
+  // Setup pixel art post-processing if enabled
+  if (CONFIG.pixelation.enabled) {
+    setupPixelArtPostProcessing();
+  }
 
   // Create raycaster for mouse interaction
   raycaster = new THREE.Raycaster();
@@ -80,7 +109,7 @@ function init() {
   const planeMaterial = new THREE.MeshBasicMaterial({ visible: false });
   dragPlane = new THREE.Mesh(planeGeometry, planeMaterial);
   dragPlane.rotation.x = -Math.PI / 2;
-  dragPlane.position.y = CONFIG.desk.height + CONFIG.desk.legHeight;
+  dragPlane.position.y = CONFIG.desk.height;  // No legs, just surface
   scene.add(dragPlane);
 
   // Setup lighting
@@ -109,6 +138,150 @@ function init() {
   setTimeout(() => {
     document.getElementById('loading').classList.add('hidden');
   }, 500);
+}
+
+// ============================================================================
+// PIXEL ART POST-PROCESSING SETUP (Signalis-style)
+// ============================================================================
+function setupPixelArtPostProcessing() {
+  const pixelSize = CONFIG.pixelation.pixelSize;
+
+  // Calculate render resolution (lower resolution for pixel art effect)
+  const width = Math.floor(window.innerWidth / pixelSize);
+  const height = Math.floor(window.innerHeight / pixelSize);
+  renderResolution.set(width, height);
+
+  // Create render target for the main scene (low resolution)
+  pixelRenderTarget = new THREE.WebGLRenderTarget(width, height, {
+    minFilter: THREE.NearestFilter,
+    magFilter: THREE.NearestFilter,
+    format: THREE.RGBAFormat,
+    type: THREE.HalfFloatType
+  });
+  pixelRenderTarget.depthTexture = new THREE.DepthTexture(width, height);
+
+  // Create render target for normals (for edge detection)
+  normalRenderTarget = new THREE.WebGLRenderTarget(width, height, {
+    minFilter: THREE.NearestFilter,
+    magFilter: THREE.NearestFilter,
+    format: THREE.RGBAFormat,
+    type: THREE.HalfFloatType
+  });
+
+  // Material for rendering normals
+  normalMaterial = new THREE.MeshNormalMaterial();
+
+  // Create fullscreen quad for post-processing
+  fsCamera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
+  fsGeometry = new THREE.BufferGeometry();
+  fsGeometry.setAttribute('position', new THREE.Float32BufferAttribute([-1, 3, 0, -1, -1, 0, 3, -1, 0], 3));
+  fsGeometry.setAttribute('uv', new THREE.Float32BufferAttribute([0, 2, 0, 0, 2, 0], 2));
+
+  // Create the pixelated shader material
+  pixelatedMaterial = new THREE.ShaderMaterial({
+    uniforms: {
+      tDiffuse: { value: null },
+      tDepth: { value: null },
+      tNormal: { value: null },
+      resolution: { value: new THREE.Vector4(width, height, 1 / width, 1 / height) },
+      normalEdgeStrength: { value: CONFIG.pixelation.normalEdgeStrength },
+      depthEdgeStrength: { value: CONFIG.pixelation.depthEdgeStrength }
+    },
+    vertexShader: `
+      varying vec2 vUv;
+      void main() {
+        vUv = uv;
+        gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+      }
+    `,
+    fragmentShader: `
+      uniform sampler2D tDiffuse;
+      uniform sampler2D tDepth;
+      uniform sampler2D tNormal;
+      uniform vec4 resolution;
+      uniform float normalEdgeStrength;
+      uniform float depthEdgeStrength;
+      varying vec2 vUv;
+
+      float getDepth(int x, int y) {
+        return texture2D(tDepth, vUv + vec2(x, y) * resolution.zw).r;
+      }
+
+      vec3 getNormal(int x, int y) {
+        return texture2D(tNormal, vUv + vec2(x, y) * resolution.zw).rgb * 2.0 - 1.0;
+      }
+
+      float depthEdgeIndicator(float depth, vec3 normal) {
+        float diff = 0.0;
+        diff += clamp(getDepth(1, 0) - depth, 0.0, 1.0);
+        diff += clamp(getDepth(-1, 0) - depth, 0.0, 1.0);
+        diff += clamp(getDepth(0, 1) - depth, 0.0, 1.0);
+        diff += clamp(getDepth(0, -1) - depth, 0.0, 1.0);
+        return floor(smoothstep(0.01, 0.02, diff) * 2.0) / 2.0;
+      }
+
+      float neighborNormalEdgeIndicator(int x, int y, float depth, vec3 normal) {
+        float depthDiff = getDepth(x, y) - depth;
+        vec3 neighborNormal = getNormal(x, y);
+        vec3 normalEdgeBias = vec3(1.0, 1.0, 1.0);
+        float normalDiff = dot(normal - neighborNormal, normalEdgeBias);
+        float normalIndicator = clamp(smoothstep(-0.01, 0.01, normalDiff), 0.0, 1.0);
+        float depthIndicator = clamp(sign(depthDiff * 0.25 + 0.0025), 0.0, 1.0);
+        return (1.0 - dot(normal, neighborNormal)) * depthIndicator * normalIndicator;
+      }
+
+      float normalEdgeIndicator(float depth, vec3 normal) {
+        float indicator = 0.0;
+        indicator += neighborNormalEdgeIndicator(0, -1, depth, normal);
+        indicator += neighborNormalEdgeIndicator(0, 1, depth, normal);
+        indicator += neighborNormalEdgeIndicator(-1, 0, depth, normal);
+        indicator += neighborNormalEdgeIndicator(1, 0, depth, normal);
+        return step(0.1, indicator);
+      }
+
+      void main() {
+        vec4 texel = texture2D(tDiffuse, vUv);
+        float depth = 0.0;
+        vec3 normal = vec3(0.0);
+
+        if (depthEdgeStrength > 0.0 || normalEdgeStrength > 0.0) {
+          depth = getDepth(0, 0);
+          normal = getNormal(0, 0);
+        }
+
+        float dei = 0.0;
+        if (depthEdgeStrength > 0.0) {
+          dei = depthEdgeIndicator(depth, normal);
+        }
+
+        float nei = 0.0;
+        if (normalEdgeStrength > 0.0) {
+          nei = normalEdgeIndicator(depth, normal);
+        }
+
+        // Apply edge darkening for that crisp pixel art outline look
+        float edgeFactor = dei > 0.0 ? (1.0 - depthEdgeStrength * dei) : (1.0 + normalEdgeStrength * nei);
+
+        gl_FragColor = texel * edgeFactor;
+      }
+    `
+  });
+
+  fsQuad = new THREE.Mesh(fsGeometry, pixelatedMaterial);
+}
+
+function updatePixelArtRenderTargets() {
+  if (!CONFIG.pixelation.enabled) return;
+
+  const pixelSize = CONFIG.pixelation.pixelSize;
+  const width = Math.floor(window.innerWidth / pixelSize);
+  const height = Math.floor(window.innerHeight / pixelSize);
+  renderResolution.set(width, height);
+
+  pixelRenderTarget.setSize(width, height);
+  normalRenderTarget.setSize(width, height);
+
+  pixelatedMaterial.uniforms.resolution.value.set(width, height, 1 / width, 1 / height);
 }
 
 // ============================================================================
@@ -150,7 +323,7 @@ function setupLighting() {
 function createDesk() {
   const deskGroup = new THREE.Group();
 
-  // Desktop surface
+  // Desktop surface - flat like a PC desktop view
   const topGeometry = new THREE.BoxGeometry(CONFIG.desk.width, CONFIG.desk.height, CONFIG.desk.depth);
   const topMaterial = new THREE.MeshStandardMaterial({
     color: CONFIG.desk.color,
@@ -158,33 +331,12 @@ function createDesk() {
     metalness: 0.1
   });
   const deskTop = new THREE.Mesh(topGeometry, topMaterial);
-  deskTop.position.y = CONFIG.desk.legHeight + CONFIG.desk.height / 2;
+  deskTop.position.y = CONFIG.desk.height / 2;
   deskTop.castShadow = true;
   deskTop.receiveShadow = true;
   deskGroup.add(deskTop);
 
-  // Desk legs
-  const legGeometry = new THREE.BoxGeometry(0.15, CONFIG.desk.legHeight, 0.15);
-  const legMaterial = new THREE.MeshStandardMaterial({
-    color: 0x5c4a1f,
-    roughness: 0.8,
-    metalness: 0.1
-  });
-
-  const legPositions = [
-    { x: -CONFIG.desk.width / 2 + 0.2, z: -CONFIG.desk.depth / 2 + 0.2 },
-    { x: CONFIG.desk.width / 2 - 0.2, z: -CONFIG.desk.depth / 2 + 0.2 },
-    { x: -CONFIG.desk.width / 2 + 0.2, z: CONFIG.desk.depth / 2 - 0.2 },
-    { x: CONFIG.desk.width / 2 - 0.2, z: CONFIG.desk.depth / 2 - 0.2 }
-  ];
-
-  legPositions.forEach(pos => {
-    const leg = new THREE.Mesh(legGeometry, legMaterial);
-    leg.position.set(pos.x, CONFIG.desk.legHeight / 2, pos.z);
-    leg.castShadow = true;
-    leg.receiveShadow = true;
-    deskGroup.add(leg);
-  });
+  // No legs - this is a top-down view like a PC desktop
 
   desk = deskGroup;
   scene.add(desk);
@@ -952,7 +1104,7 @@ function createHourglass(options = {}) {
 // HELPER FUNCTIONS
 // ============================================================================
 function getDeskSurfaceY() {
-  return CONFIG.desk.legHeight + CONFIG.desk.height;
+  return CONFIG.desk.height;  // No legs, just surface height
 }
 
 function addObjectToDesk(type, options = {}) {
@@ -991,26 +1143,44 @@ function removeObject(object) {
 function updateObjectColor(object, colorType, colorValue) {
   if (!object) return;
 
+  const oldMainColor = object.userData.mainColor;
+  const oldAccentColor = object.userData.accentColor;
+
   object.userData[colorType] = colorValue;
 
-  // Update materials based on object type
-  object.traverse((child) => {
-    if (child.isMesh && child.material) {
-      // This is a simplified color update - specific objects may need custom logic
-      if (colorType === 'mainColor') {
-        // Update main body parts
-        if (!child.name.includes('screen') && !child.name.includes('bulb')) {
-          if (child.material.color) {
-            // Check if this looks like a main part
-            const currentHex = child.material.color.getHexString();
-            if (currentHex !== 'ffffff' && currentHex !== '000000') {
-              child.material.color.set(colorValue);
-            }
-          }
-        }
-      }
-    }
+  // Recreate the object with new colors to ensure proper color application
+  const type = object.userData.type;
+  const creator = PRESET_CREATORS[type];
+  if (!creator) return;
+
+  // Store position and state
+  const position = { x: object.position.x, y: object.position.y, z: object.position.z };
+  const rotation = { x: object.rotation.x, y: object.rotation.y, z: object.rotation.z };
+  const id = object.userData.id;
+  const originalY = object.userData.originalY;
+
+  // Create new object with updated colors
+  const newObject = creator({
+    mainColor: object.userData.mainColor,
+    accentColor: object.userData.accentColor
   });
+
+  // Restore position, rotation and other properties
+  newObject.position.set(position.x, position.y, position.z);
+  newObject.rotation.set(rotation.x, rotation.y, rotation.z);
+  newObject.userData.id = id;
+  newObject.userData.originalY = originalY;
+  newObject.userData.targetY = position.y;
+  newObject.userData.isLifted = false;
+
+  // Replace in scene and array
+  const index = deskObjects.indexOf(object);
+  if (index > -1) {
+    deskObjects[index] = newObject;
+    scene.remove(object);
+    scene.add(newObject);
+    selectedObject = newObject;
+  }
 
   saveState();
 }
@@ -1068,6 +1238,7 @@ function setupEventListeners() {
   container.addEventListener('mousemove', onMouseMove, false);
   container.addEventListener('mouseup', onMouseUp, false);
   container.addEventListener('contextmenu', onRightClick, false);
+  container.addEventListener('dblclick', onDoubleClick, false);
 
   // Window resize
   window.addEventListener('resize', onWindowResize, false);
@@ -1122,6 +1293,10 @@ function setupEventListeners() {
       document.getElementById('menu').classList.remove('open');
     }
   });
+
+  // Modal close button
+  document.getElementById('close-modal').addEventListener('click', closeInteractionModal);
+  document.getElementById('modal-overlay').addEventListener('click', closeInteractionModal);
 }
 
 function onMouseDown(event) {
@@ -1253,6 +1428,376 @@ function onRightClick(event) {
   }
 }
 
+function onDoubleClick(event) {
+  updateMousePosition(event);
+
+  raycaster.setFromCamera(mouse, camera);
+  const intersects = raycaster.intersectObjects(deskObjects, true);
+
+  if (intersects.length > 0) {
+    let object = intersects[0].object;
+    while (object.parent && !deskObjects.includes(object)) {
+      object = object.parent;
+    }
+
+    if (deskObjects.includes(object) && object.userData.interactive) {
+      openInteractionModal(object);
+    }
+  }
+}
+
+// ============================================================================
+// OBJECT INTERACTION MODAL
+// ============================================================================
+function openInteractionModal(object) {
+  interactionObject = object;
+  const modal = document.getElementById('interaction-modal');
+  const overlay = document.getElementById('modal-overlay');
+  const content = document.getElementById('interaction-content');
+  const title = document.getElementById('modal-title');
+  const icon = document.getElementById('modal-icon');
+
+  // Set title and icon based on object type
+  const objectIcons = {
+    'clock': '🕐',
+    'lamp': '💡',
+    'laptop': '💻',
+    'globe': '🌍',
+    'hourglass': '⏳'
+  };
+
+  title.textContent = object.userData.name;
+  icon.textContent = objectIcons[object.userData.type] || '⚙️';
+
+  // Generate content based on object type
+  content.innerHTML = getInteractionContent(object);
+
+  // Setup interaction handlers
+  setupInteractionHandlers(object);
+
+  // Show modal
+  modal.classList.add('open');
+  overlay.classList.add('open');
+}
+
+function closeInteractionModal() {
+  const modal = document.getElementById('interaction-modal');
+  const overlay = document.getElementById('modal-overlay');
+
+  modal.classList.remove('open');
+  overlay.classList.remove('open');
+  interactionObject = null;
+}
+
+function getInteractionContent(object) {
+  switch (object.userData.type) {
+    case 'clock':
+      return `
+        <div class="timer-controls">
+          <div class="timer-display">
+            <div class="time" id="timer-display">00:00:00</div>
+          </div>
+          <div class="timer-input-group">
+            <input type="number" id="timer-hours" min="0" max="23" value="0" placeholder="HH">
+            <span>:</span>
+            <input type="number" id="timer-minutes" min="0" max="59" value="5" placeholder="MM">
+            <span>:</span>
+            <input type="number" id="timer-seconds" min="0" max="59" value="0" placeholder="SS">
+          </div>
+          <div class="timer-buttons">
+            <button class="timer-btn start" id="timer-start">Start</button>
+            <button class="timer-btn pause" id="timer-pause" style="display:none">Pause</button>
+            <button class="timer-btn reset" id="timer-reset">Reset</button>
+          </div>
+        </div>
+      `;
+
+    case 'lamp':
+      return `
+        <div class="timer-controls">
+          <div class="timer-display">
+            <div class="time" id="lamp-status">${object.userData.isOn ? 'ON' : 'OFF'}</div>
+          </div>
+          <div class="timer-buttons">
+            <button class="timer-btn ${object.userData.isOn ? 'pause' : 'start'}" id="lamp-toggle">
+              ${object.userData.isOn ? 'Turn Off' : 'Turn On'}
+            </button>
+          </div>
+        </div>
+      `;
+
+    case 'laptop':
+      return `
+        <div class="timer-controls">
+          <div class="timer-display">
+            <div class="time" style="font-size: 24px;">Laptop Screen</div>
+          </div>
+          <div class="timer-buttons">
+            <button class="timer-btn start" id="laptop-color">Change Screen Color</button>
+          </div>
+        </div>
+      `;
+
+    case 'globe':
+      return `
+        <div class="timer-controls">
+          <div class="timer-display">
+            <div class="time" style="font-size: 24px;">Rotation: ${object.userData.rotationSpeed > 0 ? 'ON' : 'OFF'}</div>
+          </div>
+          <div class="timer-buttons">
+            <button class="timer-btn ${object.userData.rotationSpeed > 0 ? 'pause' : 'start'}" id="globe-toggle">
+              ${object.userData.rotationSpeed > 0 ? 'Stop Rotation' : 'Start Rotation'}
+            </button>
+          </div>
+        </div>
+      `;
+
+    case 'hourglass':
+      return `
+        <div class="timer-controls">
+          <div class="timer-display">
+            <div class="time" style="font-size: 24px;">Hourglass</div>
+          </div>
+          <div class="timer-buttons">
+            <button class="timer-btn start" id="hourglass-flip">Flip Hourglass</button>
+          </div>
+        </div>
+      `;
+
+    default:
+      return `<p style="color: rgba(255,255,255,0.7);">No interactions available for this object.</p>`;
+  }
+}
+
+function setupInteractionHandlers(object) {
+  switch (object.userData.type) {
+    case 'clock':
+      setupTimerHandlers();
+      break;
+    case 'lamp':
+      setupLampHandlers(object);
+      break;
+    case 'laptop':
+      setupLaptopHandlers(object);
+      break;
+    case 'globe':
+      setupGlobeHandlers(object);
+      break;
+    case 'hourglass':
+      setupHourglassHandlers(object);
+      break;
+  }
+}
+
+function setupTimerHandlers() {
+  const startBtn = document.getElementById('timer-start');
+  const pauseBtn = document.getElementById('timer-pause');
+  const resetBtn = document.getElementById('timer-reset');
+  const display = document.getElementById('timer-display');
+
+  // Initialize display with current timer state
+  if (timerState.active) {
+    updateTimerDisplay();
+    if (timerState.running) {
+      startBtn.style.display = 'none';
+      pauseBtn.style.display = 'inline-block';
+      display.classList.add('running');
+    }
+  }
+
+  startBtn.addEventListener('click', () => {
+    const hours = parseInt(document.getElementById('timer-hours').value) || 0;
+    const minutes = parseInt(document.getElementById('timer-minutes').value) || 0;
+    const seconds = parseInt(document.getElementById('timer-seconds').value) || 0;
+
+    timerState.remainingSeconds = hours * 3600 + minutes * 60 + seconds;
+
+    if (timerState.remainingSeconds > 0) {
+      timerState.active = true;
+      timerState.running = true;
+      startBtn.style.display = 'none';
+      pauseBtn.style.display = 'inline-block';
+      display.classList.add('running');
+      display.classList.remove('paused');
+
+      timerState.intervalId = setInterval(() => {
+        if (timerState.remainingSeconds > 0) {
+          timerState.remainingSeconds--;
+          updateTimerDisplay();
+        } else {
+          // Timer finished - alert user
+          clearInterval(timerState.intervalId);
+          timerState.running = false;
+          timerState.active = false;
+          display.classList.remove('running');
+
+          // Play a notification sound or visual alert
+          playTimerAlert();
+        }
+      }, 1000);
+    }
+  });
+
+  pauseBtn.addEventListener('click', () => {
+    if (timerState.running) {
+      clearInterval(timerState.intervalId);
+      timerState.running = false;
+      startBtn.textContent = 'Resume';
+      startBtn.style.display = 'inline-block';
+      pauseBtn.style.display = 'none';
+      display.classList.remove('running');
+      display.classList.add('paused');
+    }
+  });
+
+  resetBtn.addEventListener('click', () => {
+    clearInterval(timerState.intervalId);
+    timerState.active = false;
+    timerState.running = false;
+    timerState.remainingSeconds = 0;
+    startBtn.textContent = 'Start';
+    startBtn.style.display = 'inline-block';
+    pauseBtn.style.display = 'none';
+    display.textContent = '00:00:00';
+    display.classList.remove('running', 'paused');
+  });
+}
+
+function updateTimerDisplay() {
+  const display = document.getElementById('timer-display');
+  if (display) {
+    const hours = Math.floor(timerState.remainingSeconds / 3600);
+    const minutes = Math.floor((timerState.remainingSeconds % 3600) / 60);
+    const seconds = timerState.remainingSeconds % 60;
+    display.textContent = `${hours.toString().padStart(2, '0')}:${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
+  }
+}
+
+function playTimerAlert() {
+  // Visual alert - flash the background
+  const modal = document.getElementById('interaction-modal');
+  modal.style.animation = 'timerAlert 0.5s ease 3';
+  setTimeout(() => {
+    modal.style.animation = '';
+  }, 1500);
+
+  // Try to play a beep using Web Audio API
+  try {
+    const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    const oscillator = audioCtx.createOscillator();
+    const gainNode = audioCtx.createGain();
+
+    oscillator.connect(gainNode);
+    gainNode.connect(audioCtx.destination);
+
+    oscillator.frequency.value = 800;
+    oscillator.type = 'sine';
+    gainNode.gain.value = 0.3;
+
+    oscillator.start();
+    setTimeout(() => {
+      oscillator.stop();
+    }, 200);
+  } catch (e) {
+    console.log('Audio not available');
+  }
+}
+
+function setupLampHandlers(object) {
+  const toggleBtn = document.getElementById('lamp-toggle');
+  const status = document.getElementById('lamp-status');
+
+  toggleBtn.addEventListener('click', () => {
+    object.userData.isOn = !object.userData.isOn;
+
+    const bulb = object.getObjectByName('bulb');
+    const light = object.getObjectByName('lampLight');
+
+    if (object.userData.isOn) {
+      if (bulb) {
+        bulb.material.emissiveIntensity = 0.8;
+      }
+      if (light) {
+        light.intensity = 0.5;
+      }
+      status.textContent = 'ON';
+      toggleBtn.textContent = 'Turn Off';
+      toggleBtn.className = 'timer-btn pause';
+    } else {
+      if (bulb) {
+        bulb.material.emissiveIntensity = 0;
+      }
+      if (light) {
+        light.intensity = 0;
+      }
+      status.textContent = 'OFF';
+      toggleBtn.textContent = 'Turn On';
+      toggleBtn.className = 'timer-btn start';
+    }
+  });
+}
+
+function setupLaptopHandlers(object) {
+  const colorBtn = document.getElementById('laptop-color');
+  const screenColors = ['#60a5fa', '#22c55e', '#f59e0b', '#ec4899', '#8b5cf6', '#ef4444'];
+  let colorIndex = 0;
+
+  colorBtn.addEventListener('click', () => {
+    colorIndex = (colorIndex + 1) % screenColors.length;
+    const screen = object.getObjectByName('screen');
+    if (screen) {
+      screen.material.color.set(screenColors[colorIndex]);
+      screen.material.emissive.set(screenColors[colorIndex]);
+    }
+  });
+}
+
+function setupGlobeHandlers(object) {
+  const toggleBtn = document.getElementById('globe-toggle');
+
+  toggleBtn.addEventListener('click', () => {
+    if (object.userData.rotationSpeed > 0) {
+      object.userData.rotationSpeed = 0;
+      toggleBtn.textContent = 'Start Rotation';
+      toggleBtn.className = 'timer-btn start';
+    } else {
+      object.userData.rotationSpeed = 0.002;
+      toggleBtn.textContent = 'Stop Rotation';
+      toggleBtn.className = 'timer-btn pause';
+    }
+  });
+}
+
+function setupHourglassHandlers(object) {
+  const flipBtn = document.getElementById('hourglass-flip');
+
+  flipBtn.addEventListener('click', () => {
+    // Animate flip
+    const startRotation = object.rotation.z;
+    const endRotation = startRotation + Math.PI;
+    const duration = 500;
+    const startTime = Date.now();
+
+    function animateFlip() {
+      const elapsed = Date.now() - startTime;
+      const progress = Math.min(elapsed / duration, 1);
+
+      // Ease in-out
+      const easeProgress = progress < 0.5
+        ? 2 * progress * progress
+        : 1 - Math.pow(-2 * progress + 2, 2) / 2;
+
+      object.rotation.z = startRotation + (endRotation - startRotation) * easeProgress;
+
+      if (progress < 1) {
+        requestAnimationFrame(animateFlip);
+      }
+    }
+
+    animateFlip();
+  });
+}
+
 function updateMousePosition(event) {
   const rect = renderer.domElement.getBoundingClientRect();
   mouse.x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
@@ -1263,6 +1808,11 @@ function onWindowResize() {
   camera.aspect = window.innerWidth / window.innerHeight;
   camera.updateProjectionMatrix();
   renderer.setSize(window.innerWidth, window.innerHeight);
+
+  // Update pixel art render targets if enabled
+  if (CONFIG.pixelation.enabled) {
+    updatePixelArtRenderTargets();
+  }
 }
 
 // ============================================================================
@@ -1339,7 +1889,41 @@ function animate() {
     }
   });
 
+  // Render with pixel art post-processing if enabled
+  if (CONFIG.pixelation.enabled) {
+    renderPixelArt();
+  } else {
+    renderer.render(scene, camera);
+  }
+}
+
+// ============================================================================
+// PIXEL ART RENDER PASS
+// ============================================================================
+function renderPixelArt() {
+  const uniforms = pixelatedMaterial.uniforms;
+
+  // Pass 1: Render scene to low-resolution texture
+  renderer.setRenderTarget(pixelRenderTarget);
+  renderer.clear();
   renderer.render(scene, camera);
+
+  // Pass 2: Render normals for edge detection
+  const overrideMaterial = scene.overrideMaterial;
+  renderer.setRenderTarget(normalRenderTarget);
+  scene.overrideMaterial = normalMaterial;
+  renderer.clear();
+  renderer.render(scene, camera);
+  scene.overrideMaterial = overrideMaterial;
+
+  // Pass 3: Apply pixelated shader to screen
+  uniforms.tDiffuse.value = pixelRenderTarget.texture;
+  uniforms.tDepth.value = pixelRenderTarget.depthTexture;
+  uniforms.tNormal.value = normalRenderTarget.texture;
+
+  renderer.setRenderTarget(null);
+  renderer.clear();
+  renderer.render(fsQuad, fsCamera);
 }
 
 // ============================================================================

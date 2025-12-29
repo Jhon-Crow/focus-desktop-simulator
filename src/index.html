@@ -232,6 +232,196 @@
       background: rgba(239, 68, 68, 0.3);
     }
 
+    /* Object Interaction Modal */
+    #interaction-modal {
+      position: fixed;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%) scale(0.9);
+      background: rgba(26, 26, 46, 0.98);
+      backdrop-filter: blur(15px);
+      border: 1px solid rgba(255, 255, 255, 0.15);
+      border-radius: 16px;
+      padding: 25px;
+      z-index: 200;
+      min-width: 320px;
+      max-width: 400px;
+      opacity: 0;
+      pointer-events: none;
+      transition: all 0.3s ease;
+      box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
+    }
+
+    #interaction-modal.open {
+      opacity: 1;
+      pointer-events: auto;
+      transform: translate(-50%, -50%) scale(1);
+    }
+
+    #interaction-modal h3 {
+      color: #fff;
+      font-size: 18px;
+      margin-bottom: 20px;
+      padding-bottom: 15px;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    #interaction-modal .modal-icon {
+      font-size: 24px;
+    }
+
+    .interaction-content {
+      margin-bottom: 20px;
+    }
+
+    .timer-controls {
+      display: flex;
+      flex-direction: column;
+      gap: 15px;
+    }
+
+    .timer-display {
+      background: rgba(0, 0, 0, 0.4);
+      border-radius: 12px;
+      padding: 20px;
+      text-align: center;
+    }
+
+    .timer-display .time {
+      font-size: 48px;
+      color: #fff;
+      font-weight: 300;
+      font-family: 'Courier New', monospace;
+      letter-spacing: 3px;
+    }
+
+    .timer-display .time.running {
+      color: #22c55e;
+    }
+
+    .timer-display .time.paused {
+      color: #fbbf24;
+    }
+
+    .timer-input-group {
+      display: flex;
+      gap: 10px;
+      justify-content: center;
+    }
+
+    .timer-input-group input {
+      width: 60px;
+      padding: 10px;
+      background: rgba(255, 255, 255, 0.1);
+      border: 1px solid rgba(255, 255, 255, 0.2);
+      border-radius: 8px;
+      color: #fff;
+      font-size: 16px;
+      text-align: center;
+    }
+
+    .timer-input-group input:focus {
+      outline: none;
+      border-color: rgba(79, 70, 229, 0.8);
+    }
+
+    .timer-input-group span {
+      color: rgba(255, 255, 255, 0.6);
+      font-size: 14px;
+      display: flex;
+      align-items: center;
+    }
+
+    .timer-buttons {
+      display: flex;
+      gap: 10px;
+      justify-content: center;
+    }
+
+    .timer-btn {
+      padding: 12px 24px;
+      border: none;
+      border-radius: 10px;
+      cursor: pointer;
+      font-size: 14px;
+      font-weight: 500;
+      transition: all 0.2s ease;
+    }
+
+    .timer-btn.start {
+      background: rgba(34, 197, 94, 0.3);
+      border: 1px solid rgba(34, 197, 94, 0.5);
+      color: #22c55e;
+    }
+
+    .timer-btn.start:hover {
+      background: rgba(34, 197, 94, 0.5);
+    }
+
+    .timer-btn.pause {
+      background: rgba(251, 191, 36, 0.3);
+      border: 1px solid rgba(251, 191, 36, 0.5);
+      color: #fbbf24;
+    }
+
+    .timer-btn.pause:hover {
+      background: rgba(251, 191, 36, 0.5);
+    }
+
+    .timer-btn.reset {
+      background: rgba(239, 68, 68, 0.2);
+      border: 1px solid rgba(239, 68, 68, 0.4);
+      color: #ef4444;
+    }
+
+    .timer-btn.reset:hover {
+      background: rgba(239, 68, 68, 0.3);
+    }
+
+    .close-modal-btn {
+      position: absolute;
+      top: 15px;
+      right: 15px;
+      width: 30px;
+      height: 30px;
+      background: rgba(255, 255, 255, 0.1);
+      border: none;
+      border-radius: 50%;
+      color: rgba(255, 255, 255, 0.7);
+      font-size: 18px;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      transition: all 0.2s ease;
+    }
+
+    .close-modal-btn:hover {
+      background: rgba(255, 255, 255, 0.2);
+      color: #fff;
+    }
+
+    .modal-overlay {
+      position: fixed;
+      top: 0;
+      left: 0;
+      width: 100vw;
+      height: 100vh;
+      background: rgba(0, 0, 0, 0.5);
+      z-index: 199;
+      opacity: 0;
+      pointer-events: none;
+      transition: opacity 0.3s ease;
+    }
+
+    .modal-overlay.open {
+      opacity: 1;
+      pointer-events: auto;
+    }
+
     /* Info tooltip */
     #tooltip {
       position: fixed;
@@ -442,12 +632,26 @@
 
   <div id="tooltip"></div>
 
+  <!-- Modal overlay -->
+  <div class="modal-overlay" id="modal-overlay"></div>
+
+  <!-- Interaction Modal -->
+  <div id="interaction-modal">
+    <button class="close-modal-btn" id="close-modal">&times;</button>
+    <h3><span class="modal-icon" id="modal-icon"></span><span id="modal-title">Interact</span></h3>
+    <div class="interaction-content" id="interaction-content">
+      <!-- Dynamic content will be inserted here -->
+    </div>
+  </div>
+
   <div id="instructions">
-    Click menu (top-left) to add objects | Drag to move | Right-click to customize
+    Click menu (top-left) to add objects | Drag to move | Right-click to customize | Double-click to interact
   </div>
 
   <div id="clock-display">00:00:00</div>
 
+  <!-- Three.js loaded locally (must be loaded before renderer.js) -->
+  <script src="./lib/three.min.js"></script>
   <script src="./renderer.js"></script>
 </body>
 </html>

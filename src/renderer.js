@@ -1442,6 +1442,12 @@ function onMouseDown(event) {
       selectedObject = object;
       isDragging = true;
 
+      // Clear any examine mode state that might be interfering
+      object.userData.examineTarget = null;
+      object.userData.examineScaleTarget = undefined;
+      object.userData.isExamining = false;
+      object.userData.isReturning = false;
+
       // Lift the object
       object.userData.isLifted = true;
       object.userData.targetY = object.userData.originalY + CONFIG.physics.liftHeight;
@@ -1572,6 +1578,7 @@ function onMouseWheel(event) {
 
     if (distance >= minDistance && distance <= maxDistance) {
       camera.position.set(newX, newY, newZ);
+      saveState();
     }
   }
 }
@@ -1683,9 +1690,13 @@ function exitExamineMode() {
 
   const object = examineState.object;
 
+  // Store original position locally before clearing state
+  const originalPosition = examineState.originalPosition.clone();
+  const originalScale = examineState.originalScale.clone();
+
   // Animate back to original position
-  object.userData.examineTarget = examineState.originalPosition;
-  object.userData.examineScaleTarget = examineState.originalScale.x;
+  object.userData.examineTarget = originalPosition;
+  object.userData.examineScaleTarget = originalScale.x;
   object.userData.isExamining = false;
   object.userData.isReturning = true;
 
@@ -1695,18 +1706,23 @@ function exitExamineMode() {
   // Reset cursor
   document.body.style.cursor = 'default';
 
-  // Clear examine state after animation
+  // Clear examine state immediately (animation still uses local copies)
+  examineState.active = false;
+  examineState.object = null;
+  examineState.originalPosition = null;
+  examineState.originalRotation = null;
+  examineState.originalScale = null;
+
+  // Clear animation flags after animation completes
   setTimeout(() => {
     if (object.userData.isReturning) {
-      object.position.copy(examineState.originalPosition);
-      object.scale.copy(examineState.originalScale);
-      object.userData.isReturning = false;
+      object.position.copy(originalPosition);
+      object.scale.copy(originalScale);
     }
-    examineState.active = false;
-    examineState.object = null;
-    examineState.originalPosition = null;
-    examineState.originalRotation = null;
-    examineState.originalScale = null;
+    // Clean up all examine-related flags
+    object.userData.isReturning = false;
+    object.userData.examineTarget = null;
+    object.userData.examineScaleTarget = undefined;
   }, 500);
 }
 
@@ -2092,7 +2108,12 @@ async function saveState() {
       scale: obj.userData.scale || obj.scale.x,
       mainColor: obj.userData.mainColor,
       accentColor: obj.userData.accentColor
-    }))
+    })),
+    camera: {
+      x: camera.position.x,
+      y: camera.position.y,
+      z: camera.position.z
+    }
   };
 
   try {
@@ -2106,17 +2127,35 @@ async function loadState() {
   try {
     const result = await window.electronAPI.loadState();
 
-    if (result.success && result.state && result.state.objects) {
-      result.state.objects.forEach(objData => {
-        addObjectToDesk(objData.type, {
-          x: objData.x,
-          z: objData.z,
-          rotationY: objData.rotationY,
-          scale: objData.scale,
-          mainColor: objData.mainColor,
-          accentColor: objData.accentColor
+    if (result.success && result.state) {
+      // Load camera position if saved
+      if (result.state.camera) {
+        camera.position.set(
+          result.state.camera.x,
+          result.state.camera.y,
+          result.state.camera.z
+        );
+      }
+
+      // Load objects
+      if (result.state.objects) {
+        result.state.objects.forEach(objData => {
+          addObjectToDesk(objData.type, {
+            x: objData.x,
+            z: objData.z,
+            rotationY: objData.rotationY,
+            scale: objData.scale,
+            mainColor: objData.mainColor,
+            accentColor: objData.accentColor
+          });
         });
-      });
+      } else {
+        // Add default objects if no saved objects
+        addObjectToDesk('clock', { x: -2, z: -1 });
+        addObjectToDesk('lamp', { x: 2, z: -1.2 });
+        addObjectToDesk('plant', { x: 2.3, z: 1 });
+        addObjectToDesk('coffee', { x: -1.5, z: 0.8 });
+      }
     } else {
       // Add default objects if no saved state
       addObjectToDesk('clock', { x: -2, z: -1 });
@@ -2156,11 +2195,6 @@ function animate() {
           const newScale = obj.scale.x + scaleDiff * speed;
           obj.scale.set(newScale, newScale, newScale);
         }
-      }
-
-      // Slow rotation while examining
-      if (obj.userData.isExamining) {
-        obj.rotation.y += 0.005;
       }
 
       // Check if animation is complete

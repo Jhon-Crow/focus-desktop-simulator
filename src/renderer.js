@@ -178,7 +178,8 @@ const OBJECT_PHYSICS = {
   'globe': { weight: 1.0, stability: 0.7, height: 0.5, baseOffset: 0.025 },     // Medium, balanced
   'trophy': { weight: 0.9, stability: 0.6, height: 0.4, baseOffset: 0 },        // Medium, somewhat stable
   'hourglass': { weight: 0.5, stability: 0.45, height: 0.35, baseOffset: 0.015 },// Light, can tip
-  'metronome': { weight: 0.7, stability: 0.7, height: 0.45, baseOffset: 0 }     // Medium, stable pyramid base
+  'metronome': { weight: 0.7, stability: 0.7, height: 0.45, baseOffset: 0 },    // Medium, stable pyramid base
+  'paper': { weight: 0.05, stability: 0.98, height: 0.01, baseOffset: 0 }       // Very light, lies flat
 };
 
 // Adjust object Y position when scaling to keep bottom on desk surface
@@ -512,6 +513,7 @@ const PRESET_CREATORS = {
   globe: createGlobe,
   trophy: createTrophy,
   hourglass: createHourglass,
+  paper: createPaper,
   metronome: createMetronome
 };
 
@@ -1130,7 +1132,8 @@ function createPhotoFrame(options = {}) {
   group.userData = {
     type: 'photo-frame',
     name: 'Photo Frame',
-    interactive: false,
+    interactive: true, // Now interactive for photo upload
+    photoTexture: null,
     mainColor: options.mainColor || '#92400e',
     accentColor: options.accentColor || '#60a5fa'
   };
@@ -1145,13 +1148,14 @@ function createPhotoFrame(options = {}) {
   frame.castShadow = true;
   group.add(frame);
 
-  // Photo area
+  // Photo area - can be updated with custom texture
   const photoGeometry = new THREE.PlaneGeometry(0.28, 0.38);
   const photoMaterial = new THREE.MeshStandardMaterial({
     color: new THREE.Color(group.userData.accentColor),
     roughness: 0.5
   });
   const photo = new THREE.Mesh(photoGeometry, photoMaterial);
+  photo.name = 'photoSurface';
   photo.position.z = 0.016;
   group.add(photo);
 
@@ -1366,6 +1370,59 @@ function createHourglass(options = {}) {
   }
 
   group.position.y = getDeskSurfaceY() + 0.015;
+
+  return group;
+}
+
+function createPaper(options = {}) {
+  const group = new THREE.Group();
+  group.userData = {
+    type: 'paper',
+    name: 'Paper Sheet',
+    interactive: false,
+    mainColor: options.mainColor || '#fffff5',
+    accentColor: options.accentColor || '#cccccc'
+  };
+
+  const paperMaterial = new THREE.MeshStandardMaterial({
+    color: new THREE.Color(group.userData.mainColor),
+    roughness: 0.95,
+    metalness: 0,
+    side: THREE.DoubleSide
+  });
+
+  // A4 paper proportions (210mm x 297mm ~ 0.707 ratio)
+  const paperWidth = 0.28;
+  const paperHeight = 0.4;
+  const paperThickness = 0.002;
+
+  // Main paper sheet
+  const paperGeometry = new THREE.BoxGeometry(paperWidth, paperThickness, paperHeight);
+  const paper = new THREE.Mesh(paperGeometry, paperMaterial);
+  paper.position.y = paperThickness / 2;
+  paper.castShadow = true;
+  paper.receiveShadow = true;
+  group.add(paper);
+
+  // Add some subtle lines to represent text/content
+  const lineMaterial = new THREE.MeshStandardMaterial({
+    color: new THREE.Color(group.userData.accentColor),
+    roughness: 0.9
+  });
+
+  for (let i = 0; i < 15; i++) {
+    const lineWidth = 0.18 + Math.random() * 0.06;
+    const lineGeometry = new THREE.BoxGeometry(lineWidth, 0.001, 0.008);
+    const line = new THREE.Mesh(lineGeometry, lineMaterial);
+    line.position.set(
+      (Math.random() - 0.5) * 0.02, // Slight offset
+      paperThickness + 0.001,
+      -0.15 + i * 0.022
+    );
+    group.add(line);
+  }
+
+  group.position.y = getDeskSurfaceY();
 
   return group;
 }
@@ -2689,7 +2746,8 @@ function openInteractionModal(object) {
     'laptop': '💻',
     'globe': '🌍',
     'hourglass': '⏳',
-    'metronome': '🎵'
+    'metronome': '🎵',
+    'photo-frame': '🖼️'
   };
 
   title.textContent = object.userData.name;
@@ -2817,6 +2875,23 @@ function getInteractionContent(object) {
         </div>
       `;
 
+    case 'photo-frame':
+      return `
+        <div class="timer-controls">
+          <div class="timer-display">
+            <div class="time" style="font-size: 24px;">Photo Frame</div>
+            <div style="color: rgba(255,255,255,0.6); margin-top: 10px;">Upload an image to display</div>
+          </div>
+          <div class="timer-buttons" style="flex-direction: column; gap: 15px;">
+            <label class="timer-btn start" style="cursor: pointer; display: inline-block;">
+              Choose Photo
+              <input type="file" id="photo-upload" accept="image/*" style="display: none;">
+            </label>
+            <button class="timer-btn reset" id="photo-clear">Clear Photo</button>
+          </div>
+        </div>
+      `;
+
     default:
       return `<p style="color: rgba(255,255,255,0.7);">No interactions available for this object.</p>`;
   }
@@ -2841,6 +2916,9 @@ function setupInteractionHandlers(object) {
       break;
     case 'metronome':
       setupMetronomeHandlers(object);
+      break;
+    case 'photo-frame':
+      setupPhotoFrameHandlers(object);
       break;
   }
 }
@@ -3146,6 +3224,54 @@ function setupMetronomeHandlers(object) {
     const bpmDisplay = bpmSlider.parentElement.previousElementSibling.querySelector('div:last-child');
     if (bpmDisplay) {
       bpmDisplay.textContent = `${object.userData.bpm} BPM`;
+    }
+  });
+}
+
+function setupPhotoFrameHandlers(object) {
+  const uploadInput = document.getElementById('photo-upload');
+  const clearBtn = document.getElementById('photo-clear');
+
+  uploadInput.addEventListener('change', (e) => {
+    const file = e.target.files[0];
+    if (file && file.type.startsWith('image/')) {
+      const reader = new FileReader();
+      reader.onload = (event) => {
+        const imageUrl = event.target.result;
+
+        // Create texture from uploaded image
+        const textureLoader = new THREE.TextureLoader();
+        textureLoader.load(imageUrl, (texture) => {
+          // Find the photo surface mesh
+          const photoSurface = object.getObjectByName('photoSurface');
+          if (photoSurface) {
+            // Update the material with the new texture
+            photoSurface.material.map = texture;
+            photoSurface.material.color.set(0xffffff); // White to show texture properly
+            photoSurface.material.needsUpdate = true;
+
+            // Store texture reference for cleanup
+            object.userData.photoTexture = texture;
+          }
+        });
+      };
+      reader.readAsDataURL(file);
+    }
+  });
+
+  clearBtn.addEventListener('click', () => {
+    const photoSurface = object.getObjectByName('photoSurface');
+    if (photoSurface) {
+      // Dispose of the old texture
+      if (object.userData.photoTexture) {
+        object.userData.photoTexture.dispose();
+        object.userData.photoTexture = null;
+      }
+
+      // Reset to default color
+      photoSurface.material.map = null;
+      photoSurface.material.color.set(new THREE.Color(object.userData.accentColor));
+      photoSurface.material.needsUpdate = true;
     }
   });
 }

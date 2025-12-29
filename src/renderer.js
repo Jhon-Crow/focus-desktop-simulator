@@ -89,16 +89,48 @@ let examineState = {
   originalScale: null
 };
 
+// ============================================================================
+// CAMERA CONTROL POINTS (Starting position and direction)
+// ============================================================================
+// These control points define the default camera state at startup.
+// Based on the original camera.lookAt(CONFIG.camera.lookAt) behavior.
+// To change the starting view, modify CONFIG.camera.position and CONFIG.camera.lookAt.
+function calculateCameraAnglesFromLookAt(cameraPos, lookAtPos) {
+  // Calculate direction vector from camera to lookAt point
+  const dx = lookAtPos.x - cameraPos.x;
+  const dy = lookAtPos.y - cameraPos.y;
+  const dz = lookAtPos.z - cameraPos.z;
+
+  // Calculate total length for pitch calculation
+  const totalLen = Math.sqrt(dx * dx + dy * dy + dz * dz);
+
+  // yaw: horizontal angle from positive z axis (using atan2 for correct quadrant)
+  const yaw = Math.atan2(dx, dz);
+
+  // pitch: vertical angle (negative when looking down)
+  const pitch = Math.asin(dy / totalLen);
+
+  return { yaw, pitch };
+}
+
+// Calculate default angles from CONFIG control points
+const DEFAULT_CAMERA_ANGLES = calculateCameraAnglesFromLookAt(
+  CONFIG.camera.position,
+  CONFIG.camera.lookAt
+);
+
 // First-person camera look state
 let cameraLookState = {
   isLooking: true,   // Always enabled by default (FPS-style)
   sensitivity: 0.002,
-  yaw: Math.PI,      // Horizontal rotation - facing the desk (negative z direction)
-  pitch: -0.57,      // Vertical rotation - looking down at desk surface
+  // Initial angles calculated from CONFIG.camera.lookAt control point
+  yaw: DEFAULT_CAMERA_ANGLES.yaw,     // Horizontal rotation - facing the desk
+  pitch: DEFAULT_CAMERA_ANGLES.pitch, // Vertical rotation - looking down at desk surface
   minPitch: -1.0,    // Looking down limit (towards desk, not past it)
   maxPitch: 0.1,     // Looking up limit (slightly above horizontal)
-  minYaw: Math.PI - 0.8,  // Limit horizontal rotation to left (seated person can't turn head too far)
-  maxYaw: Math.PI + 0.8   // Limit horizontal rotation to right
+  // Yaw limits centered around the default yaw (±0.8 radians ~ ±45 degrees)
+  minYaw: DEFAULT_CAMERA_ANGLES.yaw - 0.8,  // Limit horizontal rotation to left
+  maxYaw: DEFAULT_CAMERA_ANGLES.yaw + 0.8   // Limit horizontal rotation to right
 };
 
 // Physics state for objects
@@ -142,10 +174,12 @@ function init() {
   scene.background = new THREE.Color(CONFIG.colors.background);
 
   // Create camera (first-person desk view)
+  // CONTROL POINTS: Position from CONFIG.camera.position, direction from CONFIG.camera.lookAt
   const aspect = window.innerWidth / window.innerHeight;
   camera = new THREE.PerspectiveCamera(CONFIG.camera.fov, aspect, CONFIG.camera.near, CONFIG.camera.far);
   camera.position.set(CONFIG.camera.position.x, CONFIG.camera.position.y, CONFIG.camera.position.z);
-  // Apply initial camera look direction (desk should be visible by default)
+  // Apply initial camera look direction based on CONFIG.camera.lookAt control point
+  // The yaw/pitch are calculated from the lookAt point in DEFAULT_CAMERA_ANGLES
   updateCameraLook();
 
   // Create renderer - disable antialiasing for pixel art effect

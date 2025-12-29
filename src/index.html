@@ -508,6 +508,62 @@
       margin-top: 20px;
       font-size: 14px;
     }
+
+    /* Drag and Drop Preview */
+    .drag-preview {
+      position: fixed;
+      pointer-events: none;
+      z-index: 1000;
+      background: rgba(79, 70, 229, 0.9);
+      backdrop-filter: blur(10px);
+      border: 2px solid rgba(255, 255, 255, 0.3);
+      border-radius: 12px;
+      padding: 12px 16px;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      box-shadow: 0 8px 25px rgba(0, 0, 0, 0.4);
+      animation: dragPulse 1s ease-in-out infinite;
+    }
+
+    .drag-preview .icon {
+      font-size: 24px;
+    }
+
+    .drag-preview .name {
+      color: #fff;
+      font-size: 14px;
+      font-weight: 500;
+    }
+
+    @keyframes dragPulse {
+      0%, 100% { transform: scale(1); }
+      50% { transform: scale(1.05); }
+    }
+
+    /* Preset item drag styling */
+    .preset-item {
+      cursor: grab;
+    }
+
+    .preset-item:active {
+      cursor: grabbing;
+    }
+
+    .preset-item[draggable="true"]:hover::after {
+      content: 'Drag to place';
+      position: absolute;
+      bottom: -8px;
+      left: 50%;
+      transform: translateX(-50%);
+      font-size: 9px;
+      color: rgba(255, 255, 255, 0.5);
+      white-space: nowrap;
+    }
+
+    .preset-item {
+      position: relative;
+    }
   </style>
 </head>
 <body>
@@ -645,7 +701,7 @@
   </div>
 
   <div id="instructions">
-    Click menu (top-left) to add objects | Drag to move | Right-click to customize | Double-click to interact
+    Click menu (top-left) or drag items to desk | Drag objects to move | Right-click to customize | Double-click to interact
   </div>
 
   <div id="clock-display">00:00:00</div>

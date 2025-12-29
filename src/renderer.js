@@ -8,12 +8,15 @@
 // ============================================================================
 const CONFIG = {
   camera: {
-    // Top-down view like looking at a PC desktop
-    fov: 50,
+    // First-person desk view - looking at a PC desktop from a seated position
+    // Near edge (keyboard) is ~2-4 degrees off top-down
+    // Far edge (monitor area) is almost parallel to viewer, ~1-2 degrees higher
+    fov: 75,  // Wide FOV for realistic first-person desk view
     near: 0.1,
     far: 1000,
-    position: { x: 0, y: 8, z: 0 },  // Straight above, looking down
-    lookAt: { x: 0, y: 0, z: 0 }
+    // Position: seated viewer looking down at desk from slightly in front and above
+    position: { x: 0, y: 4.5, z: 5.5 },  // Above and in front of desk
+    lookAt: { x: 0, y: 0, z: -1.5 }  // Looking at the far edge of the desk
   },
   desk: {
     // Desk surface only (no legs), fills most of the view
@@ -72,6 +75,10 @@ let timerState = {
   remainingSeconds: 0,
   intervalId: null
 };
+
+// Drag-and-drop state for menu items
+let draggedPresetType = null;
+let dragPreviewElement = null;
 
 // ============================================================================
 // INITIALIZATION
@@ -1248,13 +1255,102 @@ function setupEventListeners() {
     document.getElementById('menu').classList.toggle('open');
   });
 
-  // Preset items
+  // Preset items - click and drag-and-drop support
   document.querySelectorAll('.preset-item').forEach(item => {
+    // Click to add
     item.addEventListener('click', () => {
       const preset = item.dataset.preset;
       addObjectToDesk(preset);
       document.getElementById('menu').classList.remove('open');
     });
+
+    // Drag start
+    item.setAttribute('draggable', 'true');
+    item.addEventListener('dragstart', (e) => {
+      draggedPresetType = item.dataset.preset;
+
+      // Create custom drag preview
+      const icon = item.querySelector('.icon').textContent;
+      const name = item.querySelector('.name').textContent;
+
+      dragPreviewElement = document.createElement('div');
+      dragPreviewElement.className = 'drag-preview';
+      dragPreviewElement.innerHTML = `<span class="icon">${icon}</span><span class="name">${name}</span>`;
+      document.body.appendChild(dragPreviewElement);
+
+      // Position off-screen initially (will be updated in dragover)
+      dragPreviewElement.style.left = '-1000px';
+      dragPreviewElement.style.top = '-1000px';
+
+      // Set transparent drag image
+      const emptyImg = new Image();
+      emptyImg.src = 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7';
+      e.dataTransfer.setDragImage(emptyImg, 0, 0);
+      e.dataTransfer.effectAllowed = 'copy';
+
+      // Close the menu during drag
+      document.getElementById('menu').classList.remove('open');
+    });
+
+    item.addEventListener('dragend', () => {
+      // Clean up drag preview
+      if (dragPreviewElement) {
+        dragPreviewElement.remove();
+        dragPreviewElement = null;
+      }
+      draggedPresetType = null;
+    });
+  });
+
+  // Drop zone (canvas container)
+  container.addEventListener('dragover', (e) => {
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'copy';
+
+    // Update drag preview position
+    if (dragPreviewElement) {
+      dragPreviewElement.style.left = (e.clientX + 15) + 'px';
+      dragPreviewElement.style.top = (e.clientY + 15) + 'px';
+    }
+  });
+
+  container.addEventListener('drop', (e) => {
+    e.preventDefault();
+
+    if (draggedPresetType) {
+      // Calculate drop position on desk
+      const rect = renderer.domElement.getBoundingClientRect();
+      const dropMouse = new THREE.Vector2(
+        ((e.clientX - rect.left) / rect.width) * 2 - 1,
+        -((e.clientY - rect.top) / rect.height) * 2 + 1
+      );
+
+      raycaster.setFromCamera(dropMouse, camera);
+      const intersects = raycaster.intersectObject(dragPlane);
+
+      if (intersects.length > 0) {
+        const point = intersects[0].point;
+
+        // Clamp to desk bounds
+        const halfWidth = CONFIG.desk.width / 2 - 0.3;
+        const halfDepth = CONFIG.desk.depth / 2 - 0.3;
+
+        const x = Math.max(-halfWidth, Math.min(halfWidth, point.x));
+        const z = Math.max(-halfDepth, Math.min(halfDepth, point.z));
+
+        addObjectToDesk(draggedPresetType, { x, z });
+      } else {
+        // If no intersection with desk, add at random position
+        addObjectToDesk(draggedPresetType);
+      }
+
+      // Clean up
+      if (dragPreviewElement) {
+        dragPreviewElement.remove();
+        dragPreviewElement = null;
+      }
+      draggedPresetType = null;
+    }
   });
 
   // Delete button

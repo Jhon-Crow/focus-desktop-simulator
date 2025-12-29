@@ -1,0 +1,453 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Focus Desktop Simulator</title>
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
+    body {
+      font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+      background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+      overflow: hidden;
+      user-select: none;
+    }
+
+    #canvas-container {
+      width: 100vw;
+      height: 100vh;
+      position: relative;
+    }
+
+    canvas {
+      display: block;
+    }
+
+    /* Side Menu */
+    #menu {
+      position: fixed;
+      left: 0;
+      top: 0;
+      width: 260px;
+      height: 100vh;
+      background: rgba(26, 26, 46, 0.95);
+      backdrop-filter: blur(10px);
+      border-right: 1px solid rgba(255, 255, 255, 0.1);
+      transform: translateX(-100%);
+      transition: transform 0.3s ease;
+      z-index: 100;
+      overflow-y: auto;
+    }
+
+    #menu.open {
+      transform: translateX(0);
+    }
+
+    #menu-toggle {
+      position: fixed;
+      left: 20px;
+      top: 20px;
+      width: 50px;
+      height: 50px;
+      background: rgba(79, 70, 229, 0.9);
+      border: none;
+      border-radius: 12px;
+      cursor: pointer;
+      z-index: 101;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      transition: all 0.3s ease;
+      box-shadow: 0 4px 15px rgba(79, 70, 229, 0.3);
+    }
+
+    #menu-toggle:hover {
+      background: rgba(99, 90, 255, 1);
+      transform: scale(1.05);
+    }
+
+    #menu-toggle span {
+      display: block;
+      width: 24px;
+      height: 2px;
+      background: white;
+      position: relative;
+    }
+
+    #menu-toggle span::before,
+    #menu-toggle span::after {
+      content: '';
+      position: absolute;
+      width: 24px;
+      height: 2px;
+      background: white;
+      left: 0;
+    }
+
+    #menu-toggle span::before { top: -7px; }
+    #menu-toggle span::after { top: 7px; }
+
+    .menu-header {
+      padding: 25px 20px;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+    }
+
+    .menu-header h2 {
+      color: #fff;
+      font-size: 18px;
+      font-weight: 600;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .menu-section {
+      padding: 20px;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+    }
+
+    .menu-section h3 {
+      color: rgba(255, 255, 255, 0.6);
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 1px;
+      margin-bottom: 15px;
+    }
+
+    .preset-grid {
+      display: grid;
+      grid-template-columns: repeat(2, 1fr);
+      gap: 10px;
+    }
+
+    .preset-item {
+      background: rgba(255, 255, 255, 0.05);
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      border-radius: 10px;
+      padding: 15px 10px;
+      text-align: center;
+      cursor: pointer;
+      transition: all 0.2s ease;
+    }
+
+    .preset-item:hover {
+      background: rgba(79, 70, 229, 0.2);
+      border-color: rgba(79, 70, 229, 0.5);
+      transform: translateY(-2px);
+    }
+
+    .preset-item .icon {
+      font-size: 28px;
+      margin-bottom: 8px;
+    }
+
+    .preset-item .name {
+      color: #fff;
+      font-size: 12px;
+      font-weight: 500;
+    }
+
+    /* Object Customization Panel */
+    #customization-panel {
+      position: fixed;
+      right: 0;
+      top: 0;
+      width: 280px;
+      height: 100vh;
+      background: rgba(26, 26, 46, 0.95);
+      backdrop-filter: blur(10px);
+      border-left: 1px solid rgba(255, 255, 255, 0.1);
+      transform: translateX(100%);
+      transition: transform 0.3s ease;
+      z-index: 100;
+      overflow-y: auto;
+      padding: 20px;
+    }
+
+    #customization-panel.open {
+      transform: translateX(0);
+    }
+
+    #customization-panel h3 {
+      color: #fff;
+      font-size: 16px;
+      margin-bottom: 20px;
+      padding-bottom: 15px;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+    }
+
+    .customization-group {
+      margin-bottom: 20px;
+    }
+
+    .customization-group label {
+      display: block;
+      color: rgba(255, 255, 255, 0.7);
+      font-size: 12px;
+      margin-bottom: 8px;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+
+    .color-picker-container {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+
+    .color-swatch {
+      width: 32px;
+      height: 32px;
+      border-radius: 8px;
+      cursor: pointer;
+      border: 2px solid transparent;
+      transition: all 0.2s ease;
+    }
+
+    .color-swatch:hover,
+    .color-swatch.selected {
+      border-color: #fff;
+      transform: scale(1.1);
+    }
+
+    .delete-btn {
+      width: 100%;
+      padding: 12px;
+      background: rgba(239, 68, 68, 0.2);
+      border: 1px solid rgba(239, 68, 68, 0.4);
+      border-radius: 8px;
+      color: #ef4444;
+      font-size: 14px;
+      cursor: pointer;
+      transition: all 0.2s ease;
+      margin-top: 20px;
+    }
+
+    .delete-btn:hover {
+      background: rgba(239, 68, 68, 0.3);
+    }
+
+    /* Info tooltip */
+    #tooltip {
+      position: fixed;
+      background: rgba(0, 0, 0, 0.85);
+      color: #fff;
+      padding: 8px 14px;
+      border-radius: 8px;
+      font-size: 13px;
+      pointer-events: none;
+      opacity: 0;
+      transition: opacity 0.2s ease;
+      z-index: 1000;
+      max-width: 200px;
+    }
+
+    #tooltip.visible {
+      opacity: 1;
+    }
+
+    /* Instructions overlay */
+    #instructions {
+      position: fixed;
+      bottom: 20px;
+      left: 50%;
+      transform: translateX(-50%);
+      background: rgba(0, 0, 0, 0.7);
+      color: rgba(255, 255, 255, 0.7);
+      padding: 12px 24px;
+      border-radius: 10px;
+      font-size: 13px;
+      pointer-events: none;
+      transition: opacity 0.3s ease;
+    }
+
+    /* Clock display */
+    #clock-display {
+      position: fixed;
+      top: 20px;
+      right: 20px;
+      color: rgba(255, 255, 255, 0.8);
+      font-size: 24px;
+      font-weight: 300;
+      letter-spacing: 2px;
+      text-shadow: 0 2px 10px rgba(0, 0, 0, 0.3);
+      z-index: 50;
+    }
+
+    /* Loading screen */
+    #loading {
+      position: fixed;
+      top: 0;
+      left: 0;
+      width: 100vw;
+      height: 100vh;
+      background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      z-index: 1000;
+      transition: opacity 0.5s ease;
+    }
+
+    #loading.hidden {
+      opacity: 0;
+      pointer-events: none;
+    }
+
+    .loader {
+      width: 50px;
+      height: 50px;
+      border: 3px solid rgba(79, 70, 229, 0.3);
+      border-top-color: #4f46e5;
+      border-radius: 50%;
+      animation: spin 1s linear infinite;
+    }
+
+    @keyframes spin {
+      to { transform: rotate(360deg); }
+    }
+
+    #loading p {
+      color: rgba(255, 255, 255, 0.7);
+      margin-top: 20px;
+      font-size: 14px;
+    }
+  </style>
+</head>
+<body>
+  <div id="loading">
+    <div class="loader"></div>
+    <p>Loading Focus Desktop...</p>
+  </div>
+
+  <div id="canvas-container"></div>
+
+  <button id="menu-toggle">
+    <span></span>
+  </button>
+
+  <div id="menu">
+    <div class="menu-header">
+      <h2>Add Objects</h2>
+    </div>
+
+    <div class="menu-section">
+      <h3>Desk Accessories</h3>
+      <div class="preset-grid">
+        <div class="preset-item" data-preset="clock">
+          <div class="icon">🕐</div>
+          <div class="name">Clock</div>
+        </div>
+        <div class="preset-item" data-preset="lamp">
+          <div class="icon">💡</div>
+          <div class="name">Lamp</div>
+        </div>
+        <div class="preset-item" data-preset="plant">
+          <div class="icon">🌱</div>
+          <div class="name">Plant</div>
+        </div>
+        <div class="preset-item" data-preset="coffee">
+          <div class="icon">☕</div>
+          <div class="name">Coffee Mug</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="menu-section">
+      <h3>Work Items</h3>
+      <div class="preset-grid">
+        <div class="preset-item" data-preset="laptop">
+          <div class="icon">💻</div>
+          <div class="name">Laptop</div>
+        </div>
+        <div class="preset-item" data-preset="notebook">
+          <div class="icon">📓</div>
+          <div class="name">Notebook</div>
+        </div>
+        <div class="preset-item" data-preset="pen-holder">
+          <div class="icon">🖊️</div>
+          <div class="name">Pen Holder</div>
+        </div>
+        <div class="preset-item" data-preset="books">
+          <div class="icon">📚</div>
+          <div class="name">Books</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="menu-section">
+      <h3>Decorations</h3>
+      <div class="preset-grid">
+        <div class="preset-item" data-preset="photo-frame">
+          <div class="icon">🖼️</div>
+          <div class="name">Photo Frame</div>
+        </div>
+        <div class="preset-item" data-preset="globe">
+          <div class="icon">🌍</div>
+          <div class="name">Globe</div>
+        </div>
+        <div class="preset-item" data-preset="trophy">
+          <div class="icon">🏆</div>
+          <div class="name">Trophy</div>
+        </div>
+        <div class="preset-item" data-preset="hourglass">
+          <div class="icon">⏳</div>
+          <div class="name">Hourglass</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div id="customization-panel">
+    <h3 id="customization-title">Customize Object</h3>
+
+    <div class="customization-group">
+      <label>Main Color</label>
+      <div class="color-picker-container" id="main-colors">
+        <div class="color-swatch" style="background: #ef4444" data-color="#ef4444"></div>
+        <div class="color-swatch" style="background: #f97316" data-color="#f97316"></div>
+        <div class="color-swatch" style="background: #eab308" data-color="#eab308"></div>
+        <div class="color-swatch" style="background: #22c55e" data-color="#22c55e"></div>
+        <div class="color-swatch" style="background: #3b82f6" data-color="#3b82f6"></div>
+        <div class="color-swatch" style="background: #8b5cf6" data-color="#8b5cf6"></div>
+        <div class="color-swatch" style="background: #ec4899" data-color="#ec4899"></div>
+        <div class="color-swatch" style="background: #ffffff" data-color="#ffffff"></div>
+        <div class="color-swatch" style="background: #64748b" data-color="#64748b"></div>
+        <div class="color-swatch" style="background: #1e293b" data-color="#1e293b"></div>
+      </div>
+    </div>
+
+    <div class="customization-group">
+      <label>Accent Color</label>
+      <div class="color-picker-container" id="accent-colors">
+        <div class="color-swatch" style="background: #fbbf24" data-color="#fbbf24"></div>
+        <div class="color-swatch" style="background: #a3e635" data-color="#a3e635"></div>
+        <div class="color-swatch" style="background: #2dd4bf" data-color="#2dd4bf"></div>
+        <div class="color-swatch" style="background: #60a5fa" data-color="#60a5fa"></div>
+        <div class="color-swatch" style="background: #c084fc" data-color="#c084fc"></div>
+        <div class="color-swatch" style="background: #f472b6" data-color="#f472b6"></div>
+        <div class="color-swatch" style="background: #fb923c" data-color="#fb923c"></div>
+        <div class="color-swatch" style="background: #d4d4d4" data-color="#d4d4d4"></div>
+      </div>
+    </div>
+
+    <button class="delete-btn" id="delete-object">Delete Object</button>
+  </div>
+
+  <div id="tooltip"></div>
+
+  <div id="instructions">
+    Click menu (top-left) to add objects | Drag to move | Right-click to customize
+  </div>
+
+  <div id="clock-display">00:00:00</div>
+
+  <script src="./renderer.js"></script>
+</body>
+</html>

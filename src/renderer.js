@@ -1,7 +1,6 @@
 // Focus Desktop Simulator - Main Renderer
 // Uses Three.js for 3D isometric desk simulation
-
-const THREE = require('three');
+// Three.js is loaded via CDN in index.html (available as global THREE)
 
 // ============================================================================
 // CONFIGURATION

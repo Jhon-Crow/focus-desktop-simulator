@@ -73,7 +73,10 @@ let timerState = {
   active: false,
   running: false,
   remainingSeconds: 0,
-  intervalId: null
+  intervalId: null,
+  alertAudioCtx: null,
+  alertOscillator: null,
+  isAlerting: false
 };
 
 // Drag-and-drop state for menu items
@@ -132,11 +135,12 @@ let cameraLookState = {
   // Initial angles calculated from CONFIG.camera.lookAt control point
   yaw: DEFAULT_CAMERA_ANGLES.yaw,     // Horizontal rotation - facing the desk
   pitch: DEFAULT_CAMERA_ANGLES.pitch, // Vertical rotation - looking down at desk surface
-  minPitch: -1.0,    // Looking down limit (towards desk, not past it)
-  maxPitch: 0.1,     // Looking up limit (slightly above horizontal)
-  // Yaw limits centered around the default yaw (±0.8 radians ~ ±45 degrees)
-  minYaw: DEFAULT_CAMERA_ANGLES.yaw - 0.8,  // Limit horizontal rotation to left
-  maxYaw: DEFAULT_CAMERA_ANGLES.yaw + 0.8   // Limit horizontal rotation to right
+  minPitch: -1.15,   // Looking down limit - extended by ~8 degrees to reach near table edge
+  maxPitch: 0.25,    // Looking up limit - extended by ~8 degrees
+  // Yaw limits centered around the default yaw (±0.97 radians ~ ±55 degrees)
+  // Extended by ~10 degrees (0.17 rad) on each side to reach desk corners
+  minYaw: DEFAULT_CAMERA_ANGLES.yaw - 0.97,  // Limit horizontal rotation to left
+  maxYaw: DEFAULT_CAMERA_ANGLES.yaw + 0.97   // Limit horizontal rotation to right
 };
 
 // Physics state for objects
@@ -160,20 +164,46 @@ const physicsState = {
 };
 
 // Object weight/stability configurations (affects how easily they tip)
+// baseOffset is the distance from the object's origin to its bottom (for Y position correction when scaling)
 const OBJECT_PHYSICS = {
-  'clock': { weight: 0.5, stability: 0.5, height: 0.6 },      // Light, tall, somewhat tippy
-  'lamp': { weight: 1.2, stability: 0.85, height: 0.9 },      // Heavy base, very stable (was 0.8/0.6)
-  'plant': { weight: 1.4, stability: 0.9, height: 0.5 },      // Heavy pot, very stable
-  'coffee': { weight: 0.4, stability: 0.6, height: 0.3 },     // Light mug, medium stability
-  'laptop': { weight: 1.5, stability: 0.95, height: 0.3 },    // Heavy, flat, very stable
-  'notebook': { weight: 0.3, stability: 0.95, height: 0.1 },  // Light, flat, very stable
-  'pen-holder': { weight: 0.6, stability: 0.6, height: 0.4 }, // Medium, somewhat stable
-  'books': { weight: 0.8, stability: 0.9, height: 0.15 },     // Book, flat, stable
-  'photo-frame': { weight: 0.3, stability: 0.35, height: 0.5 },// Light, tall, tips easier
-  'globe': { weight: 1.0, stability: 0.7, height: 0.5 },      // Medium, balanced
-  'trophy': { weight: 0.9, stability: 0.6, height: 0.4 },     // Medium, somewhat stable
-  'hourglass': { weight: 0.5, stability: 0.45, height: 0.35 } // Light, can tip
+  'clock': { weight: 0.5, stability: 0.5, height: 0.6, baseOffset: 0.35 },      // Light, tall, somewhat tippy
+  'lamp': { weight: 1.2, stability: 0.85, height: 0.9, baseOffset: 0 },         // Heavy base, very stable
+  'plant': { weight: 1.4, stability: 0.9, height: 0.5, baseOffset: 0 },         // Heavy pot, very stable
+  'coffee': { weight: 0.4, stability: 0.6, height: 0.3, baseOffset: 0 },        // Light mug, medium stability
+  'laptop': { weight: 1.5, stability: 0.95, height: 0.3, baseOffset: 0 },       // Heavy, flat, very stable
+  'notebook': { weight: 0.3, stability: 0.95, height: 0.1, baseOffset: 0 },     // Light, flat, very stable
+  'pen-holder': { weight: 0.6, stability: 0.6, height: 0.4, baseOffset: 0 },    // Medium, somewhat stable
+  'books': { weight: 0.8, stability: 0.9, height: 0.15, baseOffset: 0 },        // Book, flat, stable
+  'photo-frame': { weight: 0.3, stability: 0.35, height: 0.5, baseOffset: 0.25 },// Light, tall, tips easier
+  'globe': { weight: 1.0, stability: 0.7, height: 0.5, baseOffset: 0.025 },     // Medium, balanced
+  'trophy': { weight: 0.9, stability: 0.6, height: 0.4, baseOffset: 0 },        // Medium, somewhat stable
+  'hourglass': { weight: 0.5, stability: 0.45, height: 0.35, baseOffset: 0.015 },// Light, can tip
+  'metronome': { weight: 0.7, stability: 0.7, height: 0.45, baseOffset: 0 }     // Medium, stable pyramid base
 };
+
+// Adjust object Y position when scaling to keep bottom on desk surface
+function adjustObjectYForScale(object, oldScale, newScale) {
+  const type = object.userData.type;
+  const physics = OBJECT_PHYSICS[type];
+  if (!physics || physics.baseOffset === undefined) return;
+
+  // The object's originalY is set for scale=1. When scaling, the bottom moves:
+  // At scale 1: bottom is at originalY - baseOffset
+  // At scale S: bottom would be at position.y - baseOffset * S
+  // To keep bottom at desk: position.y = deskY + baseOffset * S
+  const deskY = getDeskSurfaceY();
+  const baseOffset = physics.baseOffset;
+
+  // Calculate the original Y position at scale 1 (without the scale adjustment)
+  const baseOriginalY = deskY + baseOffset;
+
+  // New Y position should be: deskY + baseOffset * newScale
+  const newY = deskY + baseOffset * newScale;
+
+  object.position.y = newY;
+  object.userData.originalY = newY;
+  object.userData.targetY = newY;
+}
 
 // ============================================================================
 // INITIALIZATION
@@ -481,7 +511,8 @@ const PRESET_CREATORS = {
   'photo-frame': createPhotoFrame,
   globe: createGlobe,
   trophy: createTrophy,
-  hourglass: createHourglass
+  hourglass: createHourglass,
+  metronome: createMetronome
 };
 
 function createClock(options = {}) {
@@ -688,12 +719,12 @@ function createLamp(options = {}) {
   // Rotate to point slightly forward and down (~7 degrees from vertical)
   headGroup.rotation.z = Math.PI / 25;  // ~7.2 degrees forward tilt
 
-  // Outer shade (dome shape) - dome on top, open at bottom
-  // Use the BOTTOM hemisphere (phiStart=0, phiLength=2π, thetaStart=π/2, thetaLength=π/2)
-  // This creates a dome that curves UPWARD with the hollow part facing DOWN
-  const shadeGeometry = new THREE.SphereGeometry(0.15, 32, 16, 0, Math.PI * 2, Math.PI / 2, Math.PI / 2);
+  // Outer shade (dome shape) - dome curving over top, open at bottom
+  // Use the TOP hemisphere (thetaStart=0, thetaLength=π/2) - from north pole to equator
+  // This creates a dome that curves from top down to the rim, with opening facing down
+  const shadeGeometry = new THREE.SphereGeometry(0.15, 32, 16, 0, Math.PI * 2, 0, Math.PI / 2);
   const shade = new THREE.Mesh(shadeGeometry, baseMaterial);
-  // Position the shade so the rim is at y=0 and dome curves upward
+  // Position the shade so the opening (equator) is at y=0 and dome curves upward from there
   shade.position.y = 0;
   shade.castShadow = true;
   headGroup.add(shade);
@@ -843,16 +874,17 @@ function createCoffeeMug(options = {}) {
   mug.castShadow = true;
   group.add(mug);
 
-  // Handle
+  // Handle - torus arc that sticks out from the mug side
   const handleGeometry = new THREE.TorusGeometry(0.06, 0.015, 8, 16, Math.PI);
   const handleMaterial = new THREE.MeshStandardMaterial({
     color: new THREE.Color(group.userData.mainColor),
     roughness: 0.4
   });
   const handle = new THREE.Mesh(handleGeometry, handleMaterial);
-  handle.rotation.y = Math.PI / 2;
-  handle.rotation.z = Math.PI / 2;
-  handle.position.set(0.16, 0.1, 0);
+  // Rotate to make handle vertical (arc in XY plane) and pointing outward
+  handle.rotation.x = Math.PI / 2;  // Stand the arc up vertically
+  handle.rotation.z = -Math.PI / 2; // Rotate so arc curves outward from mug
+  handle.position.set(0.12, 0.1, 0); // Attach to side of mug (mug radius is ~0.11)
   handle.castShadow = true;
   group.add(handle);
 
@@ -1334,6 +1366,115 @@ function createHourglass(options = {}) {
   }
 
   group.position.y = getDeskSurfaceY() + 0.015;
+
+  return group;
+}
+
+function createMetronome(options = {}) {
+  const group = new THREE.Group();
+  group.userData = {
+    type: 'metronome',
+    name: 'Metronome',
+    interactive: true,
+    isRunning: false,
+    bpm: 120,
+    pendulumAngle: 0,
+    pendulumDirection: 1,
+    mainColor: options.mainColor || '#8b4513',
+    accentColor: options.accentColor || '#ffd700'
+  };
+
+  const woodMaterial = new THREE.MeshStandardMaterial({
+    color: new THREE.Color(group.userData.mainColor),
+    roughness: 0.7,
+    metalness: 0.1
+  });
+
+  const metalMaterial = new THREE.MeshStandardMaterial({
+    color: new THREE.Color(group.userData.accentColor),
+    roughness: 0.3,
+    metalness: 0.8
+  });
+
+  // Base (wooden pyramid-like shape)
+  const baseGeometry = new THREE.CylinderGeometry(0.08, 0.15, 0.05, 4);
+  const base = new THREE.Mesh(baseGeometry, woodMaterial);
+  base.rotation.y = Math.PI / 4;
+  base.position.y = 0.025;
+  base.castShadow = true;
+  group.add(base);
+
+  // Body (tapered wooden box)
+  const bodyGeometry = new THREE.CylinderGeometry(0.06, 0.12, 0.35, 4);
+  const body = new THREE.Mesh(bodyGeometry, woodMaterial);
+  body.rotation.y = Math.PI / 4;
+  body.position.y = 0.225;
+  body.castShadow = true;
+  group.add(body);
+
+  // Front face plate
+  const facePlateGeometry = new THREE.PlaneGeometry(0.1, 0.2);
+  const facePlateMaterial = new THREE.MeshStandardMaterial({
+    color: 0xfffff0,
+    roughness: 0.8
+  });
+  const facePlate = new THREE.Mesh(facePlateGeometry, facePlateMaterial);
+  facePlate.position.set(0, 0.25, 0.07);
+  group.add(facePlate);
+
+  // Scale markings on face plate
+  const markingMaterial = new THREE.MeshStandardMaterial({
+    color: 0x333333,
+    roughness: 0.5
+  });
+  for (let i = 0; i < 7; i++) {
+    const markGeometry = new THREE.BoxGeometry(0.06, 0.002, 0.001);
+    const mark = new THREE.Mesh(markGeometry, markingMaterial);
+    mark.position.set(0, 0.17 + i * 0.025, 0.072);
+    group.add(mark);
+  }
+
+  // Pendulum pivot point
+  const pivotGeometry = new THREE.CylinderGeometry(0.01, 0.01, 0.02, 16);
+  const pivot = new THREE.Mesh(pivotGeometry, metalMaterial);
+  pivot.rotation.x = Math.PI / 2;
+  pivot.position.set(0, 0.35, 0.05);
+  group.add(pivot);
+
+  // Pendulum group (this will swing)
+  const pendulumGroup = new THREE.Group();
+  pendulumGroup.name = 'pendulum';
+  pendulumGroup.position.set(0, 0.35, 0.05);
+
+  // Pendulum arm
+  const armGeometry = new THREE.BoxGeometry(0.008, 0.25, 0.008);
+  const arm = new THREE.Mesh(armGeometry, metalMaterial);
+  arm.position.y = -0.125;
+  pendulumGroup.add(arm);
+
+  // Pendulum weight (adjustable)
+  const weightGeometry = new THREE.BoxGeometry(0.03, 0.04, 0.015);
+  const weight = new THREE.Mesh(weightGeometry, metalMaterial);
+  weight.name = 'weight';
+  weight.position.y = -0.15;
+  pendulumGroup.add(weight);
+
+  // Pendulum bob at bottom
+  const bobGeometry = new THREE.SphereGeometry(0.02, 16, 16);
+  const bob = new THREE.Mesh(bobGeometry, metalMaterial);
+  bob.position.y = -0.24;
+  pendulumGroup.add(bob);
+
+  group.add(pendulumGroup);
+
+  // Top ornament
+  const topGeometry = new THREE.ConeGeometry(0.03, 0.04, 4);
+  const top = new THREE.Mesh(topGeometry, metalMaterial);
+  top.rotation.y = Math.PI / 4;
+  top.position.y = 0.42;
+  group.add(top);
+
+  group.position.y = getDeskSurfaceY();
 
   return group;
 }
@@ -2123,6 +2264,12 @@ function onMouseDown(event) {
 
   if (event.button !== 0) return; // Left click only
 
+  // If in examine mode, exit it first before allowing any drag operations
+  if (examineState.active) {
+    exitExamineMode();
+    return;
+  }
+
   updateMousePosition(event);
 
   raycaster.setFromCamera(mouse, camera);
@@ -2136,6 +2283,11 @@ function onMouseDown(event) {
     }
 
     if (deskObjects.includes(object)) {
+      // Don't allow dragging if object is still animating from examine mode
+      if (object.userData.isExamining || object.userData.isReturning) {
+        return;
+      }
+
       selectedObject = object;
       isDragging = true;
 
@@ -2300,7 +2452,8 @@ function onMouseWheel(event) {
       const minScale = 0.3;
       const maxScale = 3.0;
 
-      const newScale = object.scale.x * scaleDelta;
+      const oldScale = object.scale.x;
+      const newScale = oldScale * scaleDelta;
       if (newScale >= minScale && newScale <= maxScale) {
         object.scale.set(newScale, newScale, newScale);
         object.userData.scale = newScale;
@@ -2311,6 +2464,8 @@ function onMouseWheel(event) {
         if (examineState.originalScale) {
           examineState.originalScale.set(newScale, newScale, newScale);
         }
+        // Adjust original Y position for when object returns to desk
+        adjustObjectYForScale(object, oldScale, newScale);
         saveState();
       }
     } else if (event.deltaY > 0) {
@@ -2355,10 +2510,13 @@ function onMouseWheel(event) {
         const minScale = 0.3;
         const maxScale = 3.0;
 
-        const newScale = object.scale.x * scaleDelta;
+        const oldScale = object.scale.x;
+        const newScale = oldScale * scaleDelta;
         if (newScale >= minScale && newScale <= maxScale) {
           object.scale.set(newScale, newScale, newScale);
           object.userData.scale = newScale;
+          // Adjust Y position to keep object on desk surface
+          adjustObjectYForScale(object, oldScale, newScale);
           saveState();
         }
       } else {
@@ -2530,7 +2688,8 @@ function openInteractionModal(object) {
     'lamp': '💡',
     'laptop': '💻',
     'globe': '🌍',
-    'hourglass': '⏳'
+    'hourglass': '⏳',
+    'metronome': '🎵'
   };
 
   title.textContent = object.userData.name;
@@ -2541,6 +2700,11 @@ function openInteractionModal(object) {
 
   // Setup interaction handlers
   setupInteractionHandlers(object);
+
+  // Exit pointer lock to show cursor for panel interaction
+  if (pointerLockState.isLocked) {
+    document.exitPointerLock();
+  }
 
   // Show modal
   modal.classList.add('open');
@@ -2631,6 +2795,28 @@ function getInteractionContent(object) {
         </div>
       `;
 
+    case 'metronome':
+      return `
+        <div class="timer-controls">
+          <div class="timer-display">
+            <div class="time" id="metronome-status" style="font-size: 28px;">${object.userData.isRunning ? 'RUNNING' : 'STOPPED'}</div>
+            <div style="color: rgba(255,255,255,0.6); margin-top: 10px;">${object.userData.bpm} BPM</div>
+          </div>
+          <div class="timer-input-group">
+            <input type="range" id="metronome-bpm" min="40" max="220" value="${object.userData.bpm}"
+                   style="width: 100%; accent-color: #4f46e5;">
+          </div>
+          <div class="timer-buttons">
+            <button class="timer-btn ${object.userData.isRunning ? 'pause' : 'start'}" id="metronome-toggle">
+              ${object.userData.isRunning ? 'Stop' : 'Start'}
+            </button>
+            <button class="timer-btn ${object.userData.tickSound ? 'pause' : 'reset'}" id="metronome-sound">
+              Sound: ${object.userData.tickSound ? 'ON' : 'OFF'}
+            </button>
+          </div>
+        </div>
+      `;
+
     default:
       return `<p style="color: rgba(255,255,255,0.7);">No interactions available for this object.</p>`;
   }
@@ -2652,6 +2838,9 @@ function setupInteractionHandlers(object) {
       break;
     case 'hourglass':
       setupHourglassHandlers(object);
+      break;
+    case 'metronome':
+      setupMetronomeHandlers(object);
       break;
   }
 }
@@ -2748,25 +2937,55 @@ function playTimerAlert() {
     modal.style.animation = '';
   }, 1500);
 
-  // Try to play a beep using Web Audio API
+  // Play a continuous beeping sound using Web Audio API
+  // The sound will continue until stopped by middle-click on clock
   try {
-    const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-    const oscillator = audioCtx.createOscillator();
-    const gainNode = audioCtx.createGain();
+    timerState.alertAudioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    timerState.alertOscillator = timerState.alertAudioCtx.createOscillator();
+    const gainNode = timerState.alertAudioCtx.createGain();
 
-    oscillator.connect(gainNode);
-    gainNode.connect(audioCtx.destination);
+    timerState.alertOscillator.connect(gainNode);
+    gainNode.connect(timerState.alertAudioCtx.destination);
 
-    oscillator.frequency.value = 800;
-    oscillator.type = 'sine';
+    timerState.alertOscillator.frequency.value = 800;
+    timerState.alertOscillator.type = 'sine';
     gainNode.gain.value = 0.3;
 
-    oscillator.start();
+    // Create a pulsing effect by modulating the gain
+    const now = timerState.alertAudioCtx.currentTime;
+    gainNode.gain.setValueAtTime(0.3, now);
+
+    // Pulse the sound on/off
+    let time = now;
+    for (let i = 0; i < 60; i++) { // Up to 30 seconds of pulsing (60 * 0.5s)
+      gainNode.gain.setValueAtTime(0.3, time);
+      gainNode.gain.setValueAtTime(0, time + 0.3);
+      time += 0.5;
+    }
+
+    timerState.alertOscillator.start();
+    timerState.isAlerting = true;
+
+    // Auto-stop after 30 seconds if not manually stopped
     setTimeout(() => {
-      oscillator.stop();
-    }, 200);
+      stopTimerAlert();
+    }, 30000);
   } catch (e) {
     console.log('Audio not available');
+  }
+}
+
+function stopTimerAlert() {
+  if (timerState.isAlerting && timerState.alertOscillator) {
+    try {
+      timerState.alertOscillator.stop();
+      timerState.alertAudioCtx.close();
+    } catch (e) {
+      // Ignore if already stopped
+    }
+    timerState.alertOscillator = null;
+    timerState.alertAudioCtx = null;
+    timerState.isAlerting = false;
   }
 }
 
@@ -2853,10 +3072,14 @@ function setupHourglassHandlers(object) {
   const flipBtn = document.getElementById('hourglass-flip');
 
   flipBtn.addEventListener('click', () => {
-    // Animate flip
-    const startRotation = object.rotation.z;
-    const endRotation = startRotation + Math.PI;
-    const duration = 500;
+    // Animate flip around X axis (upside down flip)
+    const startRotationX = object.rotation.x;
+    const endRotationX = startRotationX + Math.PI;
+    const startY = object.position.y;
+    // The hourglass model is 0.25 units tall, centered at ~0.125
+    // When flipped, we need to lift it to prevent clipping
+    const liftHeight = 0.3; // Extra height during flip
+    const duration = 600;
     const startTime = Date.now();
 
     function animateFlip() {
@@ -2868,14 +3091,62 @@ function setupHourglassHandlers(object) {
         ? 2 * progress * progress
         : 1 - Math.pow(-2 * progress + 2, 2) / 2;
 
-      object.rotation.z = startRotation + (endRotation - startRotation) * easeProgress;
+      object.rotation.x = startRotationX + (endRotationX - startRotationX) * easeProgress;
+
+      // Lift up during middle of animation, then settle back
+      const liftProgress = Math.sin(progress * Math.PI); // Peaks at 0.5
+      object.position.y = startY + liftProgress * liftHeight;
 
       if (progress < 1) {
         requestAnimationFrame(animateFlip);
+      } else {
+        // Ensure final position is correct
+        object.position.y = startY;
       }
     }
 
     animateFlip();
+  });
+}
+
+function setupMetronomeHandlers(object) {
+  const toggleBtn = document.getElementById('metronome-toggle');
+  const soundBtn = document.getElementById('metronome-sound');
+  const bpmSlider = document.getElementById('metronome-bpm');
+  const status = document.getElementById('metronome-status');
+
+  toggleBtn.addEventListener('click', () => {
+    object.userData.isRunning = !object.userData.isRunning;
+    if (object.userData.isRunning) {
+      status.textContent = 'RUNNING';
+      status.classList.add('running');
+      toggleBtn.textContent = 'Stop';
+      toggleBtn.className = 'timer-btn pause';
+    } else {
+      status.textContent = 'STOPPED';
+      status.classList.remove('running');
+      toggleBtn.textContent = 'Start';
+      toggleBtn.className = 'timer-btn start';
+      // Reset pendulum to center when stopped
+      object.userData.pendulumAngle = 0;
+      const pendulum = object.getObjectByName('pendulum');
+      if (pendulum) pendulum.rotation.z = 0;
+    }
+  });
+
+  soundBtn.addEventListener('click', () => {
+    object.userData.tickSound = !object.userData.tickSound;
+    soundBtn.textContent = `Sound: ${object.userData.tickSound ? 'ON' : 'OFF'}`;
+    soundBtn.className = `timer-btn ${object.userData.tickSound ? 'pause' : 'reset'}`;
+  });
+
+  bpmSlider.addEventListener('input', (e) => {
+    object.userData.bpm = parseInt(e.target.value);
+    // Update the BPM display
+    const bpmDisplay = bpmSlider.parentElement.previousElementSibling.querySelector('div:last-child');
+    if (bpmDisplay) {
+      bpmDisplay.textContent = `${object.userData.bpm} BPM`;
+    }
   });
 }
 
@@ -2908,10 +3179,12 @@ function performQuickInteraction(object) {
       break;
 
     case 'hourglass':
-      // Flip hourglass animation
-      const startRotation = object.rotation.z;
-      const endRotation = startRotation + Math.PI;
-      const duration = 500;
+      // Flip hourglass animation around X axis (upside down flip)
+      const startRotationX = object.rotation.x;
+      const endRotationX = startRotationX + Math.PI;
+      const startY = object.position.y;
+      const liftHeight = 0.3; // Lift during flip to prevent table clipping
+      const duration = 600;
       const startTime = Date.now();
 
       function animateFlip() {
@@ -2923,10 +3196,16 @@ function performQuickInteraction(object) {
           ? 2 * progress * progress
           : 1 - Math.pow(-2 * progress + 2, 2) / 2;
 
-        object.rotation.z = startRotation + (endRotation - startRotation) * easeProgress;
+        object.rotation.x = startRotationX + (endRotationX - startRotationX) * easeProgress;
+
+        // Lift during middle of animation
+        const liftProgress = Math.sin(progress * Math.PI);
+        object.position.y = startY + liftProgress * liftHeight;
 
         if (progress < 1) {
           requestAnimationFrame(animateFlip);
+        } else {
+          object.position.y = startY;
         }
       }
 
@@ -2939,6 +3218,28 @@ function performQuickInteraction(object) {
         object.userData.rotationSpeed = 0;
       } else {
         object.userData.rotationSpeed = 0.01;
+      }
+      break;
+
+    case 'clock':
+      // Middle-click on clock stops the timer alert sound (without picking up)
+      if (timerState.isAlerting) {
+        stopTimerAlert();
+      } else if (object.userData.interactive) {
+        // If no alert, open the timer modal
+        enterExamineMode(object);
+        openInteractionModal(object);
+      }
+      break;
+
+    case 'metronome':
+      // Toggle metronome on/off with middle-click
+      object.userData.isRunning = !object.userData.isRunning;
+      if (!object.userData.isRunning) {
+        // Reset pendulum when stopped
+        object.userData.pendulumAngle = 0;
+        const pendulum = object.getObjectByName('pendulum');
+        if (pendulum) pendulum.rotation.z = 0;
       }
       break;
 
@@ -3130,6 +3431,45 @@ function animate() {
       const land = obj.getObjectByName('land');
       if (globe) globe.rotation.y += obj.userData.rotationSpeed;
       if (land) land.rotation.y += obj.userData.rotationSpeed;
+    }
+
+    // Animate metronome pendulum
+    if (obj.userData.type === 'metronome' && obj.userData.isRunning) {
+      const pendulum = obj.getObjectByName('pendulum');
+      if (pendulum) {
+        // Calculate swing speed based on BPM
+        // One full swing (left to right or right to left) = one beat
+        const bpm = obj.userData.bpm || 120;
+        const swingSpeed = (bpm / 60) * Math.PI * 0.02; // Speed factor
+        const maxAngle = Math.PI / 6; // ~30 degrees max swing
+
+        // Update pendulum angle
+        obj.userData.pendulumAngle += swingSpeed * obj.userData.pendulumDirection;
+
+        // Reverse direction at extremes
+        if (Math.abs(obj.userData.pendulumAngle) > maxAngle) {
+          obj.userData.pendulumDirection *= -1;
+          obj.userData.pendulumAngle = maxAngle * obj.userData.pendulumDirection;
+
+          // Play tick sound at each swing endpoint (optional - simple click)
+          if (obj.userData.tickSound) {
+            try {
+              const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+              const osc = audioCtx.createOscillator();
+              const gain = audioCtx.createGain();
+              osc.connect(gain);
+              gain.connect(audioCtx.destination);
+              osc.frequency.value = 1000;
+              osc.type = 'square';
+              gain.gain.value = 0.1;
+              osc.start();
+              setTimeout(() => osc.stop(), 20);
+            } catch (e) {}
+          }
+        }
+
+        pendulum.rotation.z = obj.userData.pendulumAngle;
+      }
     }
   });
 

@@ -61,6 +61,8 @@ let mouse;
 let previousMousePosition = { x: 0, y: 0 };
 let objectIdCounter = 0;
 let isLoadingState = false; // Flag to prevent saving during load
+let saveStateDebounceTimer = null; // Debounce timer for saveState
+let isSavingState = false; // Flag to prevent concurrent saves
 
 // Pixel art post-processing state
 let pixelRenderTarget, normalRenderTarget;
@@ -9300,7 +9302,29 @@ function onWindowResize() {
 // ============================================================================
 // STATE PERSISTENCE
 // ============================================================================
-async function saveState() {
+
+// Debounced wrapper for saveState - prevents rapid saves during interactions
+function saveState() {
+  // Don't save during loading
+  if (isLoadingState) return;
+
+  // Clear any pending debounce timer
+  if (saveStateDebounceTimer) {
+    clearTimeout(saveStateDebounceTimer);
+  }
+
+  // Debounce save by 300ms to prevent rapid saves during scroll/drag
+  saveStateDebounceTimer = setTimeout(() => {
+    saveStateImmediate();
+  }, 300);
+}
+
+// Immediate save function (used internally)
+async function saveStateImmediate() {
+  // Don't save during loading or if already saving
+  if (isLoadingState || isSavingState) return;
+
+  isSavingState = true;
   const state = {
     objects: deskObjects.map(obj => {
       const data = {
@@ -9428,6 +9452,8 @@ async function saveState() {
     await window.electronAPI.saveState(state);
   } catch (error) {
     console.error('Failed to save state:', error);
+  } finally {
+    isSavingState = false;
   }
 }
 

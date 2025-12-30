@@ -234,7 +234,7 @@ let cameraLookState = {
   // Initial angles calculated from CONFIG.camera.lookAt control point
   yaw: DEFAULT_CAMERA_ANGLES.yaw,     // Horizontal rotation - facing the desk
   pitch: DEFAULT_CAMERA_ANGLES.pitch, // Vertical rotation - looking down at desk surface
-  minPitch: -1.83,   // Looking down limit - ~105 degrees total (extended by ~15 degrees more from -1.57)
+  minPitch: -1.55,   // Looking down limit - ~89 degrees (just before -90° to prevent camera flip)
   maxPitch: 0.42,    // Looking up limit - extended by ~10 degrees more (~24 degrees total)
   // Yaw limits centered around the default yaw (±1.40 radians ~ ±80 degrees)
   // Extended by 10 degrees to reach all desk corners

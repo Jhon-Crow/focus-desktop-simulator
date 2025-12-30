@@ -8514,6 +8514,26 @@ function setupMagazineHandlers(object) {
   }
 }
 
+// Helper function to set the first page of PDF as the magazine cover
+async function setFirstPageAsCoverForMagazine(magazine) {
+  const pdfDoc = magazine.userData.pdfDocument;
+  if (!pdfDoc) return;
+
+  try {
+    const canvas = await renderPDFPageToCanvas(pdfDoc, 1, 512, 700);
+    if (canvas) {
+      const dataUrl = canvas.toDataURL('image/png');
+      magazine.userData.coverImageDataUrl = dataUrl;
+      magazine.userData.coverImageDirty = true;
+      magazine.userData.firstPageAsCover = true;
+      const fitMode = magazine.userData.coverFitMode || 'cover';
+      applyMagazineCoverImageWithFit(magazine, dataUrl, fitMode);
+    }
+  } catch (error) {
+    console.error('Error setting first page as cover:', error);
+  }
+}
+
 async function loadPDFToMagazine(magazine, file) {
   if (magazine.userData.isLoadingPdf) {
     console.log('PDF already loading, skipping duplicate load request');
@@ -8554,6 +8574,9 @@ async function loadPDFToMagazine(magazine, file) {
       magazine.userData.pdfDataDirty = true;
     };
     base64Reader.readAsDataURL(file);
+
+    // Automatically set first page as cover (default behavior after PDF upload)
+    await setFirstPageAsCoverForMagazine(magazine);
 
     // Automatically open the magazine to show the PDF content
     if (!magazine.userData.isOpen) {

@@ -6433,12 +6433,26 @@ function openMarkdownEditor(laptop) {
   function saveAndClose(exitLaptopMode = false) {
     laptop.userData.editorContent = sourceTextarea.value;
     laptop.userData.editorFileName = filenameInput.value || 'notes.md';
-    // Clear the "was open" flag since user explicitly closed the editor
-    laptop.userData.editorWasOpen = false;
+
+    // If exiting laptop mode while editor is open, mark it as "was open" for:
+    // 1. Showing editor screenshot on laptop screen when not in zoom mode
+    // 2. Auto-reopening editor when re-entering laptop zoom mode
+    // Only clear the flag when user explicitly closes the editor (X button or Escape)
+    if (exitLaptopMode) {
+      laptop.userData.editorWasOpen = true;
+    } else {
+      laptop.userData.editorWasOpen = false;
+    }
+
     editorOverlay.remove();
-    // Update laptop desktop to show note preview if content exists
+    // Update laptop desktop to show note preview or editor window
     if (laptop.userData.screenState === 'desktop') {
-      updateLaptopDesktop(laptop);
+      if (exitLaptopMode) {
+        // Will be updated in exitLaptopZoomMode with persisted state
+        // No need to call updateLaptopDesktop here
+      } else {
+        updateLaptopDesktop(laptop);
+      }
     }
     saveState();
     document.removeEventListener('keydown', handleEditorKeys);

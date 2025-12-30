@@ -918,17 +918,50 @@ function createCoffeeMug(options = {}) {
     accentColor: options.accentColor || '#3b82f6'
   };
 
-  // Mug body
-  const mugGeometry = new THREE.CylinderGeometry(0.12, 0.1, 0.2, 32);
+  // Mug body - open cylinder (no top cap) to show liquid inside
+  // Using openEnded=true creates a hollow cylinder without top/bottom caps
+  const mugOuterGeometry = new THREE.CylinderGeometry(0.12, 0.1, 0.2, 32, 1, true);
   const mugMaterial = new THREE.MeshStandardMaterial({
     color: new THREE.Color(group.userData.mainColor),
     roughness: 0.4,
-    metalness: 0.1
+    metalness: 0.1,
+    side: THREE.DoubleSide // Visible from both inside and outside
   });
-  const mug = new THREE.Mesh(mugGeometry, mugMaterial);
-  mug.position.y = 0.1;
-  mug.castShadow = true;
-  group.add(mug);
+  const mugOuter = new THREE.Mesh(mugOuterGeometry, mugMaterial);
+  mugOuter.position.y = 0.1;
+  mugOuter.castShadow = true;
+  group.add(mugOuter);
+
+  // Mug bottom (solid base)
+  const mugBottomGeometry = new THREE.CircleGeometry(0.1, 32);
+  const mugBottom = new THREE.Mesh(mugBottomGeometry, mugMaterial);
+  mugBottom.rotation.x = -Math.PI / 2;
+  mugBottom.position.y = 0.001; // Just above desk
+  group.add(mugBottom);
+
+  // Mug inner wall (slightly smaller to give wall thickness)
+  const mugInnerGeometry = new THREE.CylinderGeometry(0.095, 0.08, 0.19, 32, 1, true);
+  const mugInnerMaterial = new THREE.MeshStandardMaterial({
+    color: new THREE.Color(group.userData.mainColor).multiplyScalar(0.9), // Slightly darker inside
+    roughness: 0.5,
+    metalness: 0.05,
+    side: THREE.BackSide // Only visible from inside
+  });
+  const mugInner = new THREE.Mesh(mugInnerGeometry, mugInnerMaterial);
+  mugInner.position.y = 0.105;
+  group.add(mugInner);
+
+  // Mug rim (top edge)
+  const rimGeometry = new THREE.TorusGeometry(0.11, 0.012, 8, 32);
+  const rimMaterial = new THREE.MeshStandardMaterial({
+    color: new THREE.Color(group.userData.mainColor),
+    roughness: 0.3,
+    metalness: 0.2
+  });
+  const rim = new THREE.Mesh(rimGeometry, rimMaterial);
+  rim.rotation.x = Math.PI / 2;
+  rim.position.y = 0.2;
+  group.add(rim);
 
   // Handle - torus arc that sticks out from the mug side (vertical "D" shape)
   // TorusGeometry(radius, tube, radialSegments, tubularSegments, arc)
@@ -940,10 +973,10 @@ function createCoffeeMug(options = {}) {
   });
   const handle = new THREE.Mesh(handleGeometry, handleMaterial);
   // The torus is flat in XY plane by default, arc opens upward (like a smile)
-  // We need to rotate it to make a vertical handle shaped like "D" when viewed from front:
-  // 1. Rotate around X axis by 90 degrees to make it vertical (arc in YZ plane)
-  // 2. The handle should be a vertical "D" shape attached to the mug side
-  handle.rotation.x = Math.PI / 2;  // Rotate 90 degrees around X - make arc vertical
+  // We need to rotate it to make a vertical handle shaped like "D" when viewed from side:
+  // 1. First rotate around Y axis by 90 degrees to make the handle extend outward from mug
+  // 2. The handle should be perpendicular to the table (vertical plane), not parallel
+  handle.rotation.y = Math.PI / 2;  // Rotate 90 degrees around Y - handle extends perpendicular to mug body
   // Position so both ends of the arc touch the mug side
   // Mug outer radius is ~0.12, handle arc radius is 0.05
   // The handle center should be at mug edge (0.12) - positioned on Z axis side
@@ -951,18 +984,33 @@ function createCoffeeMug(options = {}) {
   handle.castShadow = true;
   group.add(handle);
 
-  // Liquid surface - thicker cylinder for better visibility
-  const liquidGeometry = new THREE.CylinderGeometry(0.09, 0.085, 0.08, 32);
+  // Liquid surface - flat disc that fills the mug interior
+  // Using a disc geometry so it's visible from above looking into the mug
+  const liquidGeometry = new THREE.CircleGeometry(0.085, 32);
   const liquidMaterial = new THREE.MeshStandardMaterial({
     color: DRINK_COLORS.coffee.color,
-    roughness: 0.3,
-    metalness: 0.2,
-    side: THREE.DoubleSide // Make sure it's visible from inside the mug too
+    roughness: 0.2,
+    metalness: 0.3,
+    side: THREE.DoubleSide // Visible from both sides
   });
   const liquid = new THREE.Mesh(liquidGeometry, liquidMaterial);
   liquid.name = 'liquid';
-  liquid.position.y = 0.14; // Positioned inside the mug, slightly below rim
+  liquid.rotation.x = -Math.PI / 2; // Lay flat
+  liquid.position.y = 0.15; // Positioned inside the mug, slightly below rim
   group.add(liquid);
+
+  // Liquid body (the depth of the liquid) - cylinder below the surface
+  const liquidBodyGeometry = new THREE.CylinderGeometry(0.085, 0.075, 0.12, 32, 1, true);
+  const liquidBodyMaterial = new THREE.MeshStandardMaterial({
+    color: DRINK_COLORS.coffee.color,
+    roughness: 0.3,
+    metalness: 0.2,
+    side: THREE.DoubleSide
+  });
+  const liquidBody = new THREE.Mesh(liquidBodyGeometry, liquidBodyMaterial);
+  liquidBody.name = 'liquidBody';
+  liquidBody.position.y = 0.09; // Below the surface
+  group.add(liquidBody);
 
   // Decorative stripe
   const stripeGeometry = new THREE.CylinderGeometry(0.121, 0.121, 0.04, 32, 1, true);
@@ -3423,9 +3471,16 @@ function setupMugCustomizationHandlers(object) {
 
         // Update liquid color
         const liquid = object.getObjectByName('liquid');
-        if (liquid && DRINK_COLORS[drinkType]) {
-          liquid.material.color.set(DRINK_COLORS[drinkType].color);
-          liquid.material.needsUpdate = true;
+        const liquidBody = object.getObjectByName('liquidBody');
+        if (DRINK_COLORS[drinkType]) {
+          if (liquid) {
+            liquid.material.color.set(DRINK_COLORS[drinkType].color);
+            liquid.material.needsUpdate = true;
+          }
+          if (liquidBody) {
+            liquidBody.material.color.set(DRINK_COLORS[drinkType].color);
+            liquidBody.material.needsUpdate = true;
+          }
         }
 
         // Update button styles
@@ -3447,14 +3502,20 @@ function setupMugCustomizationHandlers(object) {
         object.userData.liquidLevel = level;
         fillDisplay.textContent = `${Math.round(level * 100)}%`;
 
-        // Update liquid visibility and scale
+        // Update liquid visibility and position
         const liquid = object.getObjectByName('liquid');
+        const liquidBody = object.getObjectByName('liquidBody');
         if (liquid) {
           liquid.visible = level > 0.05;
-          // Scale the liquid height based on fill level
-          liquid.scale.y = Math.max(0.1, level);
-          // Base position is 0.06 (bottom of inner mug), max is 0.14
-          liquid.position.y = 0.06 + level * 0.08;
+          // The liquid surface (disc) position based on fill level
+          // Base position is 0.03 (bottom of mug), max is 0.17 (near rim)
+          liquid.position.y = 0.03 + level * 0.14;
+        }
+        if (liquidBody) {
+          liquidBody.visible = level > 0.05;
+          // Scale and position the liquid body cylinder
+          liquidBody.scale.y = Math.max(0.1, level);
+          liquidBody.position.y = 0.015 + level * 0.07;
         }
 
         saveState();
@@ -4809,9 +4870,16 @@ function setupMugHandlers(object) {
 
       // Update liquid color
       const liquid = object.getObjectByName('liquid');
-      if (liquid && DRINK_COLORS[drinkType]) {
-        liquid.material.color.set(DRINK_COLORS[drinkType].color);
-        liquid.material.needsUpdate = true;
+      const liquidBody = object.getObjectByName('liquidBody');
+      if (DRINK_COLORS[drinkType]) {
+        if (liquid) {
+          liquid.material.color.set(DRINK_COLORS[drinkType].color);
+          liquid.material.needsUpdate = true;
+        }
+        if (liquidBody) {
+          liquidBody.material.color.set(DRINK_COLORS[drinkType].color);
+          liquidBody.material.needsUpdate = true;
+        }
       }
 
       // Update button styles
@@ -4834,11 +4902,15 @@ function setupMugHandlers(object) {
 
       // Update liquid height and position
       const liquid = object.getObjectByName('liquid');
+      const liquidBody = object.getObjectByName('liquidBody');
       if (liquid) {
         liquid.visible = level > 0.05;
-        liquid.scale.y = Math.max(0.1, level);
-        // Base position is 0.06 (bottom of inner mug), max is 0.14
-        liquid.position.y = 0.06 + level * 0.08;
+        liquid.position.y = 0.03 + level * 0.14;
+      }
+      if (liquidBody) {
+        liquidBody.visible = level > 0.05;
+        liquidBody.scale.y = Math.max(0.1, level);
+        liquidBody.position.y = 0.015 + level * 0.07;
       }
 
       // Update label
@@ -5299,12 +5371,23 @@ function performMugSip(object) {
 
         // Update liquid visual
         const liquid = object.getObjectByName('liquid');
+        const liquidBody = object.getObjectByName('liquidBody');
+        const level = object.userData.liquidLevel;
         if (liquid) {
-          if (object.userData.liquidLevel < 0.05) {
+          if (level < 0.05) {
             liquid.visible = false;
           } else {
-            liquid.scale.y = Math.max(0.1, object.userData.liquidLevel);
-            liquid.position.y = 0.06 + object.userData.liquidLevel * 0.08;
+            liquid.visible = true;
+            liquid.position.y = 0.03 + level * 0.14;
+          }
+        }
+        if (liquidBody) {
+          if (level < 0.05) {
+            liquidBody.visible = false;
+          } else {
+            liquidBody.visible = true;
+            liquidBody.scale.y = Math.max(0.1, level);
+            liquidBody.position.y = 0.015 + level * 0.07;
           }
         }
 
@@ -5744,17 +5827,29 @@ async function loadState() {
                 if (objData.drinkType) {
                   obj.userData.drinkType = objData.drinkType;
                   const liquid = obj.getObjectByName('liquid');
-                  if (liquid && DRINK_COLORS[objData.drinkType]) {
-                    liquid.material.color.set(DRINK_COLORS[objData.drinkType].color);
+                  const liquidBody = obj.getObjectByName('liquidBody');
+                  if (DRINK_COLORS[objData.drinkType]) {
+                    if (liquid) {
+                      liquid.material.color.set(DRINK_COLORS[objData.drinkType].color);
+                    }
+                    if (liquidBody) {
+                      liquidBody.material.color.set(DRINK_COLORS[objData.drinkType].color);
+                    }
                   }
                 }
                 if (objData.liquidLevel !== undefined) {
                   obj.userData.liquidLevel = objData.liquidLevel;
                   const liquid = obj.getObjectByName('liquid');
+                  const liquidBody = obj.getObjectByName('liquidBody');
+                  const level = objData.liquidLevel;
                   if (liquid) {
-                    liquid.visible = objData.liquidLevel > 0.05;
-                    liquid.scale.y = Math.max(0.1, objData.liquidLevel);
-                    liquid.position.y = 0.06 + objData.liquidLevel * 0.08;
+                    liquid.visible = level > 0.05;
+                    liquid.position.y = 0.03 + level * 0.14;
+                  }
+                  if (liquidBody) {
+                    liquidBody.visible = level > 0.05;
+                    liquidBody.scale.y = Math.max(0.1, level);
+                    liquidBody.position.y = 0.015 + level * 0.07;
                   }
                 }
                 if (objData.isHot !== undefined) obj.userData.isHot = objData.isHot;
@@ -5948,12 +6043,23 @@ function animate() {
 
         // Update liquid visual
         const liquid = obj.getObjectByName('liquid');
+        const liquidBody = obj.getObjectByName('liquidBody');
+        const level = obj.userData.liquidLevel;
         if (liquid) {
-          if (obj.userData.liquidLevel < 0.05) {
+          if (level < 0.05) {
             liquid.visible = false;
           } else {
-            liquid.scale.y = Math.max(0.1, obj.userData.liquidLevel);
-            liquid.position.y = 0.06 + obj.userData.liquidLevel * 0.08;
+            liquid.visible = true;
+            liquid.position.y = 0.03 + level * 0.14;
+          }
+        }
+        if (liquidBody) {
+          if (level < 0.05) {
+            liquidBody.visible = false;
+          } else {
+            liquidBody.visible = true;
+            liquidBody.scale.y = Math.max(0.1, level);
+            liquidBody.position.y = 0.015 + level * 0.07;
           }
         }
 
@@ -5980,6 +6086,20 @@ function animate() {
         // Hide pour effect when not tilted
         const pourEffect = obj.getObjectByName('pourEffect');
         if (pourEffect) pourEffect.visible = false;
+
+        // Add subtle liquid wobble animation when examining or dragging
+        if (obj.userData.liquidLevel > 0.05) {
+          const liquid = obj.getObjectByName('liquid');
+          if (liquid) {
+            // Subtle wave effect based on time
+            const time = Date.now() * 0.002;
+            const wobbleX = Math.sin(time) * 0.02;
+            const wobbleZ = Math.cos(time * 0.7) * 0.02;
+            // Apply subtle tilt that follows any existing rotation
+            liquid.rotation.x = -Math.PI / 2 + wobbleX;
+            liquid.rotation.z = wobbleZ;
+          }
+        }
       }
 
       // Steam effect for hot mug

@@ -2523,13 +2523,17 @@ function setupEventListeners() {
         bookObject = interactionObject;
       }
 
-      if (bookObject && bookObject.userData.isOpen && bookObject.userData.totalPages > 0) {
+      if (bookObject && bookObject.userData.isOpen) {
         e.preventDefault();
+        // If no PDF is loaded, use a default number of pages for the animation
+        const totalPages = bookObject.userData.totalPages || 10;
         if (e.key === 'ArrowLeft' && bookObject.userData.currentPage > 0) {
           // Previous page with animation
           animatePageTurn(bookObject, -1);
-        } else if (e.key === 'ArrowRight' && bookObject.userData.currentPage < bookObject.userData.totalPages - 1) {
+        } else if (e.key === 'ArrowRight' && bookObject.userData.currentPage < totalPages - 1) {
           // Next page with animation
+          // Ensure totalPages is set for the animation
+          if (!bookObject.userData.totalPages) bookObject.userData.totalPages = 10;
           animatePageTurn(bookObject, 1);
         }
       }

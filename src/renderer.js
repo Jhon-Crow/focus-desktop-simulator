@@ -134,6 +134,17 @@ let laptopControlState = {
   originalCameraLook: null
 };
 
+// Book reading mode state
+let bookReadingState = {
+  active: false,
+  book: null,
+  originalCameraPos: null,
+  originalCameraYaw: null,
+  originalCameraPitch: null,
+  middleMouseDownTime: 0,
+  holdTimeout: null
+};
+
 // ============================================================================
 // CAMERA CONTROL POINTS (Starting position and direction)
 // ============================================================================
@@ -974,13 +985,13 @@ function createCoffeeMug(options = {}) {
   const handle = new THREE.Mesh(handleGeometry, handleMaterial);
   // The torus is flat in XY plane by default, arc opens upward (like a smile)
   // We need to rotate it to make a vertical handle shaped like "D" when viewed from side:
-  // 1. First rotate around Y axis by 90 degrees to make the handle extend outward from mug
-  // 2. The handle should be perpendicular to the table (vertical plane), not parallel
-  handle.rotation.y = Math.PI / 2;  // Rotate 90 degrees around Y - handle extends perpendicular to mug body
+  // 1. Rotate 90° around X axis to make the arc vertical (perpendicular to table)
+  // 2. The handle sticks out horizontally from the mug body
+  handle.rotation.x = Math.PI / 2;  // Rotate 90 degrees around X - handle is now vertical
   // Position so both ends of the arc touch the mug side
   // Mug outer radius is ~0.12, handle arc radius is 0.05
-  // The handle center should be at mug edge (0.12) - positioned on Z axis side
-  handle.position.set(0, 0.1, 0.12); // Center at mug side (Z), vertically centered on mug
+  // The handle center should be at mug edge - positioned on Z axis side
+  handle.position.set(0, 0.1, 0.12 + 0.05); // Center at mug side (Z), plus handle radius offset
   handle.castShadow = true;
   group.add(handle);
 
@@ -1375,9 +1386,9 @@ function createBooks(options = {}) {
     return texture;
   };
 
-  // Cover title - increased font size from 24 to 32 for better readability
+  // Cover title - doubled font size from 32 to 64 for better readability
   const coverTitleGeometry = new THREE.PlaneGeometry(0.22, 0.08);
-  const coverTitleTexture = createTitleTexture(group.userData.bookTitle, 320, 116, 32);
+  const coverTitleTexture = createTitleTexture(group.userData.bookTitle, 320, 116, 64);
   const coverTitleMaterial = new THREE.MeshStandardMaterial({
     map: coverTitleTexture,
     roughness: 0.5
@@ -2057,7 +2068,7 @@ function updateObjectColor(object, colorType, colorValue) {
     if (closedGroup) {
       const coverTitle = closedGroup.getObjectByName('coverTitle');
       if (coverTitle) {
-        const newCoverTexture = newObject.userData.createTitleTexture(typeSpecificData.bookTitle, 320, 116, 32);
+        const newCoverTexture = newObject.userData.createTitleTexture(typeSpecificData.bookTitle, 320, 116, 64);
         coverTitle.material.map = newCoverTexture;
         coverTitle.material.needsUpdate = true;
       }
@@ -2535,6 +2546,18 @@ function setupEventListeners() {
         bookObject = examineState.object;
       } else if (interactionObject && interactionObject.userData.type === 'books') {
         bookObject = interactionObject;
+      } else {
+        // Also check if crosshair is aimed at a book (raycast from center of screen)
+        const centerMouse = new THREE.Vector2(0, 0);
+        raycaster.setFromCamera(centerMouse, camera);
+        const intersects = raycaster.intersectObjects(deskObjects, true);
+        for (const hit of intersects) {
+          const obj = getParentDeskObject(hit.object);
+          if (obj && obj.userData.type === 'books' && obj.userData.isOpen) {
+            bookObject = obj;
+            break;
+          }
+        }
       }
 
       if (bookObject && bookObject.userData.isOpen) {
@@ -2787,7 +2810,7 @@ function setupPointerLock(container) {
 }
 
 function onMouseDown(event) {
-  // Middle mouse button - quick interaction (toggle lamp, flip hourglass, etc.)
+  // Middle mouse button - quick interaction or hold for book reading mode
   if (event.button === 1) {
     event.preventDefault();
     updateMousePosition(event);
@@ -2803,9 +2826,18 @@ function onMouseDown(event) {
       }
 
       if (deskObjects.includes(object)) {
-        // Perform quick toggle interaction based on object type
-        // Pass the clicked mesh so we can detect sub-component clicks (like power button)
-        performQuickInteraction(object, clickedMesh);
+        // For books, check if user is holding for reading mode
+        if (object.userData.type === 'books' && object.userData.isOpen) {
+          bookReadingState.middleMouseDownTime = Date.now();
+          bookReadingState.holdTimeout = setTimeout(() => {
+            // Enter reading mode after holding for 300ms
+            enterBookReadingMode(object);
+          }, 300);
+        } else {
+          // Perform quick toggle interaction based on object type
+          // Pass the clicked mesh so we can detect sub-component clicks (like power button)
+          performQuickInteraction(object, clickedMesh);
+        }
       }
     }
     return;
@@ -2932,7 +2964,17 @@ function onMouseMove(event) {
   const modal = document.getElementById('interaction-modal');
   const isModalOpen = modal && modal.classList.contains('open');
 
-  if (pointerLockState.isLocked && cameraLookState.isLooking && !isModalOpen) {
+  // Check if any laptop is in zoom mode (allow camera rotation in laptop zoom mode)
+  let inLaptopZoomMode = false;
+  for (const obj of deskObjects) {
+    if (obj.userData.type === 'laptop' && obj.userData.isZoomedIn) {
+      inLaptopZoomMode = true;
+      break;
+    }
+  }
+
+  // Allow camera look normally, or in laptop zoom mode even with modal open
+  if (pointerLockState.isLocked && cameraLookState.isLooking && (!isModalOpen || inLaptopZoomMode)) {
     // Update yaw and pitch
     cameraLookState.yaw -= deltaX * cameraLookState.sensitivity;
     cameraLookState.pitch -= deltaY * cameraLookState.sensitivity;
@@ -3050,8 +3092,17 @@ function onMouseMove(event) {
 }
 
 function onMouseUp(event) {
-  // Middle mouse button no longer used for camera look
+  // Middle mouse button - cancel hold timeout or exit reading mode
   if (event.button === 1) {
+    // Cancel the hold timeout if user releases before threshold
+    if (bookReadingState.holdTimeout) {
+      clearTimeout(bookReadingState.holdTimeout);
+      bookReadingState.holdTimeout = null;
+    }
+    // If in reading mode, exit on release
+    if (bookReadingState.active) {
+      exitBookReadingMode();
+    }
     return;
   }
 
@@ -3128,10 +3179,11 @@ function checkPenHolderInsertion(droppedObject) {
     const dz = penZ - holderZ;
     const dist = Math.sqrt(dx * dx + dz * dz);
 
-    // Holder opening radius (pen holder is 0.12, mug is about 0.1)
-    const openingRadius = isHolder ? 0.12 : 0.08;
+    // Holder opening radius - expanded for easier insertion
+    // Pen holder cylinder outer radius is 0.12, but we expand to 0.2 for easier drop detection
+    const openingRadius = isHolder ? 0.2 : 0.15;
 
-    // If pen is within the holder opening
+    // If pen is within the holder opening (generous detection area)
     if (dist < openingRadius) {
       // Find an available slot position
       const slot = findAvailableHolderSlot(obj, droppedObject);
@@ -3669,10 +3721,17 @@ function updateCustomizationPanel(object) {
         </div>
         <div class="customization-group" style="margin-top: 15px;">
           <label>Title Color</label>
-          <div style="display: flex; align-items: center; gap: 10px; margin-top: 8px;">
-            <input type="color" id="book-title-color-edit" value="${object.userData.titleColor || '#ffffff'}"
-                   style="width: 40px; height: 30px; border: none; cursor: pointer; border-radius: 4px;">
-            <span style="color: rgba(255,255,255,0.7);">${object.userData.titleColor || '#ffffff'}</span>
+          <div id="book-title-colors" style="display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px;">
+            <div class="color-swatch${(object.userData.titleColor || '#ffffff') === '#ffffff' ? ' selected' : ''}" style="background: #ffffff; width: 32px; height: 32px; border-radius: 8px; cursor: pointer; border: 2px solid ${(object.userData.titleColor || '#ffffff') === '#ffffff' ? '#fff' : 'transparent'};" data-color="#ffffff"></div>
+            <div class="color-swatch${object.userData.titleColor === '#000000' ? ' selected' : ''}" style="background: #000000; width: 32px; height: 32px; border-radius: 8px; cursor: pointer; border: 2px solid ${object.userData.titleColor === '#000000' ? '#fff' : 'rgba(255,255,255,0.3)'};" data-color="#000000"></div>
+            <div class="color-swatch${object.userData.titleColor === '#fbbf24' ? ' selected' : ''}" style="background: #fbbf24; width: 32px; height: 32px; border-radius: 8px; cursor: pointer; border: 2px solid ${object.userData.titleColor === '#fbbf24' ? '#fff' : 'transparent'};" data-color="#fbbf24"></div>
+            <div class="color-swatch${object.userData.titleColor === '#ef4444' ? ' selected' : ''}" style="background: #ef4444; width: 32px; height: 32px; border-radius: 8px; cursor: pointer; border: 2px solid ${object.userData.titleColor === '#ef4444' ? '#fff' : 'transparent'};" data-color="#ef4444"></div>
+            <div class="color-swatch${object.userData.titleColor === '#22c55e' ? ' selected' : ''}" style="background: #22c55e; width: 32px; height: 32px; border-radius: 8px; cursor: pointer; border: 2px solid ${object.userData.titleColor === '#22c55e' ? '#fff' : 'transparent'};" data-color="#22c55e"></div>
+            <div class="color-swatch${object.userData.titleColor === '#3b82f6' ? ' selected' : ''}" style="background: #3b82f6; width: 32px; height: 32px; border-radius: 8px; cursor: pointer; border: 2px solid ${object.userData.titleColor === '#3b82f6' ? '#fff' : 'transparent'};" data-color="#3b82f6"></div>
+            <div class="color-swatch${object.userData.titleColor === '#8b5cf6' ? ' selected' : ''}" style="background: #8b5cf6; width: 32px; height: 32px; border-radius: 8px; cursor: pointer; border: 2px solid ${object.userData.titleColor === '#8b5cf6' ? '#fff' : 'transparent'};" data-color="#8b5cf6"></div>
+            <div class="color-swatch${object.userData.titleColor === '#ec4899' ? ' selected' : ''}" style="background: #ec4899; width: 32px; height: 32px; border-radius: 8px; cursor: pointer; border: 2px solid ${object.userData.titleColor === '#ec4899' ? '#fff' : 'transparent'};" data-color="#ec4899"></div>
+            <div class="color-swatch${object.userData.titleColor === '#c084fc' ? ' selected' : ''}" style="background: #c084fc; width: 32px; height: 32px; border-radius: 8px; cursor: pointer; border: 2px solid ${object.userData.titleColor === '#c084fc' ? '#fff' : 'transparent'};" data-color="#c084fc"></div>
+            <div class="color-swatch${object.userData.titleColor === '#64748b' ? ' selected' : ''}" style="background: #64748b; width: 32px; height: 32px; border-radius: 8px; cursor: pointer; border: 2px solid ${object.userData.titleColor === '#64748b' ? '#fff' : 'transparent'};" data-color="#64748b"></div>
           </div>
         </div>
         <div class="customization-group" style="margin-top: 15px;">
@@ -3697,21 +3756,33 @@ function updateCustomizationPanel(object) {
       break;
 
     case 'pen':
+      const penBodyColor = object.userData.mainColor || '#3b82f6';
+      const penInkColor = object.userData.inkColor || object.userData.mainColor || '#3b82f6';
       dynamicOptions.innerHTML = `
         <div class="customization-group" style="margin-top: 20px; padding-top: 15px; border-top: 1px solid rgba(255,255,255,0.1);">
           <label>Body Color</label>
-          <div style="display: flex; align-items: center; gap: 10px; margin-top: 8px;">
-            <input type="color" id="pen-body-color-edit" value="${object.userData.mainColor || '#3b82f6'}"
-                   style="width: 40px; height: 30px; border: none; cursor: pointer; border-radius: 4px;">
-            <span id="pen-body-color-display" style="color: rgba(255,255,255,0.7);">${object.userData.mainColor || '#3b82f6'}</span>
+          <div id="pen-body-colors" style="display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px;">
+            <div class="color-swatch${penBodyColor === '#3b82f6' ? ' selected' : ''}" style="background: #3b82f6; width: 32px; height: 32px; border-radius: 8px; cursor: pointer; border: 2px solid ${penBodyColor === '#3b82f6' ? '#fff' : 'transparent'};" data-color="#3b82f6"></div>
+            <div class="color-swatch${penBodyColor === '#ef4444' ? ' selected' : ''}" style="background: #ef4444; width: 32px; height: 32px; border-radius: 8px; cursor: pointer; border: 2px solid ${penBodyColor === '#ef4444' ? '#fff' : 'transparent'};" data-color="#ef4444"></div>
+            <div class="color-swatch${penBodyColor === '#22c55e' ? ' selected' : ''}" style="background: #22c55e; width: 32px; height: 32px; border-radius: 8px; cursor: pointer; border: 2px solid ${penBodyColor === '#22c55e' ? '#fff' : 'transparent'};" data-color="#22c55e"></div>
+            <div class="color-swatch${penBodyColor === '#1a1a1a' ? ' selected' : ''}" style="background: #1a1a1a; width: 32px; height: 32px; border-radius: 8px; cursor: pointer; border: 2px solid ${penBodyColor === '#1a1a1a' ? '#fff' : 'rgba(255,255,255,0.3)'};" data-color="#1a1a1a"></div>
+            <div class="color-swatch${penBodyColor === '#8b5cf6' ? ' selected' : ''}" style="background: #8b5cf6; width: 32px; height: 32px; border-radius: 8px; cursor: pointer; border: 2px solid ${penBodyColor === '#8b5cf6' ? '#fff' : 'transparent'};" data-color="#8b5cf6"></div>
+            <div class="color-swatch${penBodyColor === '#f97316' ? ' selected' : ''}" style="background: #f97316; width: 32px; height: 32px; border-radius: 8px; cursor: pointer; border: 2px solid ${penBodyColor === '#f97316' ? '#fff' : 'transparent'};" data-color="#f97316"></div>
+            <div class="color-swatch${penBodyColor === '#ec4899' ? ' selected' : ''}" style="background: #ec4899; width: 32px; height: 32px; border-radius: 8px; cursor: pointer; border: 2px solid ${penBodyColor === '#ec4899' ? '#fff' : 'transparent'};" data-color="#ec4899"></div>
+            <div class="color-swatch${penBodyColor === '#06b6d4' ? ' selected' : ''}" style="background: #06b6d4; width: 32px; height: 32px; border-radius: 8px; cursor: pointer; border: 2px solid ${penBodyColor === '#06b6d4' ? '#fff' : 'transparent'};" data-color="#06b6d4"></div>
           </div>
         </div>
         <div class="customization-group" style="margin-top: 15px;">
           <label>Ink Color (for writing)</label>
-          <div style="display: flex; align-items: center; gap: 10px; margin-top: 8px;">
-            <input type="color" id="pen-ink-color-edit" value="${object.userData.inkColor || object.userData.mainColor || '#3b82f6'}"
-                   style="width: 40px; height: 30px; border: none; cursor: pointer; border-radius: 4px;">
-            <span id="pen-ink-color-display" style="color: rgba(255,255,255,0.7);">${object.userData.inkColor || object.userData.mainColor || '#3b82f6'}</span>
+          <div id="pen-ink-colors" style="display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px;">
+            <div class="color-swatch${penInkColor === '#3b82f6' ? ' selected' : ''}" style="background: #3b82f6; width: 32px; height: 32px; border-radius: 8px; cursor: pointer; border: 2px solid ${penInkColor === '#3b82f6' ? '#fff' : 'transparent'};" data-color="#3b82f6"></div>
+            <div class="color-swatch${penInkColor === '#ef4444' ? ' selected' : ''}" style="background: #ef4444; width: 32px; height: 32px; border-radius: 8px; cursor: pointer; border: 2px solid ${penInkColor === '#ef4444' ? '#fff' : 'transparent'};" data-color="#ef4444"></div>
+            <div class="color-swatch${penInkColor === '#22c55e' ? ' selected' : ''}" style="background: #22c55e; width: 32px; height: 32px; border-radius: 8px; cursor: pointer; border: 2px solid ${penInkColor === '#22c55e' ? '#fff' : 'transparent'};" data-color="#22c55e"></div>
+            <div class="color-swatch${penInkColor === '#000000' ? ' selected' : ''}" style="background: #000000; width: 32px; height: 32px; border-radius: 8px; cursor: pointer; border: 2px solid ${penInkColor === '#000000' ? '#fff' : 'rgba(255,255,255,0.3)'};" data-color="#000000"></div>
+            <div class="color-swatch${penInkColor === '#8b5cf6' ? ' selected' : ''}" style="background: #8b5cf6; width: 32px; height: 32px; border-radius: 8px; cursor: pointer; border: 2px solid ${penInkColor === '#8b5cf6' ? '#fff' : 'transparent'};" data-color="#8b5cf6"></div>
+            <div class="color-swatch${penInkColor === '#f97316' ? ' selected' : ''}" style="background: #f97316; width: 32px; height: 32px; border-radius: 8px; cursor: pointer; border: 2px solid ${penInkColor === '#f97316' ? '#fff' : 'transparent'};" data-color="#f97316"></div>
+            <div class="color-swatch${penInkColor === '#ec4899' ? ' selected' : ''}" style="background: #ec4899; width: 32px; height: 32px; border-radius: 8px; cursor: pointer; border: 2px solid ${penInkColor === '#ec4899' ? '#fff' : 'transparent'};" data-color="#ec4899"></div>
+            <div class="color-swatch${penInkColor === '#06b6d4' ? ' selected' : ''}" style="background: #06b6d4; width: 32px; height: 32px; border-radius: 8px; cursor: pointer; border: 2px solid ${penInkColor === '#06b6d4' ? '#fff' : 'transparent'};" data-color="#06b6d4"></div>
           </div>
         </div>
       `;
@@ -3975,38 +4046,53 @@ function setupLaptopCustomizationHandlers(object) {
 
 function setupPenCustomizationHandlers(object) {
   setTimeout(() => {
-    const bodyColorInput = document.getElementById('pen-body-color-edit');
-    const bodyColorDisplay = document.getElementById('pen-body-color-display');
-    const inkColorInput = document.getElementById('pen-ink-color-edit');
-    const inkColorDisplay = document.getElementById('pen-ink-color-display');
+    const bodyColorsContainer = document.getElementById('pen-body-colors');
+    const inkColorsContainer = document.getElementById('pen-ink-colors');
 
-    if (bodyColorInput) {
-      bodyColorInput.addEventListener('input', (e) => {
-        const color = e.target.value;
-        object.userData.mainColor = color;
-        if (bodyColorDisplay) bodyColorDisplay.textContent = color;
+    // Body color swatches
+    if (bodyColorsContainer) {
+      const swatches = bodyColorsContainer.querySelectorAll('.color-swatch');
+      swatches.forEach(swatch => {
+        swatch.addEventListener('click', () => {
+          const color = swatch.dataset.color;
+          object.userData.mainColor = color;
 
-        // Update the pen body and cap color
-        object.children.forEach(child => {
-          if (child.isMesh && child.material) {
-            // Body and cap share the same material by reference, update body
-            if (child.geometry.type === 'CylinderGeometry' && child.position.y > 0.1) {
-              child.material.color.set(color);
-              child.material.needsUpdate = true;
+          // Update the pen body and cap color
+          object.children.forEach(child => {
+            if (child.isMesh && child.material) {
+              // Body and cap share the same material by reference, update body
+              if (child.geometry.type === 'CylinderGeometry' && child.position.y > 0.1) {
+                child.material.color.set(color);
+                child.material.needsUpdate = true;
+              }
             }
-          }
-        });
+          });
 
-        saveState();
+          // Update swatch selection visuals
+          swatches.forEach(s => {
+            s.style.borderColor = s.dataset.color === color ? '#fff' : (s.dataset.color === '#1a1a1a' ? 'rgba(255,255,255,0.3)' : 'transparent');
+          });
+
+          saveState();
+        });
       });
     }
 
-    if (inkColorInput) {
-      inkColorInput.addEventListener('input', (e) => {
-        const color = e.target.value;
-        object.userData.inkColor = color;
-        if (inkColorDisplay) inkColorDisplay.textContent = color;
-        saveState();
+    // Ink color swatches
+    if (inkColorsContainer) {
+      const swatches = inkColorsContainer.querySelectorAll('.color-swatch');
+      swatches.forEach(swatch => {
+        swatch.addEventListener('click', () => {
+          const color = swatch.dataset.color;
+          object.userData.inkColor = color;
+
+          // Update swatch selection visuals
+          swatches.forEach(s => {
+            s.style.borderColor = s.dataset.color === color ? '#fff' : (s.dataset.color === '#000000' ? 'rgba(255,255,255,0.3)' : 'transparent');
+          });
+
+          saveState();
+        });
       });
     }
   }, 0);
@@ -4065,7 +4151,7 @@ function setupPhotoFrameCustomizationHandlers(object) {
 function setupBookCustomizationHandlers(object) {
   setTimeout(() => {
     const titleInput = document.getElementById('book-title-edit');
-    const titleColorInput = document.getElementById('book-title-color-edit');
+    const titleColorsContainer = document.getElementById('book-title-colors');
     const pdfInput = document.getElementById('book-pdf-edit');
     const clearBtn = document.getElementById('book-pdf-clear-edit');
 
@@ -4076,8 +4162,8 @@ function setupBookCustomizationHandlers(object) {
         if (closedGroup) {
           const coverTitle = closedGroup.getObjectByName('coverTitle');
           if (coverTitle) {
-            // Use larger font size (32) for cover title
-            const newCoverTexture = object.userData.createTitleTexture(object.userData.bookTitle, 320, 116, 32);
+            // Use larger font size (64) for cover title
+            const newCoverTexture = object.userData.createTitleTexture(object.userData.bookTitle, 320, 116, 64);
             coverTitle.material.map = newCoverTexture;
             coverTitle.material.needsUpdate = true;
           }
@@ -4099,14 +4185,20 @@ function setupBookCustomizationHandlers(object) {
       });
     }
 
-    if (titleColorInput) {
-      titleColorInput.addEventListener('change', (e) => {
-        object.userData.titleColor = e.target.value;
-        updateBookTitleTextures();
-        saveState();
-        // Update the color display text
-        const colorSpan = titleColorInput.parentElement.querySelector('span');
-        if (colorSpan) colorSpan.textContent = e.target.value;
+    // Title color preset swatches
+    if (titleColorsContainer) {
+      const swatches = titleColorsContainer.querySelectorAll('.color-swatch');
+      swatches.forEach(swatch => {
+        swatch.addEventListener('click', () => {
+          const color = swatch.dataset.color;
+          object.userData.titleColor = color;
+          updateBookTitleTextures();
+          saveState();
+          // Update swatch selection visuals
+          swatches.forEach(s => {
+            s.style.borderColor = s.dataset.color === color ? '#fff' : (s.dataset.color === '#000000' ? 'rgba(255,255,255,0.3)' : 'transparent');
+          });
+        });
       });
     }
 
@@ -5071,6 +5163,9 @@ function openMarkdownEditor(laptop) {
       .md-preview-content blockquote { border-left: 3px solid #cba6f7; padding-left: 15px; margin: 1em 0; color: rgba(255,255,255,0.7); }
       .md-preview-content ul, .md-preview-content ol { padding-left: 25px; margin: 0.5em 0; }
       .md-preview-content li { margin: 0.3em 0; }
+      .md-preview-content li.checkbox { list-style: none; margin-left: -20px; }
+      .md-preview-content li.checkbox input[type="checkbox"] { margin-right: 8px; transform: scale(1.2); accent-color: #a6e3a1; }
+      .md-preview-content li.checkbox.checked { text-decoration: line-through; color: rgba(255,255,255,0.5); }
       .md-preview-content a { color: #89b4fa; }
       .md-preview-content strong { color: #f9e2af; }
       .md-preview-content em { color: #a6e3a1; }
@@ -5124,8 +5219,13 @@ function openMarkdownEditor(laptop) {
       // Code blocks
       .replace(/```([\s\S]*?)```/g, '<pre><code>$1</code></pre>')
       // Blockquotes
-      .replace(/^> (.*)$/gm, '<blockquote>$1</blockquote>')
-      // Unordered lists
+      .replace(/^&gt; (.*)$/gm, '<blockquote>$1</blockquote>')
+      // Checkbox lists - checked (must come before regular lists)
+      .replace(/^- \[x\] (.*)$/gm, '<li class="checkbox checked"><input type="checkbox" checked disabled> $1</li>')
+      .replace(/^- \[X\] (.*)$/gm, '<li class="checkbox checked"><input type="checkbox" checked disabled> $1</li>')
+      // Checkbox lists - unchecked
+      .replace(/^- \[ \] (.*)$/gm, '<li class="checkbox"><input type="checkbox" disabled> $1</li>')
+      // Unordered lists (plain)
       .replace(/^- (.*)$/gm, '<li>$1</li>')
       // Links
       .replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2">$1</a>')
@@ -5135,7 +5235,7 @@ function openMarkdownEditor(laptop) {
       .replace(/\n/g, '<br>');
 
     // Wrap consecutive li elements in ul
-    html = html.replace(/(<li>.*?<\/li>(<br>)?)+/g, (match) => {
+    html = html.replace(/(<li[^>]*>.*?<\/li>(<br>)?)+/g, (match) => {
       return '<ul>' + match.replace(/<br>/g, '') + '</ul>';
     });
 
@@ -5489,8 +5589,8 @@ function setupBookHandlers(object) {
         if (closedGroup) {
           const coverTitle = closedGroup.getObjectByName('coverTitle');
           if (coverTitle) {
-            // Use larger font size (32) for cover title
-            const newCoverTexture = object.userData.createTitleTexture(e.target.value, 320, 116, 32);
+            // Use larger font size (64) for cover title
+            const newCoverTexture = object.userData.createTitleTexture(e.target.value, 320, 116, 64);
             coverTitle.material.map = newCoverTexture;
             coverTitle.material.needsUpdate = true;
           }
@@ -5579,69 +5679,156 @@ function updateBookPages(book) {
   const leftPage = openGroup.getObjectByName('leftPageSurface');
   const rightPage = openGroup.getObjectByName('rightPageSurface');
 
-  // Create simple canvas textures for pages
+  // Higher resolution canvas for readable text
+  const canvasWidth = 512;
+  const canvasHeight = 724;
+  const margin = 40;
+  const lineHeight = 36;
+
+  // Create page texture for left page
   if (leftPage && book.userData.totalPages > 0) {
     const canvas = document.createElement('canvas');
-    canvas.width = 256;
-    canvas.height = 362;
+    canvas.width = canvasWidth;
+    canvas.height = canvasHeight;
     const ctx = canvas.getContext('2d');
     ctx.fillStyle = '#fff8f0';
     ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+    // Page border
+    ctx.strokeStyle = '#ddd';
+    ctx.lineWidth = 2;
+    ctx.strokeRect(margin / 2, margin / 2, canvas.width - margin, canvas.height - margin);
+
     ctx.fillStyle = '#333';
-    ctx.font = '16px serif';
-    ctx.textAlign = 'center';
-
     const pageNum = book.userData.currentPage * 2;
-    ctx.fillText(`Page ${pageNum + 1}`, canvas.width / 2, 30);
 
-    // Add some placeholder content
-    ctx.font = '12px serif';
+    // Page number header
+    ctx.font = 'bold 28px Georgia, serif';
+    ctx.textAlign = 'center';
+    ctx.fillText(`Page ${pageNum + 1}`, canvas.width / 2, 60);
+
+    // Divider line
+    ctx.strokeStyle = '#ccc';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(margin, 80);
+    ctx.lineTo(canvas.width - margin, 80);
+    ctx.stroke();
+
+    // Content area
+    ctx.font = '24px Georgia, serif';
     ctx.textAlign = 'left';
-    const lines = [
-      book.userData.pdfPath || 'No PDF loaded',
+
+    const pdfFileName = book.userData.pdfPath
+      ? book.userData.pdfPath.split('/').pop() || book.userData.pdfPath.split('\\').pop()
+      : null;
+
+    const contentLines = pdfFileName ? [
+      `📄 ${pdfFileName}`,
       '',
-      'Lorem ipsum dolor sit amet,',
-      'consectetur adipiscing elit.',
-      'Sed do eiusmod tempor...'
+      'PDF content placeholder.',
+      '',
+      'In a full implementation,',
+      'actual PDF pages would',
+      'be rendered here using',
+      'PDF.js library.',
+      '',
+      `Current spread: ${pageNum + 1}-${pageNum + 2}`,
+      '',
+      'Use Arrow Left/Right',
+      'to turn pages.'
+    ] : [
+      'No PDF loaded',
+      '',
+      'Right-click this book',
+      'to open customization,',
+      'then select a PDF file.',
+      '',
+      'Page content will',
+      'appear here once',
+      'a PDF is selected.'
     ];
-    lines.forEach((line, i) => {
-      ctx.fillText(line, 20, 60 + i * 20);
+
+    contentLines.forEach((line, i) => {
+      ctx.fillText(line, margin, 120 + i * lineHeight);
     });
 
+    // Page footer
+    ctx.font = '18px Georgia, serif';
+    ctx.textAlign = 'center';
+    ctx.fillStyle = '#888';
+    ctx.fillText(book.userData.title || 'Untitled', canvas.width / 2, canvas.height - 30);
+
     const texture = new THREE.CanvasTexture(canvas);
+    texture.anisotropy = 16; // Better quality at angles
     leftPage.material.map = texture;
     leftPage.material.needsUpdate = true;
   }
 
+  // Create page texture for right page
   if (rightPage && book.userData.totalPages > 0) {
     const canvas = document.createElement('canvas');
-    canvas.width = 256;
-    canvas.height = 362;
+    canvas.width = canvasWidth;
+    canvas.height = canvasHeight;
     const ctx = canvas.getContext('2d');
     ctx.fillStyle = '#fff8f0';
     ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+    // Page border
+    ctx.strokeStyle = '#ddd';
+    ctx.lineWidth = 2;
+    ctx.strokeRect(margin / 2, margin / 2, canvas.width - margin, canvas.height - margin);
+
     ctx.fillStyle = '#333';
-    ctx.font = '16px serif';
-    ctx.textAlign = 'center';
-
     const pageNum = book.userData.currentPage * 2 + 1;
-    ctx.fillText(`Page ${pageNum + 1}`, canvas.width / 2, 30);
 
-    // Add some placeholder content
-    ctx.font = '12px serif';
+    // Page number header
+    ctx.font = 'bold 28px Georgia, serif';
+    ctx.textAlign = 'center';
+    ctx.fillText(`Page ${pageNum + 1}`, canvas.width / 2, 60);
+
+    // Divider line
+    ctx.strokeStyle = '#ccc';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(margin, 80);
+    ctx.lineTo(canvas.width - margin, 80);
+    ctx.stroke();
+
+    // Content area
+    ctx.font = '24px Georgia, serif';
     ctx.textAlign = 'left';
-    const lines = [
-      'Continued...',
+
+    const totalPages = book.userData.totalPages || 10;
+    const contentLines = [
+      'Lorem ipsum dolor sit',
+      'amet, consectetur',
+      'adipiscing elit.',
+      '',
+      'Sed do eiusmod tempor',
+      'incididunt ut labore',
+      'et dolore magna aliqua.',
       '',
       'Ut enim ad minim veniam,',
       'quis nostrud exercitation',
-      'ullamco laboris nisi ut...'
+      'ullamco laboris nisi ut',
+      'aliquip ex ea commodo.',
+      '',
+      `Pages: ${pageNum + 1} of ${totalPages * 2}`
     ];
-    lines.forEach((line, i) => {
-      ctx.fillText(line, 20, 60 + i * 20);
+
+    contentLines.forEach((line, i) => {
+      ctx.fillText(line, margin, 120 + i * lineHeight);
     });
 
+    // Page footer
+    ctx.font = '18px Georgia, serif';
+    ctx.textAlign = 'center';
+    ctx.fillStyle = '#888';
+    ctx.fillText(`${pageNum + 1} / ${totalPages * 2}`, canvas.width / 2, canvas.height - 30);
+
     const texture = new THREE.CanvasTexture(canvas);
+    texture.anisotropy = 16; // Better quality at angles
     rightPage.material.map = texture;
     rightPage.material.needsUpdate = true;
   }
@@ -5969,6 +6156,7 @@ function animatePageTurn(book, direction) {
   }
 
   // Create a temporary page for animation
+  // The page lies flat, so geometry should be oriented to match
   const pageGeometry = new THREE.PlaneGeometry(0.24, 0.34);
   const pageMaterial = new THREE.MeshStandardMaterial({
     color: 0xfff8f0,
@@ -5976,16 +6164,20 @@ function animatePageTurn(book, direction) {
     roughness: 0.9
   });
   const turningPage = new THREE.Mesh(pageGeometry, pageMaterial);
+  // Rotate page to lie flat (same as existing page surfaces)
+  turningPage.rotation.x = -Math.PI / 2;
   turningPage.position.y = 0.028;
 
-  // Set pivot point at the spine (center of book)
+  // Set pivot point at the spine (center of book, along Z axis)
   const pivotGroup = new THREE.Group();
   pivotGroup.position.set(0, 0, 0);
+  // Position page to left or right of spine
   turningPage.position.x = direction > 0 ? 0.12 : -0.12; // Start from left or right
   pivotGroup.add(turningPage);
   openGroup.add(pivotGroup);
 
   const startAngle = 0;
+  // Rotate around Z axis (the spine runs along Z)
   const endAngle = direction > 0 ? -Math.PI : Math.PI; // Flip to opposite side
   const duration = 400;
   const startTime = Date.now();
@@ -5999,12 +6191,12 @@ function animatePageTurn(book, direction) {
       ? 2 * progress * progress
       : 1 - Math.pow(-2 * progress + 2, 2) / 2;
 
-    // Rotate the page
-    pivotGroup.rotation.y = startAngle + (endAngle - startAngle) * easeProgress;
+    // Rotate the page around Z axis (horizontal axis along the spine)
+    pivotGroup.rotation.z = startAngle + (endAngle - startAngle) * easeProgress;
 
-    // Add a slight curve to the page during turn
-    const curveFactor = Math.sin(progress * Math.PI) * 0.1;
-    turningPage.rotation.x = curveFactor;
+    // Add a slight curve/lift to the page during turn
+    const liftFactor = Math.sin(progress * Math.PI) * 0.03;
+    turningPage.position.y = 0.028 + liftFactor;
 
     if (progress < 1) {
       requestAnimationFrame(animate);
@@ -6126,6 +6318,98 @@ function exitLaptopZoomMode(object) {
 
     animateZoomOut();
   }
+}
+
+// ============================================================================
+// BOOK READING MODE
+// ============================================================================
+
+function enterBookReadingMode(book) {
+  if (bookReadingState.active) return;
+
+  bookReadingState.active = true;
+  bookReadingState.book = book;
+
+  // Store original camera state
+  bookReadingState.originalCameraPos = camera.position.clone();
+  bookReadingState.originalCameraYaw = cameraLookState.yaw;
+  bookReadingState.originalCameraPitch = cameraLookState.pitch;
+
+  // Get book position in world coordinates
+  const bookWorldPos = new THREE.Vector3();
+  book.getWorldPosition(bookWorldPos);
+
+  // Calculate target camera position - slightly above and in front of the book
+  // For comfortable reading position
+  const targetCameraPos = new THREE.Vector3(
+    bookWorldPos.x,
+    bookWorldPos.y + 0.6, // Above the book
+    bookWorldPos.z + 0.5  // In front of the book
+  );
+
+  // Animate camera to reading position
+  const startPos = camera.position.clone();
+  const startTime = Date.now();
+  const duration = 400;
+
+  function animateToReading() {
+    const elapsed = Date.now() - startTime;
+    const progress = Math.min(elapsed / duration, 1);
+    const eased = 1 - Math.pow(1 - progress, 3); // Ease out cubic
+
+    camera.position.lerpVectors(startPos, targetCameraPos, eased);
+
+    // Point camera down at book
+    const lookAtY = bookWorldPos.y + 0.03;
+    const targetPitch = Math.atan2(camera.position.y - lookAtY, camera.position.z - bookWorldPos.z);
+    cameraLookState.pitch = bookReadingState.originalCameraPitch + (targetPitch - bookReadingState.originalCameraPitch) * eased;
+    updateCameraLook();
+
+    if (progress < 1) {
+      requestAnimationFrame(animateToReading);
+    }
+  }
+
+  animateToReading();
+}
+
+function exitBookReadingMode() {
+  if (!bookReadingState.active) return;
+
+  bookReadingState.active = false;
+
+  // Animate camera back to original position
+  if (bookReadingState.originalCameraPos) {
+    const startPos = camera.position.clone();
+    const targetPos = bookReadingState.originalCameraPos;
+    const startPitch = cameraLookState.pitch;
+    const targetPitch = bookReadingState.originalCameraPitch;
+    const startYaw = cameraLookState.yaw;
+    const targetYaw = bookReadingState.originalCameraYaw;
+    const startTime = Date.now();
+    const duration = 300;
+
+    function animateFromReading() {
+      const elapsed = Date.now() - startTime;
+      const progress = Math.min(elapsed / duration, 1);
+      const eased = 1 - Math.pow(1 - progress, 3);
+
+      camera.position.lerpVectors(startPos, targetPos, eased);
+
+      // Restore camera look direction
+      cameraLookState.pitch = startPitch + (targetPitch - startPitch) * eased;
+      cameraLookState.yaw = startYaw + (targetYaw - startYaw) * eased;
+      updateCameraLook();
+
+      if (progress < 1) {
+        requestAnimationFrame(animateFromReading);
+      }
+    }
+
+    animateFromReading();
+  }
+
+  bookReadingState.book = null;
 }
 
 function toggleLaptopPower(object) {
@@ -6569,6 +6853,51 @@ function animate() {
       }
     }
 
+    // Pen sway animation when being dragged
+    if (obj.userData.type === 'pen') {
+      if (isDragging && selectedObject === obj) {
+        // Initialize sway state if not exists
+        if (obj.userData.swayPhase === undefined) {
+          obj.userData.swayPhase = 0;
+          obj.userData.swayVelocityX = 0;
+          obj.userData.swayVelocityZ = 0;
+        }
+
+        // Calculate sway based on movement velocity
+        const now = Date.now();
+        if (obj.userData.lastSwayUpdate) {
+          const dt = (now - obj.userData.lastSwayUpdate) / 1000;
+          // Add some natural oscillation
+          obj.userData.swayPhase += dt * 8;
+
+          // Apply pendulum-like sway motion
+          const swayAmount = Math.sin(obj.userData.swayPhase) * 0.15;
+          const secondarySwayAmount = Math.cos(obj.userData.swayPhase * 0.7) * 0.08;
+
+          // Target rotation based on sway
+          const targetRotX = swayAmount;
+          const targetRotZ = secondarySwayAmount;
+
+          // Smoothly interpolate to target
+          obj.rotation.x += (targetRotX - obj.rotation.x) * 0.15;
+          obj.rotation.z += (targetRotZ - obj.rotation.z) * 0.15;
+        }
+        obj.userData.lastSwayUpdate = now;
+      } else {
+        // When not dragging, gradually return to neutral position
+        if (Math.abs(obj.rotation.x) > 0.001 || Math.abs(obj.rotation.z) > 0.001) {
+          obj.rotation.x *= 0.9;
+          obj.rotation.z *= 0.9;
+        } else {
+          obj.rotation.x = 0;
+          obj.rotation.z = 0;
+        }
+        // Reset sway state
+        obj.userData.swayPhase = undefined;
+        obj.userData.lastSwayUpdate = undefined;
+      }
+    }
+
     // Rotate globe
     if (obj.userData.type === 'globe') {
       const globe = obj.getObjectByName('globeSphere');
@@ -6636,25 +6965,27 @@ function animate() {
                 filter.connect(gain);
                 gain.connect(audioCtx.destination);
 
-                // High frequency strike with harmonics
-                osc.frequency.value = 2400;
+                // Mechanical metronome click sound
+                // Use lower frequencies for a wooden "click" sound
+                osc.frequency.value = 1200; // Main click frequency
                 osc.type = 'sine';
-                osc2.frequency.value = 800;
-                osc2.type = 'triangle';
+                osc2.frequency.value = 300; // Low body resonance
+                osc2.type = 'sine';
 
-                // Filter for wood-like strike
-                filter.type = 'highpass';
-                filter.frequency.value = 400;
-                filter.Q.value = 0.5;
+                // Bandpass filter for natural wood resonance
+                filter.type = 'bandpass';
+                filter.frequency.value = 800;
+                filter.Q.value = 2;
 
-                // Sharp attack, quick decay envelope for percussive sound
-                gain.gain.setValueAtTime(0.15, currentTime);
-                gain.gain.exponentialRampToValueAtTime(0.01, currentTime + 0.05);
+                // Very sharp attack, quick exponential decay for percussive "tick"
+                gain.gain.setValueAtTime(0.25, currentTime);
+                gain.gain.exponentialRampToValueAtTime(0.08, currentTime + 0.015);
+                gain.gain.exponentialRampToValueAtTime(0.01, currentTime + 0.04);
 
                 osc.start(currentTime);
                 osc2.start(currentTime);
-                osc.stop(currentTime + 0.06);
-                osc2.stop(currentTime + 0.06);
+                osc.stop(currentTime + 0.05);
+                osc2.stop(currentTime + 0.05);
               }
             } catch (e) {}
           }

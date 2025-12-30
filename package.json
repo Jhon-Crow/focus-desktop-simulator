@@ -29,6 +29,7 @@
   "build": {
     "appId": "com.jhoncrow.focus-desktop-simulator",
     "productName": "Focus Desktop Simulator",
+    "icon": "assets/icon.png",
     "directories": {
       "output": "dist"
     },
@@ -47,7 +48,14 @@
           "target": "portable",
           "arch": ["x64"]
         }
-      ]
+      ],
+      "icon": "assets/icon.png"
+    },
+    "linux": {
+      "icon": "assets/icon.png"
+    },
+    "mac": {
+      "icon": "assets/icon.png"
     },
     "nsis": {
       "oneClick": false,

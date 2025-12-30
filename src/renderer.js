@@ -624,6 +624,99 @@ const PRESET_CREATORS = {
   metronome: createMetronome
 };
 
+// ============================================================================
+// PALETTE CATEGORIES - Photoshop-style tool palette with variants
+// ============================================================================
+// Categories based on issue requirements:
+// - Clocks (часы): clock, hourglass
+// - Lighting (осветительные приборы): lamp
+// - Writing (то на чём можно писать): notebook, paper, pen, pen-holder
+// - Books (книги): books, magazine
+// - Audio (звуковое): metronome
+// - Trinkets (безделушки): coffee, plant, globe, trophy
+// - Photo Frames (фоторамки): photo-frame
+// - Tech: laptop (separate category for work devices)
+const PALETTE_CATEGORIES = {
+  clocks: {
+    name: 'Clocks',
+    icon: '🕐',
+    variants: [
+      { id: 'clock', name: 'Wall Clock', icon: '🕐' },
+      { id: 'hourglass', name: 'Hourglass', icon: '⏳' }
+    ],
+    activeIndex: 0
+  },
+  lighting: {
+    name: 'Lighting',
+    icon: '💡',
+    variants: [
+      { id: 'lamp', name: 'Desk Lamp', icon: '💡' }
+    ],
+    activeIndex: 0
+  },
+  writing: {
+    name: 'Writing',
+    icon: '📝',
+    variants: [
+      { id: 'notebook', name: 'Notebook', icon: '📓' },
+      { id: 'paper', name: 'Paper', icon: '📄' },
+      { id: 'pen', name: 'Pen', icon: '🖌️' },
+      { id: 'pen-holder', name: 'Pen Holder', icon: '🖊️' }
+    ],
+    activeIndex: 0
+  },
+  books: {
+    name: 'Books',
+    icon: '📚',
+    variants: [
+      { id: 'books', name: 'Book', icon: '📕' },
+      { id: 'magazine', name: 'Magazine', icon: '📰' }
+    ],
+    activeIndex: 0
+  },
+  audio: {
+    name: 'Audio',
+    icon: '🎵',
+    variants: [
+      { id: 'metronome', name: 'Metronome', icon: '🎵' }
+    ],
+    activeIndex: 0
+  },
+  trinkets: {
+    name: 'Trinkets',
+    icon: '🎁',
+    variants: [
+      { id: 'coffee', name: 'Coffee Mug', icon: '☕' },
+      { id: 'plant', name: 'Plant', icon: '🌱' },
+      { id: 'globe', name: 'Globe', icon: '🌍' },
+      { id: 'trophy', name: 'Trophy', icon: '🏆' }
+    ],
+    activeIndex: 0
+  },
+  frames: {
+    name: 'Photo Frames',
+    icon: '🖼️',
+    variants: [
+      { id: 'photo-frame', name: 'Photo Frame', icon: '🖼️' }
+    ],
+    activeIndex: 0
+  },
+  tech: {
+    name: 'Tech',
+    icon: '💻',
+    variants: [
+      { id: 'laptop', name: 'Laptop', icon: '💻' }
+    ],
+    activeIndex: 0
+  }
+};
+
+// Palette state
+let paletteState = {
+  hoveredCategory: null,
+  contextMenuCategory: null
+};
+
 function createClock(options = {}) {
   const group = new THREE.Group();
   group.userData = {
@@ -3102,6 +3195,215 @@ function updateClock() {
 }
 
 // ============================================================================
+// PALETTE SYSTEM - Photoshop-style tool palette
+// ============================================================================
+function initializePalette() {
+  const paletteContainer = document.getElementById('palette-container');
+  if (!paletteContainer) return;
+
+  // Generate palette HTML
+  paletteContainer.innerHTML = '';
+
+  for (const [categoryId, category] of Object.entries(PALETTE_CATEGORIES)) {
+    const activeVariant = category.variants[category.activeIndex];
+
+    const categoryEl = document.createElement('div');
+    categoryEl.className = 'palette-category';
+    categoryEl.dataset.category = categoryId;
+
+    categoryEl.innerHTML = `
+      <div class="palette-header" data-category="${categoryId}" draggable="true">
+        <span class="category-icon">${category.icon}</span>
+        <span class="category-name">${category.name}</span>
+        <span class="active-variant">${activeVariant.icon}</span>
+        ${category.variants.length > 1 ? '<span class="variant-hint">RMB or Scroll to change</span>' : ''}
+      </div>
+    `;
+
+    paletteContainer.appendChild(categoryEl);
+  }
+
+  // Add event listeners to palette headers
+  document.querySelectorAll('.palette-header').forEach(header => {
+    const categoryId = header.dataset.category;
+    const category = PALETTE_CATEGORIES[categoryId];
+
+    // Click (LMB) to add the active variant to desk
+    header.addEventListener('click', (e) => {
+      if (e.button !== 0) return; // Only left click
+      const activeVariant = category.variants[category.activeIndex];
+      addObjectToDesk(activeVariant.id);
+      document.getElementById('menu').classList.remove('open');
+    });
+
+    // Drag and drop support
+    header.addEventListener('dragstart', (e) => {
+      const activeVariant = category.variants[category.activeIndex];
+      draggedPresetType = activeVariant.id;
+
+      // Create custom drag preview
+      dragPreviewElement = document.createElement('div');
+      dragPreviewElement.className = 'drag-preview';
+      dragPreviewElement.innerHTML = `<span class="icon">${activeVariant.icon}</span><span class="name">${activeVariant.name}</span>`;
+      document.body.appendChild(dragPreviewElement);
+
+      // Position off-screen initially (will be updated in dragover)
+      dragPreviewElement.style.left = '-1000px';
+      dragPreviewElement.style.top = '-1000px';
+
+      // Set transparent drag image
+      const emptyImg = new Image();
+      emptyImg.src = 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7';
+      e.dataTransfer.setDragImage(emptyImg, 0, 0);
+      e.dataTransfer.effectAllowed = 'copy';
+
+      // Close the menu during drag
+      document.getElementById('menu').classList.remove('open');
+    });
+
+    header.addEventListener('dragend', () => {
+      // Clean up drag preview
+      if (dragPreviewElement) {
+        dragPreviewElement.remove();
+        dragPreviewElement = null;
+      }
+      draggedPresetType = null;
+    });
+
+    // RMB (Right Mouse Button) to open variant selector
+    header.addEventListener('contextmenu', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+
+      if (category.variants.length <= 1) return; // No variants to choose
+
+      openVariantContextMenu(categoryId, e.clientX, e.clientY);
+    });
+
+    // Mouse wheel to cycle through variants
+    header.addEventListener('wheel', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+
+      if (category.variants.length <= 1) return; // No variants to cycle
+
+      // Scroll down = next, scroll up = previous
+      const direction = e.deltaY > 0 ? 1 : -1;
+      cycleVariant(categoryId, direction);
+    });
+
+    // Track hover for wheel cycling
+    header.addEventListener('mouseenter', () => {
+      paletteState.hoveredCategory = categoryId;
+    });
+
+    header.addEventListener('mouseleave', () => {
+      paletteState.hoveredCategory = null;
+    });
+  });
+
+  // Close context menu on click outside
+  document.addEventListener('click', (e) => {
+    const contextMenu = document.getElementById('variant-context-menu');
+    if (contextMenu && contextMenu.classList.contains('open')) {
+      if (!contextMenu.contains(e.target)) {
+        closeVariantContextMenu();
+      }
+    }
+  });
+
+  // Also close on escape
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') {
+      closeVariantContextMenu();
+    }
+  });
+}
+
+function openVariantContextMenu(categoryId, x, y) {
+  const contextMenu = document.getElementById('variant-context-menu');
+  const itemsContainer = document.getElementById('variant-context-items');
+  const category = PALETTE_CATEGORIES[categoryId];
+
+  if (!contextMenu || !itemsContainer || !category) return;
+
+  paletteState.contextMenuCategory = categoryId;
+
+  // Populate menu items
+  itemsContainer.innerHTML = '';
+  category.variants.forEach((variant, index) => {
+    const item = document.createElement('div');
+    item.className = 'context-item' + (index === category.activeIndex ? ' active' : '');
+    item.innerHTML = `
+      <span class="context-icon">${variant.icon}</span>
+      <span class="context-name">${variant.name}</span>
+    `;
+
+    item.addEventListener('click', () => {
+      selectVariant(categoryId, index);
+      closeVariantContextMenu();
+    });
+
+    itemsContainer.appendChild(item);
+  });
+
+  // Position menu
+  contextMenu.style.left = x + 'px';
+  contextMenu.style.top = y + 'px';
+
+  // Make sure menu doesn't go off screen
+  contextMenu.classList.add('open');
+  const rect = contextMenu.getBoundingClientRect();
+  if (rect.right > window.innerWidth) {
+    contextMenu.style.left = (window.innerWidth - rect.width - 10) + 'px';
+  }
+  if (rect.bottom > window.innerHeight) {
+    contextMenu.style.top = (window.innerHeight - rect.height - 10) + 'px';
+  }
+}
+
+function closeVariantContextMenu() {
+  const contextMenu = document.getElementById('variant-context-menu');
+  if (contextMenu) {
+    contextMenu.classList.remove('open');
+  }
+  paletteState.contextMenuCategory = null;
+}
+
+function selectVariant(categoryId, index) {
+  const category = PALETTE_CATEGORIES[categoryId];
+  if (!category) return;
+
+  category.activeIndex = index;
+  updatePaletteUI(categoryId);
+}
+
+function cycleVariant(categoryId, direction) {
+  const category = PALETTE_CATEGORIES[categoryId];
+  if (!category) return;
+
+  const numVariants = category.variants.length;
+  category.activeIndex = (category.activeIndex + direction + numVariants) % numVariants;
+  updatePaletteUI(categoryId);
+}
+
+function updatePaletteUI(categoryId) {
+  const category = PALETTE_CATEGORIES[categoryId];
+  if (!category) return;
+
+  const activeVariant = category.variants[category.activeIndex];
+
+  // Update the header's active variant icon
+  const header = document.querySelector(`.palette-header[data-category="${categoryId}"]`);
+  if (header) {
+    const activeIcon = header.querySelector('.active-variant');
+    if (activeIcon) {
+      activeIcon.textContent = activeVariant.icon;
+    }
+  }
+}
+
+// ============================================================================
 // EVENT LISTENERS
 // ============================================================================
 function setupEventListeners() {
@@ -3304,52 +3606,8 @@ function setupEventListeners() {
     document.getElementById('menu').classList.toggle('open');
   });
 
-  // Preset items - click and drag-and-drop support
-  document.querySelectorAll('.preset-item').forEach(item => {
-    // Click to add
-    item.addEventListener('click', () => {
-      const preset = item.dataset.preset;
-      addObjectToDesk(preset);
-      document.getElementById('menu').classList.remove('open');
-    });
-
-    // Drag start
-    item.setAttribute('draggable', 'true');
-    item.addEventListener('dragstart', (e) => {
-      draggedPresetType = item.dataset.preset;
-
-      // Create custom drag preview
-      const icon = item.querySelector('.icon').textContent;
-      const name = item.querySelector('.name').textContent;
-
-      dragPreviewElement = document.createElement('div');
-      dragPreviewElement.className = 'drag-preview';
-      dragPreviewElement.innerHTML = `<span class="icon">${icon}</span><span class="name">${name}</span>`;
-      document.body.appendChild(dragPreviewElement);
-
-      // Position off-screen initially (will be updated in dragover)
-      dragPreviewElement.style.left = '-1000px';
-      dragPreviewElement.style.top = '-1000px';
-
-      // Set transparent drag image
-      const emptyImg = new Image();
-      emptyImg.src = 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7';
-      e.dataTransfer.setDragImage(emptyImg, 0, 0);
-      e.dataTransfer.effectAllowed = 'copy';
-
-      // Close the menu during drag
-      document.getElementById('menu').classList.remove('open');
-    });
-
-    item.addEventListener('dragend', () => {
-      // Clean up drag preview
-      if (dragPreviewElement) {
-        dragPreviewElement.remove();
-        dragPreviewElement = null;
-      }
-      draggedPresetType = null;
-    });
-  });
+  // Initialize palette system (Photoshop-style with categories and variants)
+  initializePalette();
 
   // Drop zone (canvas container)
   container.addEventListener('dragover', (e) => {

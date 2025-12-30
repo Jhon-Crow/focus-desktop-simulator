@@ -15,6 +15,7 @@ function createWindow() {
     minWidth: 800,
     minHeight: 600,
     title: 'Focus Desktop Simulator',
+    icon: path.join(__dirname, '..', 'assets', 'icon.png'),
     webPreferences: {
       nodeIntegration: false,
       contextIsolation: true,

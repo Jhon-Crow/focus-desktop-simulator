@@ -153,6 +153,167 @@
       font-weight: 500;
     }
 
+    /* Palette category styles */
+    .palette-category {
+      margin-bottom: 2px;
+    }
+
+    .palette-header {
+      display: flex;
+      align-items: center;
+      padding: 10px 15px;
+      background: rgba(255, 255, 255, 0.05);
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      border-radius: 8px;
+      cursor: pointer;
+      transition: all 0.2s ease;
+      position: relative;
+    }
+
+    .palette-header:hover {
+      background: rgba(79, 70, 229, 0.15);
+      border-color: rgba(79, 70, 229, 0.3);
+    }
+
+    .palette-header .category-icon {
+      font-size: 20px;
+      margin-right: 10px;
+      min-width: 24px;
+      text-align: center;
+    }
+
+    .palette-header .category-name {
+      color: rgba(255, 255, 255, 0.8);
+      font-size: 13px;
+      font-weight: 500;
+      flex: 1;
+    }
+
+    .palette-header .active-variant {
+      font-size: 18px;
+      margin-left: 8px;
+      opacity: 0.7;
+    }
+
+    .palette-header .variant-hint {
+      position: absolute;
+      bottom: -20px;
+      left: 50%;
+      transform: translateX(-50%);
+      font-size: 9px;
+      color: rgba(255, 255, 255, 0.4);
+      white-space: nowrap;
+      opacity: 0;
+      transition: opacity 0.2s ease;
+      pointer-events: none;
+    }
+
+    .palette-header:hover .variant-hint {
+      opacity: 1;
+    }
+
+    .palette-variants {
+      display: none;
+      padding: 8px 8px 8px 20px;
+      background: rgba(0, 0, 0, 0.2);
+      border-radius: 0 0 8px 8px;
+      margin-top: -4px;
+    }
+
+    .palette-variants.open {
+      display: block;
+    }
+
+    .variant-item {
+      display: flex;
+      align-items: center;
+      padding: 8px 12px;
+      background: rgba(255, 255, 255, 0.03);
+      border: 1px solid transparent;
+      border-radius: 6px;
+      cursor: pointer;
+      transition: all 0.2s ease;
+      margin-bottom: 4px;
+    }
+
+    .variant-item:hover {
+      background: rgba(79, 70, 229, 0.2);
+      border-color: rgba(79, 70, 229, 0.4);
+    }
+
+    .variant-item.active {
+      background: rgba(79, 70, 229, 0.25);
+      border-color: rgba(79, 70, 229, 0.5);
+    }
+
+    .variant-item .variant-icon {
+      font-size: 18px;
+      margin-right: 10px;
+      min-width: 22px;
+      text-align: center;
+    }
+
+    .variant-item .variant-name {
+      color: rgba(255, 255, 255, 0.9);
+      font-size: 12px;
+    }
+
+    /* Variant context menu */
+    .variant-context-menu {
+      position: fixed;
+      background: rgba(26, 26, 46, 0.98);
+      backdrop-filter: blur(15px);
+      border: 1px solid rgba(255, 255, 255, 0.15);
+      border-radius: 10px;
+      padding: 8px 0;
+      z-index: 1000;
+      min-width: 160px;
+      box-shadow: 0 8px 25px rgba(0, 0, 0, 0.4);
+      display: none;
+    }
+
+    .variant-context-menu.open {
+      display: block;
+    }
+
+    .variant-context-menu .context-header {
+      padding: 8px 14px;
+      color: rgba(255, 255, 255, 0.5);
+      font-size: 10px;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+      margin-bottom: 4px;
+    }
+
+    .variant-context-menu .context-item {
+      display: flex;
+      align-items: center;
+      padding: 10px 14px;
+      cursor: pointer;
+      transition: background 0.15s ease;
+    }
+
+    .variant-context-menu .context-item:hover {
+      background: rgba(79, 70, 229, 0.3);
+    }
+
+    .variant-context-menu .context-item.active {
+      background: rgba(79, 70, 229, 0.2);
+    }
+
+    .variant-context-menu .context-item .context-icon {
+      font-size: 16px;
+      margin-right: 10px;
+      min-width: 20px;
+      text-align: center;
+    }
+
+    .variant-context-menu .context-item .context-name {
+      color: #fff;
+      font-size: 13px;
+    }
+
     /* Object Customization Panel */
     #customization-panel {
       position: fixed;
@@ -633,89 +794,11 @@
 
   <div id="menu">
     <div class="menu-header">
-      <h2>Add Objects</h2>
+      <h2>🎨 Palette</h2>
     </div>
 
-    <div class="menu-section">
-      <h3>Desk Accessories</h3>
-      <div class="preset-grid">
-        <div class="preset-item" data-preset="clock">
-          <div class="icon">🕐</div>
-          <div class="name">Clock</div>
-        </div>
-        <div class="preset-item" data-preset="lamp">
-          <div class="icon">💡</div>
-          <div class="name">Lamp</div>
-        </div>
-        <div class="preset-item" data-preset="plant">
-          <div class="icon">🌱</div>
-          <div class="name">Plant</div>
-        </div>
-        <div class="preset-item" data-preset="coffee">
-          <div class="icon">☕</div>
-          <div class="name">Coffee Mug</div>
-        </div>
-      </div>
-    </div>
-
-    <div class="menu-section">
-      <h3>Work Items</h3>
-      <div class="preset-grid">
-        <div class="preset-item" data-preset="laptop">
-          <div class="icon">💻</div>
-          <div class="name">Laptop</div>
-        </div>
-        <div class="preset-item" data-preset="notebook">
-          <div class="icon">📓</div>
-          <div class="name">Notebook</div>
-        </div>
-        <div class="preset-item" data-preset="pen-holder">
-          <div class="icon">🖊️</div>
-          <div class="name">Pen Holder</div>
-        </div>
-        <div class="preset-item" data-preset="pen">
-          <div class="icon">🖌️</div>
-          <div class="name">Pen</div>
-        </div>
-        <div class="preset-item" data-preset="books">
-          <div class="icon">📕</div>
-          <div class="name">Book</div>
-        </div>
-        <div class="preset-item" data-preset="magazine">
-          <div class="icon">📰</div>
-          <div class="name">Magazine</div>
-        </div>
-        <div class="preset-item" data-preset="paper">
-          <div class="icon">📄</div>
-          <div class="name">Paper</div>
-        </div>
-      </div>
-    </div>
-
-    <div class="menu-section">
-      <h3>Decorations</h3>
-      <div class="preset-grid">
-        <div class="preset-item" data-preset="photo-frame">
-          <div class="icon">🖼️</div>
-          <div class="name">Photo Frame</div>
-        </div>
-        <div class="preset-item" data-preset="globe">
-          <div class="icon">🌍</div>
-          <div class="name">Globe</div>
-        </div>
-        <div class="preset-item" data-preset="trophy">
-          <div class="icon">🏆</div>
-          <div class="name">Trophy</div>
-        </div>
-        <div class="preset-item" data-preset="hourglass">
-          <div class="icon">⏳</div>
-          <div class="name">Hourglass</div>
-        </div>
-        <div class="preset-item" data-preset="metronome">
-          <div class="icon">🎵</div>
-          <div class="name">Metronome</div>
-        </div>
-      </div>
+    <div class="menu-section" id="palette-container">
+      <!-- Palette categories will be generated by JavaScript -->
     </div>
 
     <div class="menu-section">
@@ -723,6 +806,14 @@
       <button id="clear-desk-btn" style="width: 100%; padding: 12px; background: rgba(239, 68, 68, 0.2); border: 1px solid rgba(239, 68, 68, 0.4); border-radius: 8px; color: #ef4444; font-size: 14px; cursor: pointer; transition: all 0.2s ease;">
         🗑️ Clear All Objects
       </button>
+    </div>
+  </div>
+
+  <!-- Variant context menu (for RMB on palette categories) -->
+  <div id="variant-context-menu" class="variant-context-menu">
+    <div class="context-header">Select Variant</div>
+    <div id="variant-context-items">
+      <!-- Populated dynamically -->
     </div>
   </div>
 

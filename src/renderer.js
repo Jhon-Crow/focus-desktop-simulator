@@ -1398,9 +1398,10 @@ function createBooks(options = {}) {
     pdfPath: null, // Path to PDF file
     currentPage: 0, // Current page index
     totalPages: 0, // Total number of pages
-    pdfResolution: options.pdfResolution || 768, // PDF rendering resolution (width in pixels)
+    pdfResolution: options.pdfResolution || 512, // PDF rendering resolution (width in pixels)
     mainColor: options.mainColor || '#7c3aed',
-    accentColor: options.accentColor || '#f59e0b'
+    accentColor: options.accentColor || '#f59e0b',
+    coverFitMode: options.coverFitMode || 'contain' // Cover image fit mode: 'contain', 'cover', 'stretch'
   };
 
   // Book closed group (visible when closed)
@@ -1519,6 +1520,9 @@ function createBooks(options = {}) {
   coverTitle.rotation.x = -Math.PI / 2;
   coverTitle.position.set(0.02, 0.041, 0);
   coverTitle.name = 'coverTitle';
+  // Hide title background if title is empty or whitespace only
+  const titleText = group.userData.bookTitle || '';
+  coverTitle.visible = titleText.trim().length > 0;
   closedGroup.add(coverTitle);
 
   // Spine title removed per user feedback - spine is now plain accent color
@@ -2165,6 +2169,7 @@ function updateObjectColor(object, colorType, colorValue) {
       typeSpecificData.pageTextures = object.userData.pageTextures;
       // Preserve cover image data
       typeSpecificData.coverImageDataUrl = object.userData.coverImageDataUrl;
+      typeSpecificData.coverFitMode = object.userData.coverFitMode;
       typeSpecificData.firstPageAsCover = object.userData.firstPageAsCover;
       break;
     case 'coffee':
@@ -2220,57 +2225,44 @@ function updateObjectColor(object, colorType, colorValue) {
   Object.assign(newObject.userData, typeSpecificData);
 
   // For books, update the title texture with the restored title and resize for multi-line
-  if (type === 'books' && typeSpecificData.bookTitle && newObject.userData.createTitleTexture) {
+  if (type === 'books' && newObject.userData.createTitleTexture) {
     const closedGroup = newObject.getObjectByName('closedBook');
     if (closedGroup) {
       const coverTitle = closedGroup.getObjectByName('coverTitle');
       if (coverTitle) {
         // Calculate dimensions for multi-line titles
         const title = typeSpecificData.bookTitle || '';
-        const lines = title.split('\n');
-        const baseHeight = 116;
-        const lineAddition = 60;
-        const lineCount = Math.max(1, lines.length);
-        const canvasHeight = baseHeight + (lineCount - 1) * lineAddition;
-        const baseGeoHeight = 0.08;
-        const geoHeight = baseGeoHeight * (canvasHeight / baseHeight);
 
-        // Update geometry for multi-line
-        const newGeometry = new THREE.PlaneGeometry(0.22, geoHeight);
-        coverTitle.geometry.dispose();
-        coverTitle.geometry = newGeometry;
-        coverTitle.position.y = 0.041 + (lineCount - 1) * 0.01;
+        // Hide title background if title is empty or whitespace only
+        coverTitle.visible = title.trim().length > 0;
 
-        const newCoverTexture = newObject.userData.createTitleTexture(typeSpecificData.bookTitle, 320, canvasHeight, 64);
-        coverTitle.material.map = newCoverTexture;
-        coverTitle.material.needsUpdate = true;
+        // Only update texture if title is visible
+        if (coverTitle.visible) {
+          const lines = title.split('\n');
+          const baseHeight = 116;
+          const lineAddition = 60;
+          const lineCount = Math.max(1, lines.length);
+          const canvasHeight = baseHeight + (lineCount - 1) * lineAddition;
+          const baseGeoHeight = 0.08;
+          const geoHeight = baseGeoHeight * (canvasHeight / baseHeight);
+
+          // Update geometry for multi-line
+          const newGeometry = new THREE.PlaneGeometry(0.22, geoHeight);
+          coverTitle.geometry.dispose();
+          coverTitle.geometry = newGeometry;
+          coverTitle.position.y = 0.041 + (lineCount - 1) * 0.01;
+
+          const newCoverTexture = newObject.userData.createTitleTexture(typeSpecificData.bookTitle, 320, canvasHeight, 64);
+          coverTitle.material.map = newCoverTexture;
+          coverTitle.material.needsUpdate = true;
+        }
       }
     }
 
-    // Restore cover image if present
+    // Restore cover image if present (with fit mode)
     if (typeSpecificData.coverImageDataUrl) {
-      const textureLoader = new THREE.TextureLoader();
-      textureLoader.load(typeSpecificData.coverImageDataUrl, (texture) => {
-        const closedGroup = newObject.getObjectByName('closedBook');
-        if (closedGroup) {
-          const cover = closedGroup.getObjectByName('cover');
-          if (cover) {
-            const baseMaterial = new THREE.MeshStandardMaterial({
-              color: new THREE.Color(newObject.userData.mainColor),
-              roughness: 0.7
-            });
-            const topMaterial = new THREE.MeshStandardMaterial({
-              map: texture,
-              roughness: 0.5
-            });
-            cover.material = [
-              baseMaterial, baseMaterial, topMaterial,
-              baseMaterial, baseMaterial, baseMaterial
-            ];
-            cover.material.forEach(m => m.needsUpdate = true);
-          }
-        }
-      });
+      const fitMode = newObject.userData.coverFitMode || 'contain';
+      applyCoverImageWithFit(newObject, typeSpecificData.coverImageDataUrl, fitMode);
     }
 
     // Update book thickness and pages if PDF is loaded
@@ -2926,8 +2918,32 @@ function setupEventListeners() {
       // Don't process if typing in an input field
       if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
 
-      // In reading mode, WASD is disabled (use arrow keys instead for panning)
-      if (bookReadingState.active) return;
+      // In reading mode, WASD is used for panning the view
+      if (bookReadingState.active && bookReadingState.book) {
+        e.preventDefault();
+        const panSpeed = 0.1;
+        const book = bookReadingState.book;
+        const bookWorldPos = new THREE.Vector3();
+        book.getWorldPosition(bookWorldPos);
+
+        // W/S for forward/backward panning, A/D for left/right panning
+        if (wasdKey === 'KeyW') bookReadingState.panOffsetZ -= panSpeed;
+        if (wasdKey === 'KeyS') bookReadingState.panOffsetZ += panSpeed;
+        if (wasdKey === 'KeyA') bookReadingState.panOffsetX -= panSpeed;
+        if (wasdKey === 'KeyD') bookReadingState.panOffsetX += panSpeed;
+
+        // Clamp pan offsets to reasonable limits
+        bookReadingState.panOffsetX = Math.max(-1.5, Math.min(1.5, bookReadingState.panOffsetX));
+        bookReadingState.panOffsetZ = Math.max(-1.5, Math.min(1.5, bookReadingState.panOffsetZ));
+
+        // Update camera position
+        camera.position.set(
+          bookWorldPos.x + bookReadingState.panOffsetX,
+          bookWorldPos.y + bookReadingState.zoomDistance,
+          bookWorldPos.z + 0.65 + bookReadingState.panOffsetZ
+        );
+        return;
+      }
 
       const moveSpeed = 0.1;
 
@@ -4417,8 +4433,8 @@ function updateCustomizationPanel(object) {
           </div>
         </div>
         <div class="customization-group" style="margin-top: 15px;">
-          <label>PDF Resolution: <span id="pdf-resolution-display">${object.userData.pdfResolution || 768}px</span></label>
-          <input type="range" id="book-pdf-resolution" min="384" max="1536" step="128" value="${object.userData.pdfResolution || 768}"
+          <label>PDF Resolution: <span id="pdf-resolution-display">${object.userData.pdfResolution || 512}px</span></label>
+          <input type="range" id="book-pdf-resolution" min="384" max="1536" step="128" value="${object.userData.pdfResolution || 512}"
                  style="width: 100%; margin-top: 8px; accent-color: #4f46e5;">
           <div style="display: flex; justify-content: space-between; color: rgba(255,255,255,0.4); font-size: 10px; margin-top: 4px;">
             <span>Fast</span>
@@ -4445,6 +4461,25 @@ function updateCustomizationPanel(object) {
             ` : ''}
           </div>
         </div>
+        ${object.userData.coverImageDataUrl ? `
+        <div class="customization-group" style="margin-top: 15px;">
+          <label>Cover Position</label>
+          <div id="book-cover-fit-mode" style="display: flex; gap: 8px; margin-top: 8px; flex-wrap: wrap;">
+            <button class="fit-mode-btn${object.userData.coverFitMode === 'contain' ? ' selected' : ''}" data-mode="contain" style="padding: 8px 12px; background: ${object.userData.coverFitMode === 'contain' ? 'rgba(79, 70, 229, 0.5)' : 'rgba(255,255,255,0.1)'}; border: 1px solid ${object.userData.coverFitMode === 'contain' ? 'rgba(79, 70, 229, 0.8)' : 'rgba(255,255,255,0.2)'}; border-radius: 6px; color: #fff; cursor: pointer; font-size: 12px;">
+              Fit Width
+            </button>
+            <button class="fit-mode-btn${object.userData.coverFitMode === 'cover' ? ' selected' : ''}" data-mode="cover" style="padding: 8px 12px; background: ${object.userData.coverFitMode === 'cover' ? 'rgba(79, 70, 229, 0.5)' : 'rgba(255,255,255,0.1)'}; border: 1px solid ${object.userData.coverFitMode === 'cover' ? 'rgba(79, 70, 229, 0.8)' : 'rgba(255,255,255,0.2)'}; border-radius: 6px; color: #fff; cursor: pointer; font-size: 12px;">
+              Fill Cover
+            </button>
+            <button class="fit-mode-btn${object.userData.coverFitMode === 'stretch' ? ' selected' : ''}" data-mode="stretch" style="padding: 8px 12px; background: ${object.userData.coverFitMode === 'stretch' ? 'rgba(79, 70, 229, 0.5)' : 'rgba(255,255,255,0.1)'}; border: 1px solid ${object.userData.coverFitMode === 'stretch' ? 'rgba(79, 70, 229, 0.8)' : 'rgba(255,255,255,0.2)'}; border-radius: 6px; color: #fff; cursor: pointer; font-size: 12px;">
+              Stretch
+            </button>
+          </div>
+          <div style="color: rgba(255,255,255,0.4); font-size: 11px; margin-top: 6px;">
+            ${object.userData.coverFitMode === 'contain' ? 'Image fits within cover width, may show background' : object.userData.coverFitMode === 'cover' ? 'Image fills entire cover, may crop edges' : 'Image stretched to fit exactly'}
+          </div>
+        </div>
+        ` : ''}
       `;
       setupBookCustomizationHandlers(object);
       break;
@@ -5003,32 +5038,39 @@ function setupBookCustomizationHandlers(object) {
           if (coverTitle) {
             // Calculate number of lines needed for the title
             const title = object.userData.bookTitle || '';
-            const lines = title.split('\n');
 
-            // Calculate canvas and geometry height based on line count
-            // Base height is 116px for 1 line, add 60px per additional line
-            const baseHeight = 116;
-            const lineAddition = 60;
-            const lineCount = Math.max(1, lines.length);
-            const canvasHeight = baseHeight + (lineCount - 1) * lineAddition;
+            // Hide title background if title is empty or whitespace only
+            coverTitle.visible = title.trim().length > 0;
 
-            // Update geometry height proportionally (base is 0.08 for 116px)
-            const baseGeoHeight = 0.08;
-            const geoHeight = baseGeoHeight * (canvasHeight / baseHeight);
+            // Only update texture if title is visible
+            if (coverTitle.visible) {
+              const lines = title.split('\n');
 
-            // Create new geometry with updated height
-            const newGeometry = new THREE.PlaneGeometry(0.22, geoHeight);
-            coverTitle.geometry.dispose();
-            coverTitle.geometry = newGeometry;
+              // Calculate canvas and geometry height based on line count
+              // Base height is 116px for 1 line, add 60px per additional line
+              const baseHeight = 116;
+              const lineAddition = 60;
+              const lineCount = Math.max(1, lines.length);
+              const canvasHeight = baseHeight + (lineCount - 1) * lineAddition;
 
-            // Adjust position to keep title centered on cover
-            // Original position is 0.041 for single line, move up slightly for multi-line
-            coverTitle.position.y = 0.041 + (lineCount - 1) * 0.01;
+              // Update geometry height proportionally (base is 0.08 for 116px)
+              const baseGeoHeight = 0.08;
+              const geoHeight = baseGeoHeight * (canvasHeight / baseHeight);
 
-            // Create texture with dynamic height
-            const newCoverTexture = object.userData.createTitleTexture(title, 320, canvasHeight, 64);
-            coverTitle.material.map = newCoverTexture;
-            coverTitle.material.needsUpdate = true;
+              // Create new geometry with updated height
+              const newGeometry = new THREE.PlaneGeometry(0.22, geoHeight);
+              coverTitle.geometry.dispose();
+              coverTitle.geometry = newGeometry;
+
+              // Adjust position to keep title centered on cover
+              // Original position is 0.041 for single line, move up slightly for multi-line
+              coverTitle.position.y = 0.041 + (lineCount - 1) * 0.01;
+
+              // Create texture with dynamic height
+              const newCoverTexture = object.userData.createTitleTexture(title, 320, canvasHeight, 64);
+              coverTitle.material.map = newCoverTexture;
+              coverTitle.material.needsUpdate = true;
+            }
           }
           // Spine title removed - no longer updated
         }
@@ -5122,42 +5164,13 @@ function setupBookCustomizationHandlers(object) {
 
     // Helper to apply cover image to the book cover
     const applyCoverImage = (dataUrl) => {
-      const textureLoader = new THREE.TextureLoader();
-      textureLoader.load(dataUrl, (texture) => {
-        const closedGroup = object.getObjectByName('closedBook');
-        if (closedGroup) {
-          const cover = closedGroup.getObjectByName('cover');
-          if (cover) {
-            // Store original material if not stored
-            if (!object.userData.originalCoverMaterial) {
-              object.userData.originalCoverMaterial = cover.material.clone();
-            }
-            // For BoxGeometry, face order is: +x, -x, +y (top), -y, +z, -z
-            // Create material array with cover image on top face (+y, index 2)
-            const baseMaterial = new THREE.MeshStandardMaterial({
-              color: new THREE.Color(object.userData.mainColor),
-              roughness: 0.7
-            });
-            const topMaterial = new THREE.MeshStandardMaterial({
-              map: texture,
-              roughness: 0.5
-            });
-            // Apply 6 materials - one for each face of the box
-            cover.material = [
-              baseMaterial, // +x
-              baseMaterial, // -x
-              topMaterial,  // +y (top face - this gets the cover image)
-              baseMaterial, // -y
-              baseMaterial, // +z
-              baseMaterial  // -z
-            ];
-            cover.material.forEach(m => m.needsUpdate = true);
-          }
-        }
-        object.userData.coverImageDataUrl = dataUrl;
-        saveState();
-        updateCustomizationPanel(object);
-      });
+      // Store the data URL first
+      object.userData.coverImageDataUrl = dataUrl;
+      // Apply with current fit mode
+      const fitMode = object.userData.coverFitMode || 'contain';
+      applyCoverImageWithFit(object, dataUrl, fitMode);
+      saveState();
+      updateCustomizationPanel(object);
     };
 
     if (coverImageInput) {
@@ -5244,7 +5257,108 @@ function setupBookCustomizationHandlers(object) {
         updateCustomizationPanel(object);
       });
     }
+
+    // Cover fit mode handler
+    const fitModeContainer = document.getElementById('book-cover-fit-mode');
+    if (fitModeContainer) {
+      const fitModeButtons = fitModeContainer.querySelectorAll('.fit-mode-btn');
+      fitModeButtons.forEach(btn => {
+        btn.addEventListener('click', () => {
+          const newMode = btn.dataset.mode;
+          object.userData.coverFitMode = newMode;
+          // Re-apply cover image with new fit mode
+          if (object.userData.coverImageDataUrl) {
+            applyCoverImageWithFit(object, object.userData.coverImageDataUrl, newMode);
+          }
+          saveState();
+          updateCustomizationPanel(object);
+        });
+      });
+    }
   }, 0);
+}
+
+// Helper function to apply cover image with fit mode
+function applyCoverImageWithFit(object, dataUrl, fitMode) {
+  const img = new Image();
+  img.onload = () => {
+    // Book cover dimensions (approximately 0.28 x 0.38)
+    const coverAspect = 0.28 / 0.38; // ~0.737 (width / height)
+    const imgAspect = img.width / img.height;
+
+    // Create a canvas to draw the properly positioned image
+    const canvas = document.createElement('canvas');
+    const canvasSize = 512; // Square canvas for simplicity
+    canvas.width = canvasSize;
+    canvas.height = Math.round(canvasSize / coverAspect);
+    const ctx = canvas.getContext('2d');
+
+    // Fill with main color as background
+    ctx.fillStyle = object.userData.mainColor || '#7c3aed';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+    let drawX = 0, drawY = 0, drawWidth = canvas.width, drawHeight = canvas.height;
+
+    if (fitMode === 'contain') {
+      // Fit image within bounds, maintaining aspect ratio
+      if (imgAspect > coverAspect) {
+        // Image is wider - fit to width
+        drawWidth = canvas.width;
+        drawHeight = canvas.width / imgAspect;
+        drawY = (canvas.height - drawHeight) / 2;
+      } else {
+        // Image is taller - fit to height
+        drawHeight = canvas.height;
+        drawWidth = canvas.height * imgAspect;
+        drawX = (canvas.width - drawWidth) / 2;
+      }
+    } else if (fitMode === 'cover') {
+      // Fill entire cover, cropping edges if needed
+      if (imgAspect > coverAspect) {
+        // Image is wider - fit to height, crop sides
+        drawHeight = canvas.height;
+        drawWidth = canvas.height * imgAspect;
+        drawX = (canvas.width - drawWidth) / 2;
+      } else {
+        // Image is taller - fit to width, crop top/bottom
+        drawWidth = canvas.width;
+        drawHeight = canvas.width / imgAspect;
+        drawY = (canvas.height - drawHeight) / 2;
+      }
+    }
+    // 'stretch' uses default values (full canvas dimensions)
+
+    ctx.drawImage(img, drawX, drawY, drawWidth, drawHeight);
+
+    // Create texture from canvas
+    const texture = new THREE.CanvasTexture(canvas);
+    texture.needsUpdate = true;
+
+    const closedGroup = object.getObjectByName('closedBook');
+    if (closedGroup) {
+      const cover = closedGroup.getObjectByName('cover');
+      if (cover) {
+        const baseMaterial = new THREE.MeshStandardMaterial({
+          color: new THREE.Color(object.userData.mainColor),
+          roughness: 0.7
+        });
+        const topMaterial = new THREE.MeshStandardMaterial({
+          map: texture,
+          roughness: 0.5
+        });
+        cover.material = [
+          baseMaterial, // +x
+          baseMaterial, // -x
+          topMaterial,  // +y (top face - this gets the cover image)
+          baseMaterial, // -y
+          baseMaterial, // +z
+          baseMaterial  // -z
+        ];
+        cover.material.forEach(m => m.needsUpdate = true);
+      }
+    }
+  };
+  img.src = dataUrl;
 }
 
 // Update steam visibility for mug
@@ -6675,30 +6789,37 @@ function setupBookHandlers(object) {
           if (coverTitle) {
             // Calculate number of lines needed for the title
             const title = e.target.value || '';
-            const lines = title.split('\n');
 
-            // Calculate canvas and geometry height based on line count
-            const baseHeight = 116;
-            const lineAddition = 60;
-            const lineCount = Math.max(1, lines.length);
-            const canvasHeight = baseHeight + (lineCount - 1) * lineAddition;
+            // Hide title background if title is empty or whitespace only
+            coverTitle.visible = title.trim().length > 0;
 
-            // Update geometry height proportionally (base is 0.08 for 116px)
-            const baseGeoHeight = 0.08;
-            const geoHeight = baseGeoHeight * (canvasHeight / baseHeight);
+            // Only update texture if title is visible
+            if (coverTitle.visible) {
+              const lines = title.split('\n');
 
-            // Create new geometry with updated height
-            const newGeometry = new THREE.PlaneGeometry(0.22, geoHeight);
-            coverTitle.geometry.dispose();
-            coverTitle.geometry = newGeometry;
+              // Calculate canvas and geometry height based on line count
+              const baseHeight = 116;
+              const lineAddition = 60;
+              const lineCount = Math.max(1, lines.length);
+              const canvasHeight = baseHeight + (lineCount - 1) * lineAddition;
 
-            // Adjust position for multi-line
-            coverTitle.position.y = 0.041 + (lineCount - 1) * 0.01;
+              // Update geometry height proportionally (base is 0.08 for 116px)
+              const baseGeoHeight = 0.08;
+              const geoHeight = baseGeoHeight * (canvasHeight / baseHeight);
 
-            // Create texture with dynamic height
-            const newCoverTexture = object.userData.createTitleTexture(title, 320, canvasHeight, 64);
-            coverTitle.material.map = newCoverTexture;
-            coverTitle.material.needsUpdate = true;
+              // Create new geometry with updated height
+              const newGeometry = new THREE.PlaneGeometry(0.22, geoHeight);
+              coverTitle.geometry.dispose();
+              coverTitle.geometry = newGeometry;
+
+              // Adjust position for multi-line
+              coverTitle.position.y = 0.041 + (lineCount - 1) * 0.01;
+
+              // Create texture with dynamic height
+              const newCoverTexture = object.userData.createTitleTexture(title, 320, canvasHeight, 64);
+              coverTitle.material.map = newCoverTexture;
+              coverTitle.material.needsUpdate = true;
+            }
           }
         }
       }
@@ -6955,7 +7076,7 @@ async function updateBookPagesWithPDF(book) {
 
   // PDF rendering resolution (user-configurable via edit menu)
   // Default 768x1086, can be increased for better quality or decreased for performance
-  const canvasWidth = book.userData.pdfResolution || 768;
+  const canvasWidth = book.userData.pdfResolution || 512;
   const canvasHeight = Math.round(canvasWidth * 1.414); // A4 aspect ratio
 
   // Page offset: if first page is used as cover, skip it in content
@@ -7127,7 +7248,7 @@ function updateBookPages(book) {
   const rightPage = openGroup.getObjectByName('rightPageSurface');
 
   // PDF rendering resolution (user-configurable via edit menu)
-  const canvasWidth = book.userData.pdfResolution || 768;
+  const canvasWidth = book.userData.pdfResolution || 512;
   const canvasHeight = Math.round(canvasWidth * 1.414); // A4 aspect ratio
   const margin = Math.round(60 * canvasWidth / 768);
   const lineHeight = Math.round(42 * canvasWidth / 768);
@@ -7770,7 +7891,7 @@ function animatePageTurn(book, direction) {
     const pdfDoc = book.userData.pdfDocument;
 
     // Pre-render in background using book's configured resolution
-    const resWidth = book.userData.pdfResolution || 768;
+    const resWidth = book.userData.pdfResolution || 512;
     const resHeight = Math.round(resWidth * 1.414);
     if (nextPage1 > 0 && nextPage1 <= pdfDoc.numPages && !book.userData.renderedPages[nextPage1]) {
       renderPDFPageToCanvas(pdfDoc, nextPage1, resWidth, resHeight).then(canvas => {
@@ -9210,6 +9331,10 @@ async function saveState() {
           if (obj.userData.coverImageDataUrl) {
             data.coverImageDataUrl = obj.userData.coverImageDataUrl;
           }
+          // Save cover fit mode
+          if (obj.userData.coverFitMode) {
+            data.coverFitMode = obj.userData.coverFitMode;
+          }
           // Save first page as cover flag
           if (obj.userData.firstPageAsCover) {
             data.firstPageAsCover = true;
@@ -9403,38 +9528,15 @@ async function loadState() {
                   obj.userData.isLoadingPdf = true;
                   loadPDFFromDataUrl(obj, objData.pdfDataUrl);
                 }
-                // Restore cover image if available
+                // Restore cover fit mode
+                if (objData.coverFitMode) {
+                  obj.userData.coverFitMode = objData.coverFitMode;
+                }
+                // Restore cover image if available (with fit mode)
                 if (objData.coverImageDataUrl) {
                   obj.userData.coverImageDataUrl = objData.coverImageDataUrl;
-                  const textureLoader = new THREE.TextureLoader();
-                  textureLoader.load(objData.coverImageDataUrl, (texture) => {
-                    const closedGroup = obj.getObjectByName('closedBook');
-                    if (closedGroup) {
-                      const cover = closedGroup.getObjectByName('cover');
-                      if (cover) {
-                        // For BoxGeometry, face order is: +x, -x, +y (top), -y, +z, -z
-                        // Create material array with cover image on top face (+y, index 2)
-                        const baseMaterial = new THREE.MeshStandardMaterial({
-                          color: new THREE.Color(obj.userData.mainColor),
-                          roughness: 0.7
-                        });
-                        const topMaterial = new THREE.MeshStandardMaterial({
-                          map: texture,
-                          roughness: 0.5
-                        });
-                        // Apply 6 materials - one for each face of the box
-                        cover.material = [
-                          baseMaterial, // +x
-                          baseMaterial, // -x
-                          topMaterial,  // +y (top face - this gets the cover image)
-                          baseMaterial, // -y
-                          baseMaterial, // +z
-                          baseMaterial  // -z
-                        ];
-                        cover.material.forEach(m => m.needsUpdate = true);
-                      }
-                    }
-                  });
+                  const fitMode = obj.userData.coverFitMode || 'contain';
+                  applyCoverImageWithFit(obj, objData.coverImageDataUrl, fitMode);
                 }
                 // Restore first page as cover flag
                 if (objData.firstPageAsCover) {

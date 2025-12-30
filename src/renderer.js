@@ -147,7 +147,9 @@ let bookReadingState = {
   // Zoom and pan controls for reading mode
   zoomDistance: 0.85, // Distance from book (Y offset)
   panOffsetX: 0,      // Pan offset parallel to book
-  panOffsetZ: 0       // Pan offset forward/backward
+  panOffsetZ: 0,      // Pan offset forward/backward
+  // Cached book world position to avoid recalculating on every keypress
+  bookWorldPos: null
 };
 
 // Double-click tracking for laptop desktop
@@ -2855,8 +2857,9 @@ function setupEventListeners() {
         }
 
         // Arrow Up/Down for vertical panning in reading mode
-        const bookWorldPos = new THREE.Vector3();
-        book.getWorldPosition(bookWorldPos);
+        // Use cached book position if available, otherwise skip
+        if (!bookReadingState.bookWorldPos) return;
+        const bookWorldPos = bookReadingState.bookWorldPos;
         const moveSpeed = 0.1;
         if (e.key === 'ArrowUp') bookReadingState.panOffsetZ -= moveSpeed;
         if (e.key === 'ArrowDown') bookReadingState.panOffsetZ += moveSpeed;
@@ -2919,12 +2922,11 @@ function setupEventListeners() {
       if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
 
       // In reading mode, WASD is used for panning the view
-      if (bookReadingState.active && bookReadingState.book) {
+      if (bookReadingState.active && bookReadingState.book && bookReadingState.bookWorldPos) {
         e.preventDefault();
         const panSpeed = 0.1;
-        const book = bookReadingState.book;
-        const bookWorldPos = new THREE.Vector3();
-        book.getWorldPosition(bookWorldPos);
+        // Use cached book position to avoid recalculating on every keypress
+        const bookWorldPos = bookReadingState.bookWorldPos;
 
         // W/S for forward/backward panning, A/D for left/right panning
         if (wasdKey === 'KeyW') bookReadingState.panOffsetZ -= panSpeed;
@@ -4055,17 +4057,15 @@ function onMouseWheel(event) {
   updateMousePosition(event);
 
   // If in book reading mode: scroll zooms in/out on the book (no rotation)
-  if (bookReadingState.active && bookReadingState.book) {
+  if (bookReadingState.active && bookReadingState.book && bookReadingState.bookWorldPos) {
     event.preventDefault();
 
     // Zoom: scroll up = zoom in (closer), scroll down = zoom out (further)
     const zoomDelta = event.deltaY > 0 ? 0.08 : -0.08;
     bookReadingState.zoomDistance = Math.max(0.3, Math.min(2.0, bookReadingState.zoomDistance + zoomDelta));
 
-    // Update camera position
-    const book = bookReadingState.book;
-    const bookWorldPos = new THREE.Vector3();
-    book.getWorldPosition(bookWorldPos);
+    // Update camera position using cached book position
+    const bookWorldPos = bookReadingState.bookWorldPos;
 
     camera.position.set(
       bookWorldPos.x + bookReadingState.panOffsetX,
@@ -8105,9 +8105,11 @@ function enterBookReadingMode(book) {
   bookReadingState.originalCameraYaw = cameraLookState.yaw;
   bookReadingState.originalCameraPitch = cameraLookState.pitch;
 
-  // Get book position in world coordinates
+  // Get book position in world coordinates and cache it
+  // This avoids recalculating on every keypress during pan/zoom
   const bookWorldPos = new THREE.Vector3();
   book.getWorldPosition(bookWorldPos);
+  bookReadingState.bookWorldPos = bookWorldPos;
 
   // Calculate target camera position - at comfortable reading height above the book
   // Higher position for comfortable viewing distance
@@ -8185,6 +8187,7 @@ function exitBookReadingMode() {
   }
 
   bookReadingState.book = null;
+  bookReadingState.bookWorldPos = null;
 }
 
 // Create laptop desktop texture with Obsidian icon

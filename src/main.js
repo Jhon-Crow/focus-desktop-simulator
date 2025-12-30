@@ -86,3 +86,47 @@ ipcMain.handle('load-state', async () => {
     return { success: false, error: error.message };
   }
 });
+
+// Separate handler for large data (PDF, cover images) to avoid lag during position saves
+ipcMain.handle('save-object-data', async (event, objectId, dataType, dataUrl) => {
+  const fs = require('fs');
+  const userDataPath = app.getPath('userData');
+  const dataDir = path.join(userDataPath, 'object-data');
+
+  // Ensure data directory exists
+  if (!fs.existsSync(dataDir)) {
+    fs.mkdirSync(dataDir, { recursive: true });
+  }
+
+  const dataPath = path.join(dataDir, `${objectId}-${dataType}.data`);
+
+  try {
+    if (dataUrl) {
+      fs.writeFileSync(dataPath, dataUrl);
+    } else {
+      // Delete the file if dataUrl is null
+      if (fs.existsSync(dataPath)) {
+        fs.unlinkSync(dataPath);
+      }
+    }
+    return { success: true };
+  } catch (error) {
+    return { success: false, error: error.message };
+  }
+});
+
+ipcMain.handle('load-object-data', async (event, objectId, dataType) => {
+  const fs = require('fs');
+  const userDataPath = app.getPath('userData');
+  const dataPath = path.join(userDataPath, 'object-data', `${objectId}-${dataType}.data`);
+
+  try {
+    if (fs.existsSync(dataPath)) {
+      const data = fs.readFileSync(dataPath, 'utf8');
+      return { success: true, data };
+    }
+    return { success: true, data: null };
+  } catch (error) {
+    return { success: false, error: error.message };
+  }
+});

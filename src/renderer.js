@@ -166,12 +166,12 @@ let cameraLookState = {
   // Initial angles calculated from CONFIG.camera.lookAt control point
   yaw: DEFAULT_CAMERA_ANGLES.yaw,     // Horizontal rotation - facing the desk
   pitch: DEFAULT_CAMERA_ANGLES.pitch, // Vertical rotation - looking down at desk surface
-  minPitch: -1.15,   // Looking down limit - extended by ~8 degrees to reach near table edge
-  maxPitch: 0.25,    // Looking up limit - extended by ~8 degrees
-  // Yaw limits centered around the default yaw (±1.22 radians ~ ±70 degrees)
-  // Extended to reach all desk corners
-  minYaw: DEFAULT_CAMERA_ANGLES.yaw - 1.22,  // Limit horizontal rotation to left
-  maxYaw: DEFAULT_CAMERA_ANGLES.yaw + 1.22   // Limit horizontal rotation to right
+  minPitch: -1.32,   // Looking down limit - extended by ~10 degrees more (~76 degrees total)
+  maxPitch: 0.42,    // Looking up limit - extended by ~10 degrees more (~24 degrees total)
+  // Yaw limits centered around the default yaw (±1.40 radians ~ ±80 degrees)
+  // Extended by 10 degrees to reach all desk corners
+  minYaw: DEFAULT_CAMERA_ANGLES.yaw - 1.40,  // Limit horizontal rotation to left
+  maxYaw: DEFAULT_CAMERA_ANGLES.yaw + 1.40   // Limit horizontal rotation to right
 };
 
 // Physics state for objects
@@ -204,6 +204,7 @@ const OBJECT_PHYSICS = {
   'laptop': { weight: 1.5, stability: 0.95, height: 0.3, baseOffset: 0 },       // Heavy, flat, very stable
   'notebook': { weight: 0.3, stability: 0.95, height: 0.1, baseOffset: 0 },     // Light, flat, very stable
   'pen-holder': { weight: 0.6, stability: 0.6, height: 0.4, baseOffset: 0 },    // Medium, somewhat stable
+  'pen': { weight: 0.05, stability: 0.2, height: 0.35, baseOffset: 0 },         // Very light, can roll
   'books': { weight: 0.8, stability: 0.9, height: 0.15, baseOffset: 0 },        // Book, flat, stable
   'photo-frame': { weight: 0.3, stability: 0.35, height: 0.5, baseOffset: 0.25 },// Light, tall, tips easier
   'globe': { weight: 1.0, stability: 0.7, height: 0.5, baseOffset: 0.025 },     // Medium, balanced
@@ -539,6 +540,7 @@ const PRESET_CREATORS = {
   laptop: createLaptop,
   notebook: createNotebook,
   'pen-holder': createPenHolder,
+  pen: createPen,
   books: createBooks,
   'photo-frame': createPhotoFrame,
   globe: createGlobe,
@@ -942,16 +944,17 @@ function createCoffeeMug(options = {}) {
   handle.castShadow = true;
   group.add(handle);
 
-  // Liquid surface (can show waves when animated)
-  const liquidGeometry = new THREE.CylinderGeometry(0.095, 0.095, 0.02, 32);
+  // Liquid surface - thicker cylinder for better visibility
+  const liquidGeometry = new THREE.CylinderGeometry(0.09, 0.085, 0.08, 32);
   const liquidMaterial = new THREE.MeshStandardMaterial({
     color: DRINK_COLORS.coffee.color,
-    roughness: 0.2,
-    metalness: 0.1
+    roughness: 0.3,
+    metalness: 0.2,
+    side: THREE.DoubleSide // Make sure it's visible from inside the mug too
   });
   const liquid = new THREE.Mesh(liquidGeometry, liquidMaterial);
   liquid.name = 'liquid';
-  liquid.position.y = 0.18;
+  liquid.position.y = 0.14; // Positioned inside the mug, slightly below rim
   group.add(liquid);
 
   // Decorative stripe
@@ -1120,14 +1123,12 @@ function createPenHolder(options = {}) {
   group.userData = {
     type: 'pen-holder',
     name: 'Pen Holder',
-    interactive: true, // Now interactive - can select pens
-    pens: ['red', 'blue', 'green', 'black'], // Available pen colors
-    selectedPen: null, // Currently selected pen color name
+    interactive: false, // Just a container now
     mainColor: options.mainColor || '#64748b',
     accentColor: options.accentColor || '#f472b6'
   };
 
-  // Holder cup
+  // Holder cup (open cylinder)
   const holderGeometry = new THREE.CylinderGeometry(0.12, 0.1, 0.25, 16, 1, true);
   const holderMaterial = new THREE.MeshStandardMaterial({
     color: new THREE.Color(group.userData.mainColor),
@@ -1147,39 +1148,85 @@ function createPenHolder(options = {}) {
   bottom.position.y = 0.001;
   group.add(bottom);
 
-  // Pens with individual names for selection
-  const penData = [
-    { color: 0xef4444, name: 'red' },
-    { color: 0x3b82f6, name: 'blue' },
-    { color: 0x22c55e, name: 'green' },
-    { color: 0x000000, name: 'black' }
-  ];
+  // Inner ring at top for visual depth
+  const rimGeometry = new THREE.TorusGeometry(0.11, 0.01, 8, 32);
+  const rim = new THREE.Mesh(rimGeometry, holderMaterial);
+  rim.rotation.x = -Math.PI / 2;
+  rim.position.y = 0.25;
+  group.add(rim);
 
-  const pensGroup = new THREE.Group();
-  pensGroup.name = 'pens';
+  group.position.y = getDeskSurfaceY();
 
-  penData.forEach((data, i) => {
-    const penGeometry = new THREE.CylinderGeometry(0.015, 0.015, 0.35, 8);
-    const penMaterial = new THREE.MeshStandardMaterial({
-      color: data.color,
-      roughness: 0.4
-    });
-    const pen = new THREE.Mesh(penGeometry, penMaterial);
-    pen.name = `pen_${data.name}`;
-    pen.userData.penColor = data.name;
-    pen.userData.colorHex = data.color;
-    const angle = (i / penData.length) * Math.PI * 2;
-    pen.position.set(
-      Math.cos(angle) * 0.04,
-      0.3,
-      Math.sin(angle) * 0.04
-    );
-    pen.rotation.z = (Math.random() - 0.5) * 0.2;
-    pen.rotation.x = (Math.random() - 0.5) * 0.2;
-    pensGroup.add(pen);
+  return group;
+}
+
+// Individual pen as a separate desk object
+function createPen(options = {}) {
+  const group = new THREE.Group();
+
+  // Default pen colors available
+  const penColors = {
+    red: 0xef4444,
+    blue: 0x3b82f6,
+    green: 0x22c55e,
+    black: 0x1a1a1a,
+    purple: 0x8b5cf6,
+    orange: 0xf97316
+  };
+
+  const penColor = options.penColor || 'blue';
+  const colorHex = penColors[penColor] || penColors.blue;
+
+  group.userData = {
+    type: 'pen',
+    name: `${penColor.charAt(0).toUpperCase() + penColor.slice(1)} Pen`,
+    interactive: false,
+    penColor: penColor,
+    mainColor: options.mainColor || `#${colorHex.toString(16).padStart(6, '0')}`,
+    accentColor: options.accentColor || '#d4d4d4'
+  };
+
+  // Pen body
+  const bodyGeometry = new THREE.CylinderGeometry(0.012, 0.012, 0.3, 8);
+  const bodyMaterial = new THREE.MeshStandardMaterial({
+    color: colorHex,
+    roughness: 0.4,
+    metalness: 0.2
   });
+  const body = new THREE.Mesh(bodyGeometry, bodyMaterial);
+  body.position.y = 0.15;
+  body.castShadow = true;
+  group.add(body);
 
-  group.add(pensGroup);
+  // Pen tip (silver/metallic)
+  const tipGeometry = new THREE.ConeGeometry(0.012, 0.04, 8);
+  const tipMaterial = new THREE.MeshStandardMaterial({
+    color: 0xc0c0c0,
+    roughness: 0.2,
+    metalness: 0.8
+  });
+  const tip = new THREE.Mesh(tipGeometry, tipMaterial);
+  tip.position.y = -0.02;
+  tip.rotation.x = Math.PI;
+  group.add(tip);
+
+  // Pen cap
+  const capGeometry = new THREE.CylinderGeometry(0.013, 0.013, 0.05, 8);
+  const cap = new THREE.Mesh(capGeometry, bodyMaterial);
+  cap.position.y = 0.325;
+  group.add(cap);
+
+  // Clip on cap
+  const clipGeometry = new THREE.BoxGeometry(0.003, 0.04, 0.015);
+  const clipMaterial = new THREE.MeshStandardMaterial({
+    color: 0xc0c0c0,
+    roughness: 0.2,
+    metalness: 0.8
+  });
+  const clip = new THREE.Mesh(clipGeometry, clipMaterial);
+  clip.position.set(0.014, 0.32, 0);
+  group.add(clip);
+
   group.position.y = getDeskSurfaceY();
 
   return group;
@@ -1760,10 +1807,12 @@ function addObjectToDesk(type, options = {}) {
     object.userData.rotationY = options.rotationY;
   }
 
-  // Apply scale if specified
+  // Apply scale if specified and adjust Y position to keep object on desk
   if (options.scale !== undefined && options.scale > 0) {
     object.scale.set(options.scale, options.scale, options.scale);
     object.userData.scale = options.scale;
+    // Adjust Y position to account for scale change
+    adjustObjectYForScale(object, 1.0, options.scale);
   }
 
   deskObjects.push(object);
@@ -3083,6 +3132,35 @@ function updateCustomizationPanel(object) {
       `;
       setupPhotoFrameCustomizationHandlers(object);
       break;
+
+    case 'books':
+      dynamicOptions.innerHTML = `
+        <div class="customization-group" style="margin-top: 20px; padding-top: 15px; border-top: 1px solid rgba(255,255,255,0.1);">
+          <label>Book Title</label>
+          <input type="text" id="book-title-edit" value="${object.userData.bookTitle || ''}"
+                 placeholder="Enter book title"
+                 style="width: 100%; padding: 10px; background: rgba(255,255,255,0.1); border: 1px solid rgba(255,255,255,0.2); border-radius: 8px; color: #fff; margin-top: 8px;">
+        </div>
+        <div class="customization-group" style="margin-top: 15px;">
+          <label>PDF File</label>
+          <div style="display: flex; flex-direction: column; gap: 10px; margin-top: 8px;">
+            <label style="display: inline-block; padding: 10px 15px; background: rgba(79, 70, 229, 0.3); border: 1px solid rgba(79, 70, 229, 0.5); border-radius: 8px; color: #fff; cursor: pointer; text-align: center;">
+              ${object.userData.pdfPath ? 'Change PDF' : 'Choose PDF'}
+              <input type="file" id="book-pdf-edit" accept=".pdf" style="display: none;">
+            </label>
+            ${object.userData.pdfPath ? `
+              <div style="color: rgba(255,255,255,0.5); font-size: 12px;">
+                Current: ${object.userData.pdfPath.split('/').pop() || object.userData.pdfPath.split('\\\\').pop()}
+              </div>
+              <button id="book-pdf-clear-edit" style="padding: 10px 15px; background: rgba(239, 68, 68, 0.2); border: 1px solid rgba(239, 68, 68, 0.4); border-radius: 8px; color: #ef4444; cursor: pointer;">
+                Clear PDF
+              </button>
+            ` : ''}
+          </div>
+        </div>
+      `;
+      setupBookCustomizationHandlers(object);
+      break;
   }
 }
 
@@ -3121,12 +3199,14 @@ function setupMugCustomizationHandlers(object) {
         object.userData.liquidLevel = level;
         fillDisplay.textContent = `${Math.round(level * 100)}%`;
 
-        // Update liquid visibility
+        // Update liquid visibility and scale
         const liquid = object.getObjectByName('liquid');
         if (liquid) {
           liquid.visible = level > 0.05;
+          // Scale the liquid height based on fill level
           liquid.scale.y = Math.max(0.1, level);
-          liquid.position.y = 0.08 + level * 0.1;
+          // Base position is 0.06 (bottom of inner mug), max is 0.14
+          liquid.position.y = 0.06 + level * 0.08;
         }
 
         saveState();
@@ -3179,6 +3259,8 @@ function setupPhotoFrameCustomizationHandlers(object) {
           const reader = new FileReader();
           reader.onload = (event) => {
             const imageUrl = event.target.result;
+            // Store data URL for persistence
+            object.userData.photoDataUrl = imageUrl;
             const textureLoader = new THREE.TextureLoader();
             textureLoader.load(imageUrl, (texture) => {
               const photoSurface = object.getObjectByName('photoSurface');
@@ -3188,6 +3270,7 @@ function setupPhotoFrameCustomizationHandlers(object) {
                 photoSurface.material.needsUpdate = true;
                 object.userData.photoTexture = texture;
               }
+              saveState(); // Save after photo is loaded
             });
           };
           reader.readAsDataURL(file);
@@ -3203,10 +3286,54 @@ function setupPhotoFrameCustomizationHandlers(object) {
             object.userData.photoTexture.dispose();
             object.userData.photoTexture = null;
           }
+          object.userData.photoDataUrl = null;
           photoSurface.material.map = null;
           photoSurface.material.color.set(new THREE.Color(object.userData.accentColor));
           photoSurface.material.needsUpdate = true;
+          saveState();
         }
+      });
+    }
+  }, 0);
+}
+
+function setupBookCustomizationHandlers(object) {
+  setTimeout(() => {
+    const titleInput = document.getElementById('book-title-edit');
+    const pdfInput = document.getElementById('book-pdf-edit');
+    const clearBtn = document.getElementById('book-pdf-clear-edit');
+
+    if (titleInput) {
+      titleInput.addEventListener('change', (e) => {
+        object.userData.bookTitle = e.target.value;
+        saveState();
+      });
+      titleInput.addEventListener('blur', (e) => {
+        object.userData.bookTitle = e.target.value;
+        saveState();
+      });
+    }
+
+    if (pdfInput) {
+      pdfInput.addEventListener('change', (e) => {
+        const file = e.target.files[0];
+        if (file) {
+          object.userData.pdfPath = file.path || file.name;
+          saveState();
+          // Update the customization panel to show the new file
+          updateCustomizationPanel(object);
+        }
+      });
+    }
+
+    if (clearBtn) {
+      clearBtn.addEventListener('click', () => {
+        object.userData.pdfPath = null;
+        object.userData.totalPages = 0;
+        object.userData.currentPage = 0;
+        saveState();
+        // Update the customization panel
+        updateCustomizationPanel(object);
       });
     }
   }, 0);
@@ -4323,10 +4450,10 @@ function setupMugHandlers(object) {
       // Update liquid height and position
       const liquid = object.getObjectByName('liquid');
       if (liquid) {
-        const maxHeight = 0.12; // Max liquid height inside mug
-        const newHeight = Math.max(0.005, maxHeight * level);
-        liquid.scale.y = level > 0.05 ? 1 : 0; // Hide if nearly empty
-        liquid.position.y = 0.1 + newHeight / 2 + 0.02; // Adjust position based on fill
+        liquid.visible = level > 0.05;
+        liquid.scale.y = Math.max(0.1, level);
+        // Base position is 0.06 (bottom of inner mug), max is 0.14
+        liquid.position.y = 0.06 + level * 0.08;
       }
 
       // Update label
@@ -4691,9 +4818,7 @@ function performQuickInteraction(object) {
       break;
 
     case 'pen-holder':
-      // Open pen selection modal
-      enterExamineMode(object);
-      openInteractionModal(object);
+      // Pen holder is now just a container, no interaction
       break;
 
     default:
@@ -4713,11 +4838,29 @@ function performMugSip(object) {
   if (object.userData.isSipping || object.userData.isCheckingEmpty) return;
 
   if (object.userData.liquidLevel > 0.05) {
-    // Sip animation
+    // Sip animation - tilt mug toward camera
     object.userData.isSipping = true;
     const sipAmount = 0.15; // Each sip takes 15% of the drink
-    const startRotation = object.rotation.x;
-    const sipRotation = startRotation - 0.5; // Tilt toward camera
+
+    // Calculate direction from mug to camera to determine tilt axis
+    const mugWorldPos = new THREE.Vector3();
+    object.getWorldPosition(mugWorldPos);
+    const dirToCamera = new THREE.Vector3();
+    dirToCamera.subVectors(camera.position, mugWorldPos).normalize();
+
+    // Calculate the tilt angle based on camera direction
+    // We need to tilt the mug towards the camera (as if drinking)
+    const tiltAngle = 0.7; // More pronounced tilt for sipping
+
+    // Store starting rotations
+    const startRotationX = object.rotation.x;
+    const startRotationZ = object.rotation.z;
+
+    // Calculate target rotation to tilt toward camera
+    // The mug should tilt on the axis perpendicular to the camera direction
+    const tiltX = startRotationX + dirToCamera.z * tiltAngle;
+    const tiltZ = startRotationZ - dirToCamera.x * tiltAngle;
+
     const duration = 800;
     const startTime = Date.now();
 
@@ -4726,22 +4869,26 @@ function performMugSip(object) {
       const progress = Math.min(elapsed / duration, 1);
 
       if (progress < 0.3) {
-        // Tilt up
+        // Tilt up toward camera
         const tiltProgress = progress / 0.3;
-        object.rotation.x = startRotation + (sipRotation - startRotation) * tiltProgress;
+        object.rotation.x = startRotationX + (tiltX - startRotationX) * tiltProgress;
+        object.rotation.z = startRotationZ + (tiltZ - startRotationZ) * tiltProgress;
       } else if (progress < 0.7) {
         // Hold position (drinking)
-        object.rotation.x = sipRotation;
+        object.rotation.x = tiltX;
+        object.rotation.z = tiltZ;
       } else {
         // Tilt back down
         const returnProgress = (progress - 0.7) / 0.3;
-        object.rotation.x = sipRotation + (startRotation - sipRotation) * returnProgress;
+        object.rotation.x = tiltX + (startRotationX - tiltX) * returnProgress;
+        object.rotation.z = tiltZ + (startRotationZ - tiltZ) * returnProgress;
       }
 
       if (progress < 1) {
         requestAnimationFrame(animateSip);
       } else {
-        object.rotation.x = startRotation;
+        object.rotation.x = startRotationX;
+        object.rotation.z = startRotationZ;
         object.userData.isSipping = false;
 
         // Reduce liquid level
@@ -4753,8 +4900,8 @@ function performMugSip(object) {
           if (object.userData.liquidLevel < 0.05) {
             liquid.visible = false;
           } else {
-            liquid.scale.y = object.userData.liquidLevel;
-            liquid.position.y = 0.08 + object.userData.liquidLevel * 0.1;
+            liquid.scale.y = Math.max(0.1, object.userData.liquidLevel);
+            liquid.position.y = 0.06 + object.userData.liquidLevel * 0.08;
           }
         }
 
@@ -4766,10 +4913,24 @@ function performMugSip(object) {
 
     animateSip();
   } else {
-    // Empty mug - check if there's anything left
+    // Empty mug - check if there's anything left (tilt toward camera to look inside)
     object.userData.isCheckingEmpty = true;
-    const startRotation = object.rotation.x;
-    const checkRotation = startRotation - 1.2; // Tilt almost upside down to look inside
+
+    // Calculate direction from mug to camera
+    const mugWorldPos = new THREE.Vector3();
+    object.getWorldPosition(mugWorldPos);
+    const dirToCamera = new THREE.Vector3();
+    dirToCamera.subVectors(camera.position, mugWorldPos).normalize();
+
+    const checkAngle = 1.4; // Almost upside down
+
+    const startRotationX = object.rotation.x;
+    const startRotationZ = object.rotation.z;
+
+    // Tilt toward camera
+    const checkRotationX = startRotationX + dirToCamera.z * checkAngle;
+    const checkRotationZ = startRotationZ - dirToCamera.x * checkAngle;
+
     const duration = 1200;
     const startTime = Date.now();
 
@@ -4780,24 +4941,25 @@ function performMugSip(object) {
       if (progress < 0.4) {
         // Tilt up to look inside
         const tiltProgress = progress / 0.4;
-        object.rotation.x = startRotation + (checkRotation - startRotation) * tiltProgress;
+        object.rotation.x = startRotationX + (checkRotationX - startRotationX) * tiltProgress;
+        object.rotation.z = startRotationZ + (checkRotationZ - startRotationZ) * tiltProgress;
       } else if (progress < 0.6) {
         // Rotate slightly to look around
         const lookProgress = (progress - 0.4) / 0.2;
-        object.rotation.x = checkRotation;
-        object.rotation.z = Math.sin(lookProgress * Math.PI * 2) * 0.2;
+        object.rotation.x = checkRotationX + Math.sin(lookProgress * Math.PI * 2) * 0.1;
+        object.rotation.z = checkRotationZ + Math.cos(lookProgress * Math.PI * 2) * 0.1;
       } else {
         // Return to original position
         const returnProgress = (progress - 0.6) / 0.4;
-        object.rotation.x = checkRotation + (startRotation - checkRotation) * returnProgress;
-        object.rotation.z *= (1 - returnProgress);
+        object.rotation.x = checkRotationX + (startRotationX - checkRotationX) * returnProgress;
+        object.rotation.z = checkRotationZ + (startRotationZ - checkRotationZ) * returnProgress;
       }
 
       if (progress < 1) {
         requestAnimationFrame(animateCheck);
       } else {
-        object.rotation.x = startRotation;
-        object.rotation.z = 0;
+        object.rotation.x = startRotationX;
+        object.rotation.z = startRotationZ;
         object.userData.isCheckingEmpty = false;
       }
     }
@@ -4953,15 +5115,45 @@ function onWindowResize() {
 // ============================================================================
 async function saveState() {
   const state = {
-    objects: deskObjects.map(obj => ({
-      type: obj.userData.type,
-      x: obj.position.x,
-      z: obj.position.z,
-      rotationY: obj.userData.rotationY || obj.rotation.y,
-      scale: obj.userData.scale || obj.scale.x,
-      mainColor: obj.userData.mainColor,
-      accentColor: obj.userData.accentColor
-    })),
+    objects: deskObjects.map(obj => {
+      const data = {
+        type: obj.userData.type,
+        x: obj.position.x,
+        z: obj.position.z,
+        rotationY: obj.userData.rotationY || obj.rotation.y,
+        scale: obj.userData.scale || obj.scale.x,
+        mainColor: obj.userData.mainColor,
+        accentColor: obj.userData.accentColor
+      };
+
+      // Save type-specific data
+      switch (obj.userData.type) {
+        case 'photo-frame':
+          // Save photo data URL if a photo is loaded
+          if (obj.userData.photoDataUrl) {
+            data.photoDataUrl = obj.userData.photoDataUrl;
+          }
+          break;
+        case 'books':
+          data.bookTitle = obj.userData.bookTitle;
+          data.pdfPath = obj.userData.pdfPath;
+          break;
+        case 'coffee':
+          data.drinkType = obj.userData.drinkType;
+          data.liquidLevel = obj.userData.liquidLevel;
+          data.isHot = obj.userData.isHot;
+          break;
+        case 'metronome':
+          data.bpm = obj.userData.bpm;
+          data.tickSound = obj.userData.tickSound;
+          break;
+        case 'laptop':
+          data.bootTime = obj.userData.bootTime;
+          break;
+      }
+
+      return data;
+    }),
     camera: {
       x: camera.position.x,
       y: camera.position.y,
@@ -5003,7 +5195,7 @@ async function loadState() {
       // Load objects
       if (result.state.objects) {
         result.state.objects.forEach(objData => {
-          addObjectToDesk(objData.type, {
+          const obj = addObjectToDesk(objData.type, {
             x: objData.x,
             z: objData.z,
             rotationY: objData.rotationY,
@@ -5011,6 +5203,58 @@ async function loadState() {
             mainColor: objData.mainColor,
             accentColor: objData.accentColor
           });
+
+          // Restore type-specific data
+          if (obj) {
+            switch (objData.type) {
+              case 'photo-frame':
+                if (objData.photoDataUrl) {
+                  obj.userData.photoDataUrl = objData.photoDataUrl;
+                  // Load texture from data URL
+                  const textureLoader = new THREE.TextureLoader();
+                  textureLoader.load(objData.photoDataUrl, (texture) => {
+                    const photoSurface = obj.getObjectByName('photoSurface');
+                    if (photoSurface) {
+                      photoSurface.material.map = texture;
+                      photoSurface.material.color.set(0xffffff);
+                      photoSurface.material.needsUpdate = true;
+                      obj.userData.photoTexture = texture;
+                    }
+                  });
+                }
+                break;
+              case 'books':
+                if (objData.bookTitle) obj.userData.bookTitle = objData.bookTitle;
+                if (objData.pdfPath) obj.userData.pdfPath = objData.pdfPath;
+                break;
+              case 'coffee':
+                if (objData.drinkType) {
+                  obj.userData.drinkType = objData.drinkType;
+                  const liquid = obj.getObjectByName('liquid');
+                  if (liquid && DRINK_COLORS[objData.drinkType]) {
+                    liquid.material.color.set(DRINK_COLORS[objData.drinkType].color);
+                  }
+                }
+                if (objData.liquidLevel !== undefined) {
+                  obj.userData.liquidLevel = objData.liquidLevel;
+                  const liquid = obj.getObjectByName('liquid');
+                  if (liquid) {
+                    liquid.visible = objData.liquidLevel > 0.05;
+                    liquid.scale.y = Math.max(0.1, objData.liquidLevel);
+                    liquid.position.y = 0.06 + objData.liquidLevel * 0.08;
+                  }
+                }
+                if (objData.isHot !== undefined) obj.userData.isHot = objData.isHot;
+                break;
+              case 'metronome':
+                if (objData.bpm) obj.userData.bpm = objData.bpm;
+                if (objData.tickSound !== undefined) obj.userData.tickSound = objData.tickSound;
+                break;
+              case 'laptop':
+                if (objData.bootTime) obj.userData.bootTime = objData.bootTime;
+                break;
+            }
+          }
         });
       } else {
         // Add default objects if no saved objects

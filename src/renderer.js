@@ -1986,6 +1986,42 @@ function updateObjectColor(object, colorType, colorValue) {
   const savedRotationY = object.userData.rotationY;
   const savedScale = object.userData.scale;
 
+  // Store type-specific properties that should be preserved
+  const typeSpecificData = {};
+  switch (type) {
+    case 'books':
+      typeSpecificData.bookTitle = object.userData.bookTitle;
+      typeSpecificData.titleColor = object.userData.titleColor;
+      typeSpecificData.pdfPath = object.userData.pdfPath;
+      typeSpecificData.totalPages = object.userData.totalPages;
+      typeSpecificData.currentPage = object.userData.currentPage;
+      typeSpecificData.isOpen = object.userData.isOpen;
+      break;
+    case 'coffee':
+      typeSpecificData.drinkType = object.userData.drinkType;
+      typeSpecificData.liquidLevel = object.userData.liquidLevel;
+      typeSpecificData.isHot = object.userData.isHot;
+      break;
+    case 'metronome':
+      typeSpecificData.bpm = object.userData.bpm;
+      typeSpecificData.tickSound = object.userData.tickSound;
+      typeSpecificData.isRunning = object.userData.isRunning;
+      break;
+    case 'photo-frame':
+      typeSpecificData.photoDataUrl = object.userData.photoDataUrl;
+      typeSpecificData.photoTexture = object.userData.photoTexture;
+      break;
+    case 'laptop':
+      typeSpecificData.bootTime = object.userData.bootTime;
+      typeSpecificData.bootScreenDataUrl = object.userData.bootScreenDataUrl;
+      typeSpecificData.bootScreenTexture = object.userData.bootScreenTexture;
+      typeSpecificData.powerLedColor = object.userData.powerLedColor;
+      typeSpecificData.powerButtonColor = object.userData.powerButtonColor;
+      typeSpecificData.editorContent = object.userData.editorContent;
+      typeSpecificData.editorFileName = object.userData.editorFileName;
+      break;
+  }
+
   // Create new object with updated colors
   const newObject = creator({
     mainColor: object.userData.mainColor,
@@ -2002,6 +2038,56 @@ function updateObjectColor(object, colorType, colorValue) {
   newObject.userData.isLifted = false;
   newObject.userData.rotationY = savedRotationY;
   newObject.userData.scale = savedScale;
+
+  // Restore type-specific properties
+  Object.assign(newObject.userData, typeSpecificData);
+
+  // For books, update the title texture with the restored title
+  if (type === 'books' && typeSpecificData.bookTitle && newObject.userData.createTitleTexture) {
+    const closedGroup = newObject.getObjectByName('closedBook');
+    if (closedGroup) {
+      const coverTitle = closedGroup.getObjectByName('coverTitle');
+      if (coverTitle) {
+        const newCoverTexture = newObject.userData.createTitleTexture(typeSpecificData.bookTitle, 320, 116, 32);
+        coverTitle.material.map = newCoverTexture;
+        coverTitle.material.needsUpdate = true;
+      }
+    }
+  }
+
+  // For coffee mug, update liquid color and level
+  if (type === 'coffee') {
+    const liquid = newObject.getObjectByName('liquid');
+    const liquidBody = newObject.getObjectByName('liquidBody');
+    if (typeSpecificData.drinkType && DRINK_COLORS[typeSpecificData.drinkType]) {
+      if (liquid) liquid.material.color.set(DRINK_COLORS[typeSpecificData.drinkType].color);
+      if (liquidBody) liquidBody.material.color.set(DRINK_COLORS[typeSpecificData.drinkType].color);
+    }
+    const level = typeSpecificData.liquidLevel !== undefined ? typeSpecificData.liquidLevel : 0.8;
+    if (liquid) {
+      liquid.visible = level > 0.05;
+      liquid.position.y = 0.03 + level * 0.14;
+    }
+    if (liquidBody) {
+      liquidBody.visible = level > 0.05;
+      liquidBody.scale.y = Math.max(0.1, level);
+      liquidBody.position.y = 0.015 + level * 0.07;
+    }
+  }
+
+  // For photo frame, restore the photo texture
+  if (type === 'photo-frame' && typeSpecificData.photoDataUrl) {
+    const textureLoader = new THREE.TextureLoader();
+    textureLoader.load(typeSpecificData.photoDataUrl, (texture) => {
+      const photoSurface = newObject.getObjectByName('photoSurface');
+      if (photoSurface) {
+        photoSurface.material.map = texture;
+        photoSurface.material.color.set(0xffffff);
+        photoSurface.material.needsUpdate = true;
+        newObject.userData.photoTexture = texture;
+      }
+    });
+  }
 
   // Replace in scene and array
   const index = deskObjects.indexOf(object);

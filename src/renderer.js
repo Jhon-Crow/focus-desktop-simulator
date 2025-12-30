@@ -145,6 +145,13 @@ let bookReadingState = {
   holdTimeout: null
 };
 
+// Double-click tracking for laptop desktop
+let laptopDoubleClickState = {
+  lastClickTime: 0,
+  lastClickPos: { x: 0, y: 0 },
+  doubleClickThreshold: 300 // ms
+};
+
 // ============================================================================
 // CAMERA CONTROL POINTS (Starting position and direction)
 // ============================================================================
@@ -2916,6 +2923,44 @@ function onMouseDown(event) {
     }
 
     if (deskObjects.includes(object)) {
+      // Check for double-click on laptop screen when zoomed in
+      if (object.userData.type === 'laptop' && object.userData.isZoomedIn && object.userData.isOn && !object.userData.isBooting) {
+        const clickedMesh = intersects[0].object;
+        if (clickedMesh.name === 'screen') {
+          const now = Date.now();
+          const timeDiff = now - laptopDoubleClickState.lastClickTime;
+
+          if (timeDiff < laptopDoubleClickState.doubleClickThreshold) {
+            // Double-click detected - check if clicking on Obsidian icon area
+            // Get UV coordinates of click on screen
+            const uv = intersects[0].uv;
+            if (uv) {
+              // Obsidian icon is at top-left (approximately x: 0.1-0.25, y: 0.75-0.95)
+              const iconX = 60 / 512; // Icon center X
+              const iconY = 1 - (60 / 384); // Icon center Y (flipped)
+              const iconRadius = 40 / 512; // Icon clickable radius
+
+              const clickX = uv.x;
+              const clickY = uv.y;
+
+              // Check if click is near the icon
+              const dx = clickX - iconX;
+              const dy = clickY - iconY;
+              const dist = Math.sqrt(dx * dx + dy * dy);
+
+              if (dist < iconRadius * 2) {
+                // Clicked on Obsidian icon - open markdown editor
+                openMarkdownEditor(object);
+                laptopDoubleClickState.lastClickTime = 0;
+                return;
+              }
+            }
+          }
+          laptopDoubleClickState.lastClickTime = now;
+          return; // Don't start dragging when in laptop zoom mode
+        }
+      }
+
       // Don't allow dragging if object is still animating from examine mode
       if (object.userData.isExamining || object.userData.isReturning) {
         return;
@@ -5251,24 +5296,38 @@ function openMarkdownEditor(laptop) {
     saveState();
   });
 
-  closeBtn.addEventListener('click', () => {
+  // Function to save and close the editor
+  function saveAndClose() {
     laptop.userData.editorContent = sourceTextarea.value;
     laptop.userData.editorFileName = filenameInput.value || 'notes.md';
     editorOverlay.remove();
+    // Update laptop desktop to show note preview if content exists
+    if (laptop.userData.screenState === 'desktop') {
+      updateLaptopDesktop(laptop);
+    }
     saveState();
-  });
+    document.removeEventListener('keydown', handleEditorKeys);
+    document.removeEventListener('mousedown', handleEditorMiddleClick);
+  }
 
-  // Handle Escape key
-  const handleEscape = (e) => {
+  closeBtn.addEventListener('click', saveAndClose);
+
+  // Handle keyboard shortcuts
+  const handleEditorKeys = (e) => {
     if (e.key === 'Escape') {
-      laptop.userData.editorContent = sourceTextarea.value;
-      laptop.userData.editorFileName = filenameInput.value || 'notes.md';
-      editorOverlay.remove();
-      document.removeEventListener('keydown', handleEscape);
-      saveState();
+      saveAndClose();
     }
   };
-  document.addEventListener('keydown', handleEscape);
+  document.addEventListener('keydown', handleEditorKeys);
+
+  // Handle middle-click to save and exit
+  const handleEditorMiddleClick = (e) => {
+    if (e.button === 1) { // Middle mouse button
+      e.preventDefault();
+      saveAndClose();
+    }
+  };
+  document.addEventListener('mousedown', handleEditorMiddleClick);
 }
 
 function setupGlobeHandlers(object) {
@@ -6412,6 +6471,134 @@ function exitBookReadingMode() {
   bookReadingState.book = null;
 }
 
+// Create laptop desktop texture with Obsidian icon
+function createLaptopDesktopTexture(laptop, hasNote = false) {
+  const canvas = document.createElement('canvas');
+  canvas.width = 512;
+  canvas.height = 384;
+  const ctx = canvas.getContext('2d');
+
+  // Dark teal gradient background (Windows-style)
+  const gradient = ctx.createLinearGradient(0, 0, 0, canvas.height);
+  gradient.addColorStop(0, '#005a5a');
+  gradient.addColorStop(1, '#003838');
+  ctx.fillStyle = gradient;
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+  // Draw Obsidian icon (purple/violet gemstone shape)
+  const iconX = 60;
+  const iconY = 60;
+  const iconSize = 48;
+
+  // Icon background (darker circle)
+  ctx.beginPath();
+  ctx.arc(iconX, iconY, iconSize / 2 + 4, 0, Math.PI * 2);
+  ctx.fillStyle = 'rgba(0, 0, 0, 0.3)';
+  ctx.fill();
+
+  // Obsidian gem shape (simplified diamond/gem)
+  ctx.beginPath();
+  ctx.moveTo(iconX, iconY - iconSize / 2); // Top
+  ctx.lineTo(iconX + iconSize / 2, iconY); // Right
+  ctx.lineTo(iconX, iconY + iconSize / 2); // Bottom
+  ctx.lineTo(iconX - iconSize / 2, iconY); // Left
+  ctx.closePath();
+
+  // Gradient fill for gem
+  const gemGradient = ctx.createLinearGradient(iconX - iconSize / 2, iconY - iconSize / 2, iconX + iconSize / 2, iconY + iconSize / 2);
+  gemGradient.addColorStop(0, '#9b59b6');
+  gemGradient.addColorStop(0.5, '#8b5cf6');
+  gemGradient.addColorStop(1, '#6366f1');
+  ctx.fillStyle = gemGradient;
+  ctx.fill();
+
+  // Gem highlight
+  ctx.beginPath();
+  ctx.moveTo(iconX, iconY - iconSize / 2);
+  ctx.lineTo(iconX + iconSize / 4, iconY - iconSize / 8);
+  ctx.lineTo(iconX, iconY);
+  ctx.lineTo(iconX - iconSize / 4, iconY - iconSize / 8);
+  ctx.closePath();
+  ctx.fillStyle = 'rgba(255, 255, 255, 0.3)';
+  ctx.fill();
+
+  // Icon label
+  ctx.fillStyle = '#ffffff';
+  ctx.font = 'bold 11px Arial';
+  ctx.textAlign = 'center';
+  ctx.fillText('Obsidian', iconX, iconY + iconSize / 2 + 16);
+
+  // If there's a saved note, show a small preview in bottom right
+  if (hasNote && laptop.userData.editorContent) {
+    const noteWidth = 160;
+    const noteHeight = 100;
+    const noteX = canvas.width - noteWidth - 20;
+    const noteY = canvas.height - noteHeight - 40;
+
+    // Note background
+    ctx.fillStyle = 'rgba(30, 30, 46, 0.95)';
+    ctx.fillRect(noteX, noteY, noteWidth, noteHeight);
+
+    // Note border
+    ctx.strokeStyle = 'rgba(139, 92, 246, 0.5)';
+    ctx.lineWidth = 2;
+    ctx.strokeRect(noteX, noteY, noteWidth, noteHeight);
+
+    // Note title bar
+    ctx.fillStyle = 'rgba(139, 92, 246, 0.3)';
+    ctx.fillRect(noteX, noteY, noteWidth, 20);
+
+    // Note icon and filename
+    ctx.fillStyle = '#ffffff';
+    ctx.font = 'bold 10px Arial';
+    ctx.textAlign = 'left';
+    ctx.fillText(laptop.userData.editorFileName || 'notes.md', noteX + 8, noteY + 14);
+
+    // Preview of note content (first few lines)
+    ctx.font = '9px Arial';
+    ctx.fillStyle = 'rgba(255, 255, 255, 0.8)';
+    const lines = laptop.userData.editorContent.split('\n').slice(0, 5);
+    lines.forEach((line, i) => {
+      const truncated = line.length > 22 ? line.substring(0, 22) + '...' : line;
+      ctx.fillText(truncated, noteX + 6, noteY + 34 + i * 12);
+    });
+  }
+
+  // Taskbar at bottom
+  ctx.fillStyle = 'rgba(0, 0, 0, 0.6)';
+  ctx.fillRect(0, canvas.height - 28, canvas.width, 28);
+
+  // Clock in taskbar
+  const now = new Date();
+  const timeStr = now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  ctx.fillStyle = '#ffffff';
+  ctx.font = '11px Arial';
+  ctx.textAlign = 'right';
+  ctx.fillText(timeStr, canvas.width - 10, canvas.height - 10);
+
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.needsUpdate = true;
+  return texture;
+}
+
+// Update laptop desktop display
+function updateLaptopDesktop(laptop) {
+  const screen = laptop.getObjectByName('screen');
+  if (!screen) return;
+
+  const hasNote = laptop.userData.editorContent && laptop.userData.editorContent.trim().length > 0;
+  const texture = createLaptopDesktopTexture(laptop, hasNote);
+
+  screen.material.map = texture;
+  screen.material.color.set(0xffffff);
+  screen.material.emissive.set(0xffffff);
+  screen.material.emissiveIntensity = 0.3;
+  screen.material.needsUpdate = true;
+
+  // Store reference for icon click detection
+  laptop.userData.desktopTexture = texture;
+}
+
 function toggleLaptopPower(object) {
   if (object.userData.isBooting) return; // Don't toggle while booting
 
@@ -6489,11 +6676,8 @@ function toggleLaptopPower(object) {
         // Desktop loading
         if (object.userData.screenState !== 'desktop') {
           object.userData.screenState = 'desktop';
-          if (screen) {
-            screen.material.color.set(0x008080); // Teal desktop
-            screen.material.emissive.set(0x008080);
-            screen.material.emissiveIntensity = 0.3;
-          }
+          // Use desktop texture with Obsidian icon
+          updateLaptopDesktop(object);
         }
       }
 
@@ -6502,6 +6686,8 @@ function toggleLaptopPower(object) {
       } else {
         object.userData.isBooting = false;
         object.userData.screenState = 'desktop';
+        // Final desktop update to ensure texture is applied
+        updateLaptopDesktop(object);
       }
     }
 
@@ -6609,6 +6795,13 @@ async function saveState() {
           }
           if (obj.userData.powerButtonColor) {
             data.powerButtonColor = obj.userData.powerButtonColor;
+          }
+          // Save markdown editor content
+          if (obj.userData.editorContent) {
+            data.editorContent = obj.userData.editorContent;
+          }
+          if (obj.userData.editorFileName) {
+            data.editorFileName = obj.userData.editorFileName;
           }
           break;
         case 'pen':
@@ -6749,6 +6942,9 @@ async function loadState() {
                     obj.userData.bootScreenTexture = texture;
                   });
                 }
+                // Restore markdown editor content
+                if (objData.editorContent) obj.userData.editorContent = objData.editorContent;
+                if (objData.editorFileName) obj.userData.editorFileName = objData.editorFileName;
                 break;
               case 'pen':
                 if (objData.penColor) obj.userData.penColor = objData.penColor;

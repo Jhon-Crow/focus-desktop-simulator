@@ -2510,7 +2510,12 @@ function setupEventListeners() {
     // Alt+I toggles the left sidebar (menu)
     if (e.altKey && (e.key === 'i' || e.key === 'I' || e.key === 'ш' || e.key === 'Ш')) {
       e.preventDefault();
-      document.getElementById('menu').classList.toggle('open');
+      const menu = document.getElementById('menu');
+      menu.classList.toggle('open');
+      // Exit pointer lock when opening menu so cursor is visible
+      if (menu.classList.contains('open') && document.pointerLockElement) {
+        document.exitPointerLock();
+      }
     }
 
     // Arrow keys for book page navigation

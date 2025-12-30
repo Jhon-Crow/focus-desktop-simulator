@@ -2208,13 +2208,29 @@ function updateObjectColor(object, colorType, colorValue) {
   // Restore type-specific properties
   Object.assign(newObject.userData, typeSpecificData);
 
-  // For books, update the title texture with the restored title
+  // For books, update the title texture with the restored title and resize for multi-line
   if (type === 'books' && typeSpecificData.bookTitle && newObject.userData.createTitleTexture) {
     const closedGroup = newObject.getObjectByName('closedBook');
     if (closedGroup) {
       const coverTitle = closedGroup.getObjectByName('coverTitle');
       if (coverTitle) {
-        const newCoverTexture = newObject.userData.createTitleTexture(typeSpecificData.bookTitle, 320, 116, 64);
+        // Calculate dimensions for multi-line titles
+        const title = typeSpecificData.bookTitle || '';
+        const lines = title.split('\n');
+        const baseHeight = 116;
+        const lineAddition = 60;
+        const lineCount = Math.max(1, lines.length);
+        const canvasHeight = baseHeight + (lineCount - 1) * lineAddition;
+        const baseGeoHeight = 0.08;
+        const geoHeight = baseGeoHeight * (canvasHeight / baseHeight);
+
+        // Update geometry for multi-line
+        const newGeometry = new THREE.PlaneGeometry(0.22, geoHeight);
+        coverTitle.geometry.dispose();
+        coverTitle.geometry = newGeometry;
+        coverTitle.position.y = 0.041 + (lineCount - 1) * 0.01;
+
+        const newCoverTexture = newObject.userData.createTitleTexture(typeSpecificData.bookTitle, 320, canvasHeight, 64);
         coverTitle.material.map = newCoverTexture;
         coverTitle.material.needsUpdate = true;
       }
@@ -4114,8 +4130,12 @@ function handleRightClick(event) {
   raycaster.setFromCamera(raycastMouse, camera);
   const intersects = raycaster.intersectObjects(deskObjects, true);
 
-  if (intersects.length > 0) {
-    let object = intersects[0].object;
+  // Filter intersections to only consider objects within a reasonable distance (5 units)
+  // This prevents accidentally selecting objects that are far from the camera center
+  const validIntersects = intersects.filter(hit => hit.distance < 5);
+
+  if (validIntersects.length > 0) {
+    let object = validIntersects[0].object;
     while (object.parent && !deskObjects.includes(object)) {
       object = object.parent;
     }
@@ -4311,6 +4331,28 @@ function updateCustomizationPanel(object) {
           <div style="display: flex; justify-content: space-between; color: rgba(255,255,255,0.4); font-size: 10px; margin-top: 4px;">
             <span>Fast</span>
             <span>Quality</span>
+          </div>
+        </div>
+        <div class="customization-group" style="margin-top: 15px;">
+          <label>Cover Image (optional)</label>
+          <div style="display: flex; flex-direction: column; gap: 10px; margin-top: 8px;">
+            <label style="display: inline-block; padding: 10px 15px; background: rgba(79, 70, 229, 0.3); border: 1px solid rgba(79, 70, 229, 0.5); border-radius: 8px; color: #fff; cursor: pointer; text-align: center;">
+              Upload Image
+              <input type="file" id="book-cover-image" accept="image/*" style="display: none;">
+            </label>
+            ${object.userData.pdfDocument ? `
+              <button id="book-cover-use-pdf" style="padding: 10px 15px; background: rgba(34, 197, 94, 0.2); border: 1px solid rgba(34, 197, 94, 0.4); border-radius: 8px; color: #22c55e; cursor: pointer;">
+                Use PDF Page 1 as Cover
+              </button>
+            ` : ''}
+            ${object.userData.coverImageDataUrl ? `
+              <div style="color: rgba(255,255,255,0.5); font-size: 12px;">
+                Cover image set
+              </div>
+              <button id="book-cover-clear" style="padding: 10px 15px; background: rgba(239, 68, 68, 0.2); border: 1px solid rgba(239, 68, 68, 0.4); border-radius: 8px; color: #ef4444; cursor: pointer;">
+                Clear Cover Image
+              </button>
+            ` : ''}
           </div>
         </div>
       `;
@@ -4862,15 +4904,39 @@ function setupBookCustomizationHandlers(object) {
     const pdfInput = document.getElementById('book-pdf-edit');
     const clearBtn = document.getElementById('book-pdf-clear-edit');
 
-    // Helper to update book title textures
+    // Helper to update book title textures with dynamic geometry resizing for multi-line titles
     const updateBookTitleTextures = () => {
       if (object.userData.createTitleTexture) {
         const closedGroup = object.getObjectByName('closedBook');
         if (closedGroup) {
           const coverTitle = closedGroup.getObjectByName('coverTitle');
           if (coverTitle) {
-            // Use larger font size (64) for cover title
-            const newCoverTexture = object.userData.createTitleTexture(object.userData.bookTitle, 320, 116, 64);
+            // Calculate number of lines needed for the title
+            const title = object.userData.bookTitle || '';
+            const lines = title.split('\n');
+
+            // Calculate canvas and geometry height based on line count
+            // Base height is 116px for 1 line, add 60px per additional line
+            const baseHeight = 116;
+            const lineAddition = 60;
+            const lineCount = Math.max(1, lines.length);
+            const canvasHeight = baseHeight + (lineCount - 1) * lineAddition;
+
+            // Update geometry height proportionally (base is 0.08 for 116px)
+            const baseGeoHeight = 0.08;
+            const geoHeight = baseGeoHeight * (canvasHeight / baseHeight);
+
+            // Create new geometry with updated height
+            const newGeometry = new THREE.PlaneGeometry(0.22, geoHeight);
+            coverTitle.geometry.dispose();
+            coverTitle.geometry = newGeometry;
+
+            // Adjust position to keep title centered on cover
+            // Original position is 0.041 for single line, move up slightly for multi-line
+            coverTitle.position.y = 0.041 + (lineCount - 1) * 0.01;
+
+            // Create texture with dynamic height
+            const newCoverTexture = object.userData.createTitleTexture(title, 320, canvasHeight, 64);
             coverTitle.material.map = newCoverTexture;
             coverTitle.material.needsUpdate = true;
           }
@@ -4915,8 +4981,7 @@ function setupBookCustomizationHandlers(object) {
         if (file && file.type === 'application/pdf') {
           object.userData.pdfPath = file.path || file.name;
           object.userData.pdfFile = file;
-          object.userData.isLoadingPdf = true; // Mark as loading for animation
-          // Actually load and render the PDF
+          // Actually load and render the PDF (loadPDFToBook sets isLoadingPdf internally)
           loadPDFToBook(object, file);
           // Update the customization panel to show the new file
           updateCustomizationPanel(object);
@@ -4956,6 +5021,96 @@ function setupBookCustomizationHandlers(object) {
           updateBookPagesWithPDF(object);
         }
         saveState();
+      });
+    }
+
+    // Cover image handlers
+    const coverImageInput = document.getElementById('book-cover-image');
+    const coverUsePdfBtn = document.getElementById('book-cover-use-pdf');
+    const coverClearBtn = document.getElementById('book-cover-clear');
+
+    // Helper to apply cover image to the book cover
+    const applyCoverImage = (dataUrl) => {
+      const textureLoader = new THREE.TextureLoader();
+      textureLoader.load(dataUrl, (texture) => {
+        const closedGroup = object.getObjectByName('closedBook');
+        if (closedGroup) {
+          const cover = closedGroup.getObjectByName('cover');
+          if (cover) {
+            // Store original material if not stored
+            if (!object.userData.originalCoverMaterial) {
+              object.userData.originalCoverMaterial = cover.material.clone();
+            }
+            // Apply the image texture to the top face
+            cover.material.map = texture;
+            cover.material.needsUpdate = true;
+          }
+        }
+        object.userData.coverImageDataUrl = dataUrl;
+        saveState();
+        updateCustomizationPanel(object);
+      });
+    };
+
+    if (coverImageInput) {
+      coverImageInput.addEventListener('change', (e) => {
+        const file = e.target.files[0];
+        if (file && file.type.startsWith('image/')) {
+          const reader = new FileReader();
+          reader.onload = () => {
+            applyCoverImage(reader.result);
+          };
+          reader.readAsDataURL(file);
+        }
+      });
+    }
+
+    if (coverUsePdfBtn) {
+      coverUsePdfBtn.addEventListener('click', async () => {
+        if (object.userData.pdfDocument) {
+          try {
+            // Render PDF page 1 to canvas
+            const pdfDoc = object.userData.pdfDocument;
+            const page = await pdfDoc.getPage(1);
+            const viewport = page.getViewport({ scale: 2.0 });
+
+            const canvas = document.createElement('canvas');
+            canvas.width = viewport.width;
+            canvas.height = viewport.height;
+            const ctx = canvas.getContext('2d');
+
+            await page.render({
+              canvasContext: ctx,
+              viewport: viewport
+            }).promise;
+
+            // Convert to data URL and apply
+            const dataUrl = canvas.toDataURL('image/png');
+            applyCoverImage(dataUrl);
+          } catch (error) {
+            console.error('Error rendering PDF page for cover:', error);
+          }
+        }
+      });
+    }
+
+    if (coverClearBtn) {
+      coverClearBtn.addEventListener('click', () => {
+        // Restore original material
+        const closedGroup = object.getObjectByName('closedBook');
+        if (closedGroup) {
+          const cover = closedGroup.getObjectByName('cover');
+          if (cover && object.userData.originalCoverMaterial) {
+            cover.material = object.userData.originalCoverMaterial.clone();
+            cover.material.needsUpdate = true;
+          } else if (cover) {
+            cover.material.map = null;
+            cover.material.needsUpdate = true;
+          }
+        }
+        object.userData.coverImageDataUrl = null;
+        saveState();
+        updateCustomizationPanel(object);
       });
     }
   }, 0);
@@ -6381,14 +6536,36 @@ function setupBookHandlers(object) {
   if (titleInput) {
     titleInput.addEventListener('change', (e) => {
       object.userData.bookTitle = e.target.value;
-      // Update title texture on cover (spine no longer has title)
+      // Update title texture on cover with dynamic resizing for multi-line
       if (object.userData.createTitleTexture) {
         const closedGroup = object.getObjectByName('closedBook');
         if (closedGroup) {
           const coverTitle = closedGroup.getObjectByName('coverTitle');
           if (coverTitle) {
-            // Use larger font size (64) for cover title
-            const newCoverTexture = object.userData.createTitleTexture(e.target.value, 320, 116, 64);
+            // Calculate number of lines needed for the title
+            const title = e.target.value || '';
+            const lines = title.split('\n');
+
+            // Calculate canvas and geometry height based on line count
+            const baseHeight = 116;
+            const lineAddition = 60;
+            const lineCount = Math.max(1, lines.length);
+            const canvasHeight = baseHeight + (lineCount - 1) * lineAddition;
+
+            // Update geometry height proportionally (base is 0.08 for 116px)
+            const baseGeoHeight = 0.08;
+            const geoHeight = baseGeoHeight * (canvasHeight / baseHeight);
+
+            // Create new geometry with updated height
+            const newGeometry = new THREE.PlaneGeometry(0.22, geoHeight);
+            coverTitle.geometry.dispose();
+            coverTitle.geometry = newGeometry;
+
+            // Adjust position for multi-line
+            coverTitle.position.y = 0.041 + (lineCount - 1) * 0.01;
+
+            // Create texture with dynamic height
+            const newCoverTexture = object.userData.createTitleTexture(title, 320, canvasHeight, 64);
             coverTitle.material.map = newCoverTexture;
             coverTitle.material.needsUpdate = true;
           }
@@ -6405,9 +6582,8 @@ function setupBookHandlers(object) {
         // Store the PDF file path
         object.userData.pdfPath = file.name;
         object.userData.pdfFile = file;
-        object.userData.isLoadingPdf = true; // Mark as loading for animation
 
-        // Load PDF (simplified - in real implementation would use pdf.js)
+        // Load PDF (loadPDFToBook sets isLoadingPdf internally)
         loadPDFToBook(object, file);
       }
     });
@@ -6512,6 +6688,12 @@ async function loadPDFToBook(book, file) {
       book.userData.isLoadingPdf = false;
       updateBookPages(book);
     }
+  };
+
+  reader.onerror = () => {
+    console.error('Error reading PDF file');
+    book.userData.isLoadingPdf = false;
+    updateBookPages(book);
   };
 
   reader.readAsArrayBuffer(file);
@@ -8338,8 +8520,9 @@ function updateLaptopDesktopWithPersistedState(laptop) {
   ctx.textAlign = 'center';
   ctx.fillText('Obsidian', iconX, iconY + iconSize / 2 + 16);
 
-  // Draw editor window if note exists
-  if (hasNote && laptop.userData.editorContent) {
+  // Draw editor window if editor was open (even if empty) or has note content
+  const showEditorWindow = laptop.userData.editorWasOpen || hasNote;
+  if (showEditorWindow) {
     const winWidth = 380;
     const winHeight = 260;
     const winX = (canvas.width - winWidth) / 2;
@@ -8382,8 +8565,9 @@ function updateLaptopDesktopWithPersistedState(laptop) {
     ctx.arc(winX + winWidth - 54, btnY + 6, btnSize / 2, 0, Math.PI * 2);
     ctx.fill();
 
-    // Draw note content
-    const lines = laptop.userData.editorContent.split('\n').slice(0, 16);
+    // Draw note content (or empty editor)
+    const editorContent = laptop.userData.editorContent || '';
+    const lines = editorContent.split('\n').slice(0, 16);
     ctx.fillStyle = '#cdd6f4';
     ctx.font = '10px monospace';
     ctx.textAlign = 'left';
@@ -8746,6 +8930,10 @@ async function saveState() {
           if (obj.userData.pdfDataUrl) {
             data.pdfDataUrl = obj.userData.pdfDataUrl;
           }
+          // Save cover image data URL
+          if (obj.userData.coverImageDataUrl) {
+            data.coverImageDataUrl = obj.userData.coverImageDataUrl;
+          }
           data.currentPage = obj.userData.currentPage || 0;
           break;
         case 'coffee':
@@ -8780,11 +8968,15 @@ async function saveState() {
             data.powerButtonBrightness = obj.userData.powerButtonBrightness;
           }
           // Save markdown editor content
-          if (obj.userData.editorContent) {
+          if (obj.userData.editorContent !== undefined) {
             data.editorContent = obj.userData.editorContent;
           }
           if (obj.userData.editorFileName) {
             data.editorFileName = obj.userData.editorFileName;
+          }
+          // Save editor open state
+          if (obj.userData.editorWasOpen) {
+            data.editorWasOpen = obj.userData.editorWasOpen;
           }
           // Save wallpaper
           if (obj.userData.wallpaperDataUrl) {
@@ -8892,13 +9084,33 @@ async function loadState() {
                 if (objData.pdfResolution) obj.userData.pdfResolution = objData.pdfResolution;
                 if (objData.currentPage !== undefined) obj.userData.currentPage = objData.currentPage;
                 // Regenerate title texture with saved title (uses userData.titleColor internally)
+                // Also resize geometry for multi-line titles
                 if (objData.bookTitle && obj.userData.createTitleTexture) {
+                  const title = objData.bookTitle || '';
+                  const lines = title.split('\n');
+
+                  // Calculate canvas and geometry height based on line count
+                  const baseHeight = 116;
+                  const lineAddition = 60;
+                  const lineCount = Math.max(1, lines.length);
+                  const canvasHeight = baseHeight + (lineCount - 1) * lineAddition;
+
+                  // Calculate geometry height
+                  const baseGeoHeight = 0.08;
+                  const geoHeight = baseGeoHeight * (canvasHeight / baseHeight);
+
                   const newCoverTexture = obj.userData.createTitleTexture(
-                    objData.bookTitle, 320, 116, 64
+                    objData.bookTitle, 320, canvasHeight, 64
                   );
-                  // Update the cover mesh with the new texture
+                  // Update the cover mesh with the new texture and geometry
                   obj.traverse(child => {
                     if (child.name === 'coverTitle') {
+                      // Update geometry for multi-line
+                      const newGeometry = new THREE.PlaneGeometry(0.22, geoHeight);
+                      child.geometry.dispose();
+                      child.geometry = newGeometry;
+                      child.position.y = 0.041 + (lineCount - 1) * 0.01;
+
                       child.material.map = newCoverTexture;
                       child.material.needsUpdate = true;
                     }
@@ -8910,6 +9122,24 @@ async function loadState() {
                   // Set loading flag so UI shows loading indicator while PDF loads
                   obj.userData.isLoadingPdf = true;
                   loadPDFFromDataUrl(obj, objData.pdfDataUrl);
+                }
+                // Restore cover image if available
+                if (objData.coverImageDataUrl) {
+                  obj.userData.coverImageDataUrl = objData.coverImageDataUrl;
+                  const textureLoader = new THREE.TextureLoader();
+                  textureLoader.load(objData.coverImageDataUrl, (texture) => {
+                    const closedGroup = obj.getObjectByName('closedBook');
+                    if (closedGroup) {
+                      const cover = closedGroup.getObjectByName('cover');
+                      if (cover) {
+                        if (!obj.userData.originalCoverMaterial) {
+                          obj.userData.originalCoverMaterial = cover.material.clone();
+                        }
+                        cover.material.map = texture;
+                        cover.material.needsUpdate = true;
+                      }
+                    }
+                  });
                 }
                 break;
               case 'coffee':
@@ -8976,9 +9206,10 @@ async function loadState() {
                     obj.userData.bootScreenTexture = texture;
                   });
                 }
-                // Restore markdown editor content
-                if (objData.editorContent) obj.userData.editorContent = objData.editorContent;
+                // Restore markdown editor content and state
+                if (objData.editorContent !== undefined) obj.userData.editorContent = objData.editorContent;
                 if (objData.editorFileName) obj.userData.editorFileName = objData.editorFileName;
+                if (objData.editorWasOpen) obj.userData.editorWasOpen = objData.editorWasOpen;
                 // Restore wallpaper and update desktop texture
                 if (objData.wallpaperDataUrl) {
                   obj.userData.wallpaperDataUrl = objData.wallpaperDataUrl;

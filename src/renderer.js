@@ -3133,10 +3133,20 @@ function setupEventListeners() {
         if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
           const totalPages = book.userData.totalPages || 10;
           if (e.key === 'ArrowLeft' && book.userData.currentPage > 0) {
-            animatePageTurn(book, -1);
+            // Use correct page turn function based on type
+            if (book.userData.type === 'magazine') {
+              animateMagazinePageTurn(book, -1);
+            } else {
+              animatePageTurn(book, -1);
+            }
           } else if (e.key === 'ArrowRight' && book.userData.currentPage < totalPages - 1) {
             if (!book.userData.totalPages) book.userData.totalPages = 10;
-            animatePageTurn(book, 1);
+            // Use correct page turn function based on type
+            if (book.userData.type === 'magazine') {
+              animateMagazinePageTurn(book, 1);
+            } else {
+              animatePageTurn(book, 1);
+            }
           }
           return;
         }
@@ -8641,9 +8651,10 @@ async function updateMagazinePagesWithPDF(magazine) {
       }
       if (canvas) {
         texture = new THREE.CanvasTexture(canvas);
-        texture.flipY = false;
-        texture.colorSpace = THREE.SRGBColorSpace;
-        texture.needsUpdate = true;
+        texture.anisotropy = 16;
+        texture.minFilter = THREE.LinearFilter;
+        texture.magFilter = THREE.LinearFilter;
+        texture.generateMipmaps = false;
         magazine.userData.pageTextures[leftPageNum] = texture;
       }
     }
@@ -8668,9 +8679,10 @@ async function updateMagazinePagesWithPDF(magazine) {
       }
       if (canvas) {
         texture = new THREE.CanvasTexture(canvas);
-        texture.flipY = false;
-        texture.colorSpace = THREE.SRGBColorSpace;
-        texture.needsUpdate = true;
+        texture.anisotropy = 16;
+        texture.minFilter = THREE.LinearFilter;
+        texture.magFilter = THREE.LinearFilter;
+        texture.generateMipmaps = false;
         magazine.userData.pageTextures[rightPageNum] = texture;
       }
     }
@@ -8763,7 +8775,7 @@ function updateMagazinePages(magazine) {
     }
 
     const texture = new THREE.CanvasTexture(canvas);
-    texture.flipY = false;
+    texture.anisotropy = 16;
     leftPage.material.map = texture;
     leftPage.material.color.set(0xffffff);
     leftPage.material.needsUpdate = true;
@@ -8787,7 +8799,7 @@ function updateMagazinePages(magazine) {
     }
 
     const texture = new THREE.CanvasTexture(canvas);
-    texture.flipY = false;
+    texture.anisotropy = 16;
     rightPage.material.map = texture;
     rightPage.material.color.set(0xffffff);
     rightPage.material.needsUpdate = true;

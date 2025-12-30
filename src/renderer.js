@@ -230,7 +230,7 @@ let cameraLookState = {
   // Initial angles calculated from CONFIG.camera.lookAt control point
   yaw: DEFAULT_CAMERA_ANGLES.yaw,     // Horizontal rotation - facing the desk
   pitch: DEFAULT_CAMERA_ANGLES.pitch, // Vertical rotation - looking down at desk surface
-  minPitch: -1.57,   // Looking down limit - ~90 degrees total (extended by ~15 degrees more)
+  minPitch: -1.83,   // Looking down limit - ~105 degrees total (extended by ~15 degrees more from -1.57)
   maxPitch: 0.42,    // Looking up limit - extended by ~10 degrees more (~24 degrees total)
   // Yaw limits centered around the default yaw (±1.40 radians ~ ±80 degrees)
   // Extended by 10 degrees to reach all desk corners
@@ -1415,6 +1415,7 @@ function createBooks(options = {}) {
 
   const coverGeometry = new THREE.BoxGeometry(0.28, 0.04, 0.38);
   const cover = new THREE.Mesh(coverGeometry, coverMaterial);
+  cover.name = 'cover'; // Name for getObjectByName access
   cover.position.y = 0.02;
   cover.castShadow = true;
   closedGroup.add(cover);
@@ -2862,6 +2863,9 @@ function setupEventListeners() {
       // Don't process if typing in an input field
       if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
 
+      // In reading mode, WASD is disabled (use arrow keys instead for panning)
+      if (bookReadingState.active) return;
+
       const moveSpeed = 0.1;
 
       // Normal mode and inspection mode - camera movement
@@ -3145,14 +3149,8 @@ function onMouseDown(event) {
   if (event.button === 1) {
     event.preventDefault();
 
-    // If already in reading mode, MMB starts exit on hold
+    // In reading mode, MMB does nothing (use LMB click to exit reading mode)
     if (bookReadingState.active) {
-      bookReadingState.middleMouseDownTime = Date.now();
-      bookReadingState.holdTimeout = setTimeout(() => {
-        // Exit reading mode after holding for 300ms
-        exitBookReadingMode();
-        bookReadingState.holdTimeout = null;
-      }, 300);
       return;
     }
 
@@ -8256,8 +8254,9 @@ function updateLaptopDesktopWithCursor(laptop) {
   ctx.textAlign = 'center';
   ctx.fillText('Obsidian', iconX, iconY + iconSize / 2 + 16);
 
-  // Draw editor window if note exists
-  if (hasNote && laptop.userData.editorContent) {
+  // Draw editor window only if editorWasOpen flag is true
+  // (This means user exited laptop mode with editor still open, or editor is currently open)
+  if (hasNote && laptop.userData.editorContent && laptop.userData.editorWasOpen) {
     const winWidth = 380;
     const winHeight = 260;
     const winX = (canvas.width - winWidth) / 2;

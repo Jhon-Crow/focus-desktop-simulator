@@ -278,6 +278,7 @@ const OBJECT_PHYSICS = {
   'pen-holder': { weight: 0.6, stability: 0.6, height: 0.4, baseOffset: 0 },    // Medium, somewhat stable
   'pen': { weight: 0.05, stability: 0.2, height: 0.35, baseOffset: 0 },         // Very light, can roll
   'books': { weight: 0.8, stability: 0.9, height: 0.15, baseOffset: 0 },        // Book, flat, stable
+  'magazine': { weight: 0.3, stability: 0.95, height: 0.02, baseOffset: 0 },    // Magazine, very flat, stable
   'photo-frame': { weight: 0.3, stability: 0.35, height: 0.5, baseOffset: 0.25 },// Light, tall, tips easier
   'globe': { weight: 1.0, stability: 0.7, height: 0.5, baseOffset: 0.025 },     // Medium, balanced
   'trophy': { weight: 0.9, stability: 0.6, height: 0.4, baseOffset: 0 },        // Medium, somewhat stable
@@ -614,6 +615,7 @@ const PRESET_CREATORS = {
   'pen-holder': createPenHolder,
   pen: createPen,
   books: createBooks,
+  magazine: createMagazine,
   'photo-frame': createPhotoFrame,
   globe: createGlobe,
   trophy: createTrophy,
@@ -1603,6 +1605,211 @@ function createBooks(options = {}) {
   return group;
 }
 
+function createMagazine(options = {}) {
+  const group = new THREE.Group();
+  group.userData = {
+    type: 'magazine',
+    name: 'Magazine',
+    interactive: true, // Interactive - can open to view PDF
+    isOpen: false, // Whether magazine is open
+    openAngle: 0, // Animation angle
+    magazineTitle: options.magazineTitle || '',
+    titleColor: options.titleColor || '#ffffff', // Title text color
+    pdfPath: null, // Path to PDF file
+    currentPage: 0, // Current page index
+    totalPages: 0, // Total number of pages
+    pdfResolution: options.pdfResolution || 512, // PDF rendering resolution (width in pixels)
+    mainColor: options.mainColor || '#dc2626', // Red color for magazine
+    accentColor: options.accentColor || '#fbbf24',
+    coverFitMode: options.coverFitMode || 'cover' // Cover image fit mode: 'contain', 'cover', 'stretch'
+  };
+
+  // Magazine closed group (visible when closed)
+  const closedGroup = new THREE.Group();
+  closedGroup.name = 'closedMagazine';
+
+  // Magazine cover - thinner than book
+  const coverMaterial = new THREE.MeshStandardMaterial({
+    color: new THREE.Color(group.userData.mainColor),
+    roughness: 0.5
+  });
+
+  // Magazine is wider and thinner than a book (A4-ish proportions)
+  const coverGeometry = new THREE.BoxGeometry(0.22, 0.015, 0.30);
+  const cover = new THREE.Mesh(coverGeometry, coverMaterial);
+  cover.name = 'cover';
+  cover.position.y = 0.0075;
+  cover.castShadow = true;
+  closedGroup.add(cover);
+
+  // Pages (white interior) - magazine pages are thinner
+  const pagesMaterial = new THREE.MeshStandardMaterial({
+    color: 0xf5f5f0,
+    roughness: 0.9
+  });
+
+  const pagesGeometry = new THREE.BoxGeometry(0.20, 0.012, 0.28);
+  const pages = new THREE.Mesh(pagesGeometry, pagesMaterial);
+  pages.position.y = 0.0075;
+  closedGroup.add(pages);
+
+  // Magazine spine - very thin, just a binding edge (no prominent spine like a book)
+  const spineMaterial = new THREE.MeshStandardMaterial({
+    color: new THREE.Color(group.userData.accentColor),
+    roughness: 0.6
+  });
+
+  const spineGeometry = new THREE.BoxGeometry(0.008, 0.016, 0.30);
+  const spine = new THREE.Mesh(spineGeometry, spineMaterial);
+  spine.position.set(-0.106, 0.0075, 0);
+  spine.castShadow = true;
+  closedGroup.add(spine);
+
+  // Title on cover - magazine titles are usually larger and bolder
+  const createTitleTexture = (title, width, height, fontSize) => {
+    const canvas = document.createElement('canvas');
+    canvas.width = width;
+    canvas.height = height;
+    const ctx = canvas.getContext('2d');
+
+    // Background matches main color
+    const mainHex = group.userData.mainColor;
+    ctx.fillStyle = mainHex;
+    ctx.fillRect(0, 0, width, height);
+
+    // Text styling - use configurable title color
+    ctx.fillStyle = group.userData.titleColor || '#ffffff';
+    ctx.font = `bold ${fontSize}px Arial, sans-serif`;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+
+    // Word wrap for long titles with padding
+    const paddingX = 20;
+    const paddingY = 25;
+    const maxWidth = width - paddingX * 2;
+    const maxHeight = height - paddingY * 2;
+
+    const paragraphs = title.split('\n');
+    const lines = [];
+
+    for (const paragraph of paragraphs) {
+      const words = paragraph.split(' ');
+      let currentLine = '';
+
+      for (const word of words) {
+        const testLine = currentLine ? currentLine + ' ' + word : word;
+        const metrics = ctx.measureText(testLine);
+        if (metrics.width > maxWidth && currentLine) {
+          lines.push(currentLine);
+          currentLine = word;
+        } else {
+          currentLine = testLine;
+        }
+      }
+      if (currentLine) lines.push(currentLine);
+    }
+
+    // Draw multiline title (centered vertically within padded area)
+    const lineHeight = fontSize * 1.2;
+    const totalHeight = lines.length * lineHeight;
+    const availableHeight = maxHeight;
+    const startY = paddingY + (availableHeight - totalHeight) / 2 + lineHeight / 2;
+
+    lines.forEach((line, i) => {
+      ctx.fillText(line, width / 2, startY + i * lineHeight);
+    });
+
+    const texture = new THREE.CanvasTexture(canvas);
+    texture.needsUpdate = true;
+    return texture;
+  };
+
+  // Cover title - positioned at top of magazine
+  const coverTitleGeometry = new THREE.PlaneGeometry(0.18, 0.08);
+  const coverTitleTexture = createTitleTexture(group.userData.magazineTitle, 280, 124, 48);
+  const coverTitleMaterial = new THREE.MeshStandardMaterial({
+    map: coverTitleTexture,
+    roughness: 0.5
+  });
+  const coverTitle = new THREE.Mesh(coverTitleGeometry, coverTitleMaterial);
+  coverTitle.rotation.x = -Math.PI / 2;
+  coverTitle.position.set(0, 0.016, -0.08);
+  coverTitle.name = 'coverTitle';
+  // Hide title background if title is empty or whitespace only
+  const titleText = group.userData.magazineTitle || '';
+  coverTitle.visible = titleText.trim().length > 0;
+  closedGroup.add(coverTitle);
+
+  // Store the createTitleTexture function for later updates
+  group.userData.createTitleTexture = createTitleTexture;
+
+  group.add(closedGroup);
+
+  // Magazine open group (visible when open) - KEY DIFFERENCE: no spine gap between pages
+  const openGroup = new THREE.Group();
+  openGroup.name = 'openMagazine';
+  openGroup.visible = false;
+
+  // Left cover (back cover)
+  const leftCoverGeometry = new THREE.BoxGeometry(0.22, 0.003, 0.30);
+  const leftCover = new THREE.Mesh(leftCoverGeometry, coverMaterial);
+  leftCover.position.set(-0.11, 0.0015, 0);
+  leftCover.name = 'leftCover';
+  openGroup.add(leftCover);
+
+  // Right cover (front cover flipped)
+  const rightCover = new THREE.Mesh(leftCoverGeometry, coverMaterial);
+  rightCover.position.set(0.11, 0.0015, 0);
+  rightCover.name = 'rightCover';
+  openGroup.add(rightCover);
+
+  // Page block on left - positioned to meet at center
+  const leftPagesGeometry = new THREE.BoxGeometry(0.20, 0.008, 0.28);
+  const leftPages = new THREE.Mesh(leftPagesGeometry, pagesMaterial);
+  leftPages.position.set(-0.10, 0.007, 0);
+  openGroup.add(leftPages);
+
+  // Page block on right - positioned to meet at center
+  const rightPages = new THREE.Mesh(leftPagesGeometry, pagesMaterial);
+  rightPages.position.set(0.10, 0.007, 0);
+  openGroup.add(rightPages);
+
+  // Left page surface (for displaying content) - meets at center (x=0)
+  const pageSurfaceGeometry = new THREE.PlaneGeometry(0.20, 0.28);
+  const leftPageSurfaceMaterial = new THREE.MeshStandardMaterial({
+    color: 0xfff8f0,
+    roughness: 0.9,
+    side: THREE.DoubleSide
+  });
+  const leftPageSurface = new THREE.Mesh(pageSurfaceGeometry, leftPageSurfaceMaterial);
+  leftPageSurface.rotation.x = -Math.PI / 2;
+  // Position so right edge is at x=0 (pages meet flush)
+  leftPageSurface.position.set(-0.10, 0.012, 0);
+  leftPageSurface.name = 'leftPageSurface';
+  openGroup.add(leftPageSurface);
+
+  // Right page surface - meets at center (x=0)
+  const rightPageSurfaceMaterial = new THREE.MeshStandardMaterial({
+    color: 0xfff8f0,
+    roughness: 0.9,
+    side: THREE.DoubleSide
+  });
+  const rightPageSurface = new THREE.Mesh(pageSurfaceGeometry, rightPageSurfaceMaterial);
+  rightPageSurface.rotation.x = -Math.PI / 2;
+  // Position so left edge is at x=0 (pages meet flush)
+  rightPageSurface.position.set(0.10, 0.012, 0);
+  rightPageSurface.name = 'rightPageSurface';
+  openGroup.add(rightPageSurface);
+
+  // No visible spine when open - pages meet flush for spread images
+
+  group.add(openGroup);
+
+  group.position.y = getDeskSurfaceY();
+
+  return group;
+}
+
 function createPhotoFrame(options = {}) {
   const group = new THREE.Group();
   group.userData = {
@@ -2052,6 +2259,12 @@ function addObjectToDesk(type, options = {}) {
     object.userData.scale = options.scale;
     // Adjust Y position to account for scale change
     adjustObjectYForScale(object, 1.0, options.scale);
+  } else if (type === 'magazine' && options.scale === undefined) {
+    // Magazines default to 5.0x scale (same as book max scale) for better readability
+    const defaultMagazineScale = 5.0;
+    object.scale.set(defaultMagazineScale, defaultMagazineScale, defaultMagazineScale);
+    object.userData.scale = defaultMagazineScale;
+    adjustObjectYForScale(object, 1.0, defaultMagazineScale);
   }
 
   deskObjects.push(object);
@@ -2178,6 +2391,26 @@ function updateObjectColor(object, colorType, colorValue) {
       typeSpecificData.coverFitMode = object.userData.coverFitMode;
       typeSpecificData.firstPageAsCover = object.userData.firstPageAsCover;
       break;
+    case 'magazine':
+      typeSpecificData.magazineTitle = object.userData.magazineTitle;
+      typeSpecificData.titleColor = object.userData.titleColor;
+      typeSpecificData.pdfPath = object.userData.pdfPath;
+      typeSpecificData.totalPages = object.userData.totalPages;
+      typeSpecificData.currentPage = object.userData.currentPage;
+      typeSpecificData.isOpen = object.userData.isOpen;
+      // Preserve PDF document and data for content display after style change
+      typeSpecificData.pdfDocument = object.userData.pdfDocument;
+      typeSpecificData.pdfDataUrl = object.userData.pdfDataUrl;
+      typeSpecificData.pdfDataDirty = object.userData.pdfDataDirty;
+      typeSpecificData.pdfResolution = object.userData.pdfResolution;
+      typeSpecificData.renderedPages = object.userData.renderedPages;
+      typeSpecificData.pageTextures = object.userData.pageTextures;
+      // Preserve cover image data
+      typeSpecificData.coverImageDataUrl = object.userData.coverImageDataUrl;
+      typeSpecificData.coverImageDirty = object.userData.coverImageDirty;
+      typeSpecificData.coverFitMode = object.userData.coverFitMode;
+      typeSpecificData.firstPageAsCover = object.userData.firstPageAsCover;
+      break;
     case 'coffee':
       typeSpecificData.drinkType = object.userData.drinkType;
       typeSpecificData.liquidLevel = object.userData.liquidLevel;
@@ -2285,6 +2518,60 @@ function updateObjectColor(object, colorType, colorValue) {
     if (typeSpecificData.isOpen) {
       const closedGroup = newObject.getObjectByName('closedBook');
       const openGroup = newObject.getObjectByName('openBook');
+      if (closedGroup) closedGroup.visible = false;
+      if (openGroup) openGroup.visible = true;
+    }
+  }
+
+  // For magazine, update the title texture and restore state
+  if (type === 'magazine' && newObject.userData.createTitleTexture) {
+    const closedGroup = newObject.getObjectByName('closedMagazine');
+    if (closedGroup) {
+      const coverTitle = closedGroup.getObjectByName('coverTitle');
+      if (coverTitle) {
+        const title = typeSpecificData.magazineTitle || '';
+        coverTitle.visible = title.trim().length > 0;
+
+        if (coverTitle.visible) {
+          const lines = title.split('\n');
+          const baseHeight = 124;
+          const lineAddition = 50;
+          const lineCount = Math.max(1, lines.length);
+          const canvasHeight = baseHeight + (lineCount - 1) * lineAddition;
+          const baseGeoHeight = 0.08;
+          const geoHeight = baseGeoHeight * (canvasHeight / baseHeight);
+
+          const newGeometry = new THREE.PlaneGeometry(0.18, geoHeight);
+          coverTitle.geometry.dispose();
+          coverTitle.geometry = newGeometry;
+          coverTitle.position.y = 0.016 + (lineCount - 1) * 0.008;
+
+          const newCoverTexture = newObject.userData.createTitleTexture(typeSpecificData.magazineTitle, 280, canvasHeight, 48);
+          coverTitle.material.map = newCoverTexture;
+          coverTitle.material.needsUpdate = true;
+        }
+      }
+    }
+
+    // Restore cover image if present (with fit mode)
+    if (typeSpecificData.coverImageDataUrl) {
+      const fitMode = newObject.userData.coverFitMode || 'cover';
+      applyMagazineCoverImageWithFit(newObject, typeSpecificData.coverImageDataUrl, fitMode);
+    }
+
+    // Update magazine thickness and pages if PDF is loaded
+    if (typeSpecificData.pdfDocument) {
+      updateMagazineThickness(newObject);
+      newObject.userData.pageTextures = {};
+      if (typeSpecificData.isOpen) {
+        updateMagazinePagesWithPDF(newObject);
+      }
+    }
+
+    // Toggle magazine to correct open/closed state
+    if (typeSpecificData.isOpen) {
+      const closedGroup = newObject.getObjectByName('closedMagazine');
+      const openGroup = newObject.getObjectByName('openMagazine');
       if (closedGroup) closedGroup.visible = false;
       if (openGroup) openGroup.visible = true;
     }
@@ -2852,10 +3139,20 @@ function setupEventListeners() {
         if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
           const totalPages = book.userData.totalPages || 10;
           if (e.key === 'ArrowLeft' && book.userData.currentPage > 0) {
-            animatePageTurn(book, -1);
+            // Use correct page turn function based on type
+            if (book.userData.type === 'magazine') {
+              animateMagazinePageTurn(book, -1);
+            } else {
+              animatePageTurn(book, -1);
+            }
           } else if (e.key === 'ArrowRight' && book.userData.currentPage < totalPages - 1) {
             if (!book.userData.totalPages) book.userData.totalPages = 10;
-            animatePageTurn(book, 1);
+            // Use correct page turn function based on type
+            if (book.userData.type === 'magazine') {
+              animateMagazinePageTurn(book, 1);
+            } else {
+              animatePageTurn(book, 1);
+            }
           }
           return;
         }
@@ -2882,20 +3179,22 @@ function setupEventListeners() {
 
       // Page navigation (only ArrowLeft/ArrowRight, not in reading mode)
       if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
-        // Check if we're examining a book or have a book modal open
+        // Check if we're examining a book/magazine or have a book/magazine modal open
         let bookObject = null;
-        if (examineState.active && examineState.object && examineState.object.userData.type === 'books') {
+        if (examineState.active && examineState.object &&
+            (examineState.object.userData.type === 'books' || examineState.object.userData.type === 'magazine')) {
           bookObject = examineState.object;
-        } else if (interactionObject && interactionObject.userData.type === 'books') {
+        } else if (interactionObject &&
+            (interactionObject.userData.type === 'books' || interactionObject.userData.type === 'magazine')) {
           bookObject = interactionObject;
         } else {
-          // Also check if crosshair is aimed at a book (raycast from center of screen)
+          // Also check if crosshair is aimed at a book/magazine (raycast from center of screen)
           const centerMouse = new THREE.Vector2(0, 0);
           raycaster.setFromCamera(centerMouse, camera);
           const intersects = raycaster.intersectObjects(deskObjects, true);
           for (const hit of intersects) {
             const obj = getParentDeskObject(hit.object);
-            if (obj && obj.userData.type === 'books' && obj.userData.isOpen) {
+            if (obj && (obj.userData.type === 'books' || obj.userData.type === 'magazine') && obj.userData.isOpen) {
               bookObject = obj;
               break;
             }
@@ -2908,12 +3207,20 @@ function setupEventListeners() {
           const totalPages = bookObject.userData.totalPages || 10;
           if (e.key === 'ArrowLeft' && bookObject.userData.currentPage > 0) {
             // Previous page with animation
-            animatePageTurn(bookObject, -1);
+            if (bookObject.userData.type === 'magazine') {
+              animateMagazinePageTurn(bookObject, -1);
+            } else {
+              animatePageTurn(bookObject, -1);
+            }
           } else if (e.key === 'ArrowRight' && bookObject.userData.currentPage < totalPages - 1) {
             // Next page with animation
             // Ensure totalPages is set for the animation
             if (!bookObject.userData.totalPages) bookObject.userData.totalPages = 10;
-            animatePageTurn(bookObject, 1);
+            if (bookObject.userData.type === 'magazine') {
+              animateMagazinePageTurn(bookObject, 1);
+            } else {
+              animatePageTurn(bookObject, 1);
+            }
           }
         }
       }
@@ -3252,13 +3559,13 @@ function onMouseDown(event) {
       }
 
       if (deskObjects.includes(object)) {
-        // For books, check if user is holding for reading mode
-        if (object.userData.type === 'books') {
+        // For books and magazines, check if user is holding for reading mode
+        if (object.userData.type === 'books' || object.userData.type === 'magazine') {
           bookReadingState.middleMouseDownTime = Date.now();
           bookReadingState.book = object;
           bookReadingState.holdTimeout = setTimeout(() => {
-            // If book is open, enter reading mode after holding for 300ms
-            // If book is closed, a hold does nothing extra (will just toggle on quick release)
+            // If book/magazine is open, enter reading mode after holding for 300ms
+            // If book/magazine is closed, a hold does nothing extra (will just toggle on quick release)
             if (object.userData.isOpen) {
               enterBookReadingMode(object);
               bookReadingState.holdTimeout = null; // Mark as already handled
@@ -3723,14 +4030,18 @@ function onMouseUp(event) {
       return;
     }
 
-    // If user releases before the hold timeout fired, it's a quick click - toggle book
+    // If user releases before the hold timeout fired, it's a quick click - toggle book/magazine
     if (bookReadingState.holdTimeout) {
       clearTimeout(bookReadingState.holdTimeout);
       bookReadingState.holdTimeout = null;
 
-      // Quick click on book - toggle open/close
+      // Quick click on book/magazine - toggle open/close
       if (bookReadingState.book) {
-        toggleBookOpen(bookReadingState.book);
+        if (bookReadingState.book.userData.type === 'magazine') {
+          toggleMagazineOpen(bookReadingState.book);
+        } else {
+          toggleBookOpen(bookReadingState.book);
+        }
         bookReadingState.book = null;
       }
     }
@@ -4096,8 +4407,13 @@ function onMouseWheel(event) {
       // Scale object (preserving proportions) with Shift+scroll
       const scaleDelta = event.deltaY > 0 ? 0.95 : 1.05;
       const minScale = 0.3;
-      // Books can be scaled larger for reading
-      const maxScale = object.userData.type === 'books' ? 5.0 : 3.0;
+      // Books and magazines can be scaled larger for reading (magazines can go up to 10.0)
+      let maxScale = 3.0;
+      if (object.userData.type === 'magazine') {
+        maxScale = 10.0;
+      } else if (object.userData.type === 'books') {
+        maxScale = 5.0;
+      }
 
       const oldScale = object.scale.x;
       const newScale = oldScale * scaleDelta;
@@ -4163,8 +4479,13 @@ function onMouseWheel(event) {
         // Scale object (preserving proportions)
         const scaleDelta = event.deltaY > 0 ? 0.95 : 1.05;
         const minScale = 0.3;
-        // Books can be scaled larger for reading
-        const maxScale = object.userData.type === 'books' ? 5.0 : 3.0;
+        // Books and magazines can be scaled larger for reading (magazines can go up to 10.0)
+        let maxScale = 3.0;
+        if (object.userData.type === 'magazine') {
+          maxScale = 10.0;
+        } else if (object.userData.type === 'books') {
+          maxScale = 5.0;
+        }
 
         const oldScale = object.scale.x;
         const newScale = oldScale * scaleDelta;
@@ -4486,6 +4807,97 @@ function updateCustomizationPanel(object) {
         ` : ''}
       `;
       setupBookCustomizationHandlers(object);
+      break;
+
+    case 'magazine':
+      dynamicOptions.innerHTML = `
+        <div class="customization-group" style="margin-top: 20px; padding-top: 15px; border-top: 1px solid rgba(255,255,255,0.1);">
+          <label>Magazine Title</label>
+          <textarea id="magazine-title-edit" placeholder="Enter magazine title"
+                 style="width: 100%; min-height: 40px; padding: 10px; background: rgba(255,255,255,0.1); border: 1px solid rgba(255,255,255,0.2); border-radius: 8px; color: #fff; margin-top: 8px; resize: vertical; font-family: inherit; font-size: inherit;">${object.userData.magazineTitle || ''}</textarea>
+        </div>
+        <div class="customization-group" style="margin-top: 15px;">
+          <label>Title Color</label>
+          <div id="magazine-title-colors" style="display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px;">
+            <div class="color-swatch${(object.userData.titleColor || '#ffffff') === '#ffffff' ? ' selected' : ''}" style="background: #ffffff; width: 32px; height: 32px; border-radius: 8px; cursor: pointer; border: 2px solid ${(object.userData.titleColor || '#ffffff') === '#ffffff' ? '#fff' : 'transparent'};" data-color="#ffffff"></div>
+            <div class="color-swatch${object.userData.titleColor === '#000000' ? ' selected' : ''}" style="background: #000000; width: 32px; height: 32px; border-radius: 8px; cursor: pointer; border: 2px solid ${object.userData.titleColor === '#000000' ? '#fff' : 'rgba(255,255,255,0.3)'};" data-color="#000000"></div>
+            <div class="color-swatch${object.userData.titleColor === '#fbbf24' ? ' selected' : ''}" style="background: #fbbf24; width: 32px; height: 32px; border-radius: 8px; cursor: pointer; border: 2px solid ${object.userData.titleColor === '#fbbf24' ? '#fff' : 'transparent'};" data-color="#fbbf24"></div>
+            <div class="color-swatch${object.userData.titleColor === '#ef4444' ? ' selected' : ''}" style="background: #ef4444; width: 32px; height: 32px; border-radius: 8px; cursor: pointer; border: 2px solid ${object.userData.titleColor === '#ef4444' ? '#fff' : 'transparent'};" data-color="#ef4444"></div>
+            <div class="color-swatch${object.userData.titleColor === '#22c55e' ? ' selected' : ''}" style="background: #22c55e; width: 32px; height: 32px; border-radius: 8px; cursor: pointer; border: 2px solid ${object.userData.titleColor === '#22c55e' ? '#fff' : 'transparent'};" data-color="#22c55e"></div>
+            <div class="color-swatch${object.userData.titleColor === '#3b82f6' ? ' selected' : ''}" style="background: #3b82f6; width: 32px; height: 32px; border-radius: 8px; cursor: pointer; border: 2px solid ${object.userData.titleColor === '#3b82f6' ? '#fff' : 'transparent'};" data-color="#3b82f6"></div>
+            <div class="color-swatch${object.userData.titleColor === '#8b5cf6' ? ' selected' : ''}" style="background: #8b5cf6; width: 32px; height: 32px; border-radius: 8px; cursor: pointer; border: 2px solid ${object.userData.titleColor === '#8b5cf6' ? '#fff' : 'transparent'};" data-color="#8b5cf6"></div>
+            <div class="color-swatch${object.userData.titleColor === '#ec4899' ? ' selected' : ''}" style="background: #ec4899; width: 32px; height: 32px; border-radius: 8px; cursor: pointer; border: 2px solid ${object.userData.titleColor === '#ec4899' ? '#fff' : 'transparent'};" data-color="#ec4899"></div>
+            <div class="color-swatch${object.userData.titleColor === '#c084fc' ? ' selected' : ''}" style="background: #c084fc; width: 32px; height: 32px; border-radius: 8px; cursor: pointer; border: 2px solid ${object.userData.titleColor === '#c084fc' ? '#fff' : 'transparent'};" data-color="#c084fc"></div>
+            <div class="color-swatch${object.userData.titleColor === '#64748b' ? ' selected' : ''}" style="background: #64748b; width: 32px; height: 32px; border-radius: 8px; cursor: pointer; border: 2px solid ${object.userData.titleColor === '#64748b' ? '#fff' : 'transparent'};" data-color="#64748b"></div>
+          </div>
+        </div>
+        <div class="customization-group" style="margin-top: 15px;">
+          <label>PDF File</label>
+          <div style="display: flex; flex-direction: column; gap: 10px; margin-top: 8px;">
+            <label style="display: inline-block; padding: 10px 15px; background: rgba(79, 70, 229, 0.3); border: 1px solid rgba(79, 70, 229, 0.5); border-radius: 8px; color: #fff; cursor: pointer; text-align: center;">
+              ${object.userData.pdfPath ? 'Change PDF' : 'Choose PDF'}
+              <input type="file" id="magazine-pdf-edit" accept=".pdf" style="display: none;">
+            </label>
+            ${object.userData.pdfPath ? `
+              <div style="color: rgba(255,255,255,0.5); font-size: 12px;">
+                Current: ${object.userData.pdfPath.split('/').pop() || object.userData.pdfPath.split('\\\\').pop()}
+              </div>
+              <button id="magazine-pdf-clear-edit" style="padding: 10px 15px; background: rgba(239, 68, 68, 0.2); border: 1px solid rgba(239, 68, 68, 0.4); border-radius: 8px; color: #ef4444; cursor: pointer;">
+                Clear PDF
+              </button>
+            ` : ''}
+          </div>
+        </div>
+        <div class="customization-group" style="margin-top: 15px;">
+          <label>PDF Resolution: <span id="magazine-pdf-resolution-display">${object.userData.pdfResolution || 512}px</span></label>
+          <input type="range" id="magazine-pdf-resolution" min="384" max="1536" step="128" value="${object.userData.pdfResolution || 512}"
+                 style="width: 100%; margin-top: 8px; accent-color: #4f46e5;">
+          <div style="display: flex; justify-content: space-between; color: rgba(255,255,255,0.4); font-size: 10px; margin-top: 4px;">
+            <span>Fast</span>
+            <span>Quality</span>
+          </div>
+        </div>
+        <div class="customization-group" style="margin-top: 15px;">
+          <label>Cover Image (optional)</label>
+          <div style="display: flex; flex-direction: column; gap: 10px; margin-top: 8px;">
+            <label style="display: inline-block; padding: 10px 15px; background: rgba(79, 70, 229, 0.3); border: 1px solid rgba(79, 70, 229, 0.5); border-radius: 8px; color: #fff; cursor: pointer; text-align: center;">
+              Upload Image
+              <input type="file" id="magazine-cover-image" accept="image/*" style="display: none;">
+            </label>
+            <button id="magazine-cover-use-pdf" style="padding: 10px 15px; background: rgba(34, 197, 94, 0.2); border: 1px solid rgba(34, 197, 94, 0.4); border-radius: 8px; color: #22c55e; cursor: pointer;${object.userData.pdfDocument ? '' : ' opacity: 0.5;'}">
+              Use PDF Page 1 as Cover${object.userData.pdfDocument ? '' : ' (load PDF first)'}
+            </button>
+            ${object.userData.coverImageDataUrl ? `
+              <div style="color: rgba(255,255,255,0.5); font-size: 12px;">
+                Cover image set
+              </div>
+              <button id="magazine-cover-clear" style="padding: 10px 15px; background: rgba(239, 68, 68, 0.2); border: 1px solid rgba(239, 68, 68, 0.4); border-radius: 8px; color: #ef4444; cursor: pointer;">
+                Clear Cover Image
+              </button>
+            ` : ''}
+          </div>
+        </div>
+        ${object.userData.coverImageDataUrl ? `
+        <div class="customization-group" style="margin-top: 15px;">
+          <label>Cover Position</label>
+          <div id="magazine-cover-fit-mode" style="display: flex; gap: 8px; margin-top: 8px; flex-wrap: wrap;">
+            <button class="fit-mode-btn${object.userData.coverFitMode === 'contain' ? ' selected' : ''}" data-mode="contain" style="padding: 8px 12px; background: ${object.userData.coverFitMode === 'contain' ? 'rgba(79, 70, 229, 0.5)' : 'rgba(255,255,255,0.1)'}; border: 1px solid ${object.userData.coverFitMode === 'contain' ? 'rgba(79, 70, 229, 0.8)' : 'rgba(255,255,255,0.2)'}; border-radius: 6px; color: #fff; cursor: pointer; font-size: 12px;">
+              Fit Width
+            </button>
+            <button class="fit-mode-btn${object.userData.coverFitMode === 'cover' ? ' selected' : ''}" data-mode="cover" style="padding: 8px 12px; background: ${object.userData.coverFitMode === 'cover' ? 'rgba(79, 70, 229, 0.5)' : 'rgba(255,255,255,0.1)'}; border: 1px solid ${object.userData.coverFitMode === 'cover' ? 'rgba(79, 70, 229, 0.8)' : 'rgba(255,255,255,0.2)'}; border-radius: 6px; color: #fff; cursor: pointer; font-size: 12px;">
+              Fill Cover
+            </button>
+            <button class="fit-mode-btn${object.userData.coverFitMode === 'stretch' ? ' selected' : ''}" data-mode="stretch" style="padding: 8px 12px; background: ${object.userData.coverFitMode === 'stretch' ? 'rgba(79, 70, 229, 0.5)' : 'rgba(255,255,255,0.1)'}; border: 1px solid ${object.userData.coverFitMode === 'stretch' ? 'rgba(79, 70, 229, 0.8)' : 'rgba(255,255,255,0.2)'}; border-radius: 6px; color: #fff; cursor: pointer; font-size: 12px;">
+              Stretch
+            </button>
+          </div>
+          <div style="color: rgba(255,255,255,0.4); font-size: 11px; margin-top: 6px;">
+            ${object.userData.coverFitMode === 'contain' ? 'Image fits within cover width, may show background' : object.userData.coverFitMode === 'cover' ? 'Image fills entire cover, may crop edges' : 'Image stretched to fit exactly'}
+          </div>
+        </div>
+        ` : ''}
+      `;
+      setupMagazineCustomizationHandlers(object);
       break;
 
     case 'pen':
@@ -5466,7 +5878,7 @@ function enterExamineMode(object) {
   if (object.userData.type === 'pen') {
     examineDistance = 1.2; // Bring pen much closer
     yOffset = -0.2; // Lower position so cursor can reach
-  } else if (object.userData.type === 'books') {
+  } else if (object.userData.type === 'books' || object.userData.type === 'magazine') {
     examineDistance = 1.5;
   }
 
@@ -5559,6 +5971,7 @@ function openInteractionModal(object) {
     'coffee': '☕',
     'pen-holder': '🖊️',
     'books': '📕',
+    'magazine': '📰',
     'notebook': '📓',
     'paper': '📄'
   };
@@ -5844,6 +6257,50 @@ function getInteractionContent(object) {
         </div>
       `;
 
+    case 'magazine':
+      return `
+        <div class="timer-controls">
+          <div class="timer-display">
+            <div class="time" style="font-size: 24px;">Magazine</div>
+            <div style="color: rgba(255,255,255,0.6); margin-top: 10px;">
+              ${object.userData.isOpen ? 'Magazine is open' : 'Middle-click to open'}
+            </div>
+          </div>
+          <div style="margin-top: 15px;">
+            <label style="color: rgba(255,255,255,0.7); display: block; margin-bottom: 8px;">Magazine Title</label>
+            <input type="text" id="magazine-title" value="${object.userData.magazineTitle || ''}"
+                   placeholder="Enter magazine title"
+                   style="width: 100%; padding: 10px; background: rgba(255,255,255,0.1); border: 1px solid rgba(255,255,255,0.2); border-radius: 8px; color: #fff;">
+          </div>
+          <div style="margin-top: 15px;">
+            <label style="color: rgba(255,255,255,0.7); display: block; margin-bottom: 8px;">PDF File</label>
+            <label class="timer-btn start" style="cursor: pointer; display: inline-block; width: 100%; text-align: center;">
+              ${object.userData.pdfPath ? 'Change PDF' : 'Choose PDF'}
+              <input type="file" id="magazine-pdf" accept=".pdf" style="display: none;">
+            </label>
+            ${object.userData.pdfPath ? `
+              <div style="color: rgba(255,255,255,0.5); margin-top: 8px; font-size: 12px;">
+                Current: ${object.userData.pdfPath.split('/').pop() || object.userData.pdfPath.split('\\\\').pop()}
+              </div>
+            ` : ''}
+          </div>
+          <div class="timer-buttons" style="margin-top: 15px;">
+            <button class="timer-btn ${object.userData.isOpen ? 'pause' : 'start'}" id="magazine-toggle">
+              ${object.userData.isOpen ? 'Close Magazine' : 'Open Magazine'}
+            </button>
+          </div>
+          ${object.userData.isOpen && object.userData.totalPages > 0 ? `
+            <div class="timer-buttons" style="margin-top: 10px;">
+              <button class="timer-btn reset" id="magazine-prev" ${object.userData.currentPage <= 0 ? 'disabled' : ''}>← Prev</button>
+              <span style="color: rgba(255,255,255,0.7); padding: 0 15px;">
+                Page ${object.userData.currentPage + 1} / ${object.userData.totalPages}
+              </span>
+              <button class="timer-btn start" id="magazine-next" ${object.userData.currentPage >= object.userData.totalPages - 1 ? 'disabled' : ''}>Next →</button>
+            </div>
+          ` : ''}
+        </div>
+      `;
+
     default:
       return `<p style="color: rgba(255,255,255,0.7);">No interactions available for this object.</p>`;
   }
@@ -5880,6 +6337,9 @@ function setupInteractionHandlers(object) {
       break;
     case 'books':
       setupBookHandlers(object);
+      break;
+    case 'magazine':
+      setupMagazineHandlers(object);
       break;
   }
 }
@@ -7614,6 +8074,11 @@ function performQuickInteraction(object, clickedMesh = null) {
       toggleBookOpen(object);
       break;
 
+    case 'magazine':
+      // Toggle magazine open/closed
+      toggleMagazineOpen(object);
+      break;
+
     case 'laptop':
       // Check if the power button was clicked
       if (clickedMesh && clickedMesh.name === 'powerButton') {
@@ -7938,6 +8403,833 @@ function animatePageTurn(book, direction) {
   }
 
   animate();
+}
+
+// ============================================================================
+// MAGAZINE HANDLERS AND FUNCTIONS
+// ============================================================================
+function setupMagazineHandlers(object) {
+  const toggleBtn = document.getElementById('magazine-toggle');
+  const titleInput = document.getElementById('magazine-title');
+  const pdfInput = document.getElementById('magazine-pdf');
+  const prevBtn = document.getElementById('magazine-prev');
+  const nextBtn = document.getElementById('magazine-next');
+
+  if (toggleBtn) {
+    toggleBtn.addEventListener('click', () => {
+      toggleMagazineOpen(object);
+
+      // Refresh modal
+      const content = document.getElementById('interaction-content');
+      content.innerHTML = getInteractionContent(object);
+      setupMagazineHandlers(object);
+    });
+  }
+
+  if (titleInput) {
+    titleInput.addEventListener('change', (e) => {
+      object.userData.magazineTitle = e.target.value;
+      // Update title texture on cover with dynamic resizing for multi-line
+      if (object.userData.createTitleTexture) {
+        const closedGroup = object.getObjectByName('closedMagazine');
+        if (closedGroup) {
+          const coverTitle = closedGroup.getObjectByName('coverTitle');
+          if (coverTitle) {
+            const title = e.target.value || '';
+
+            // Hide title background if title is empty or whitespace only
+            coverTitle.visible = title.trim().length > 0;
+
+            // Only update texture if title is visible
+            if (coverTitle.visible) {
+              const lines = title.split('\n');
+
+              // Calculate canvas and geometry height based on line count
+              const baseHeight = 124;
+              const lineAddition = 50;
+              const lineCount = Math.max(1, lines.length);
+              const canvasHeight = baseHeight + (lineCount - 1) * lineAddition;
+
+              // Update geometry height proportionally
+              const baseGeoHeight = 0.08;
+              const geoHeight = baseGeoHeight * (canvasHeight / baseHeight);
+
+              // Create new geometry with updated height
+              const newGeometry = new THREE.PlaneGeometry(0.18, geoHeight);
+              coverTitle.geometry.dispose();
+              coverTitle.geometry = newGeometry;
+
+              // Adjust position for multi-line
+              coverTitle.position.y = 0.016 + (lineCount - 1) * 0.008;
+
+              // Create texture with dynamic height
+              const newCoverTexture = object.userData.createTitleTexture(title, 280, canvasHeight, 48);
+              coverTitle.material.map = newCoverTexture;
+              coverTitle.material.needsUpdate = true;
+            }
+          }
+        }
+      }
+      saveState();
+    });
+  }
+
+  if (pdfInput) {
+    pdfInput.addEventListener('change', (e) => {
+      const file = e.target.files[0];
+      if (file && file.type === 'application/pdf') {
+        object.userData.pdfPath = file.name;
+        object.userData.pdfFile = file;
+        loadPDFToMagazine(object, file);
+      }
+    });
+  }
+
+  if (prevBtn) {
+    prevBtn.addEventListener('click', () => {
+      if (object.userData.currentPage > 0) {
+        object.userData.currentPage--;
+        updateMagazinePages(object);
+
+        // Refresh modal
+        const content = document.getElementById('interaction-content');
+        content.innerHTML = getInteractionContent(object);
+        setupMagazineHandlers(object);
+      }
+    });
+  }
+
+  if (nextBtn) {
+    nextBtn.addEventListener('click', () => {
+      if (object.userData.currentPage < object.userData.totalPages - 1) {
+        object.userData.currentPage++;
+        updateMagazinePages(object);
+
+        // Refresh modal
+        const content = document.getElementById('interaction-content');
+        content.innerHTML = getInteractionContent(object);
+        setupMagazineHandlers(object);
+      }
+    });
+  }
+}
+
+async function loadPDFToMagazine(magazine, file) {
+  if (magazine.userData.isLoadingPdf) {
+    console.log('PDF already loading, skipping duplicate load request');
+    return;
+  }
+
+  magazine.userData.isLoadingPdf = true;
+
+  try {
+    const arrayBuffer = await file.arrayBuffer();
+    const typedArray = new Uint8Array(arrayBuffer);
+
+    if (typeof pdfjsLib === 'undefined') {
+      console.error('PDF.js library not loaded');
+      magazine.userData.totalPages = 10;
+      magazine.userData.currentPage = 0;
+      magazine.userData.isLoadingPdf = false;
+      updateMagazinePages(magazine);
+      return;
+    }
+
+    pdfjsLib.GlobalWorkerOptions.workerSrc = './lib/pdf.worker.min.js';
+    const pdfDoc = await pdfjsLib.getDocument(typedArray).promise;
+
+    magazine.userData.pdfDocument = pdfDoc;
+    magazine.userData.totalPages = pdfDoc.numPages;
+    magazine.userData.currentPage = 0;
+    magazine.userData.renderedPages = {};
+    magazine.userData.pageTextures = {};
+    magazine.userData.isLoadingPdf = false;
+
+    updateMagazineThickness(magazine);
+
+    // Store PDF as data URL for saving
+    const base64Reader = new FileReader();
+    base64Reader.onload = () => {
+      magazine.userData.pdfDataUrl = base64Reader.result;
+      magazine.userData.pdfDataDirty = true;
+    };
+    base64Reader.readAsDataURL(file);
+
+    // Automatically open the magazine to show the PDF content
+    if (!magazine.userData.isOpen) {
+      toggleMagazineOpen(magazine);
+    }
+
+    await updateMagazinePagesWithPDF(magazine);
+
+    // Update UI if modal is open
+    const content = document.getElementById('interaction-content');
+    if (content && interactionObject === magazine) {
+      content.innerHTML = getInteractionContent(magazine);
+      setupMagazineHandlers(magazine);
+    }
+    saveState();
+  } catch (error) {
+    console.error('Error loading PDF:', error);
+    magazine.userData.totalPages = 1;
+    magazine.userData.currentPage = 0;
+    magazine.userData.isLoadingPdf = false;
+    updateMagazinePages(magazine);
+  }
+}
+
+async function loadPDFFromDataUrlToMagazine(magazine, dataUrl) {
+  try {
+    magazine.userData.isLoadingPdf = true;
+    magazine.userData.loadingProgress = 0;
+
+    const base64 = dataUrl.split(',')[1];
+    const binaryString = atob(base64);
+    const bytes = new Uint8Array(binaryString.length);
+    for (let i = 0; i < binaryString.length; i++) {
+      bytes[i] = binaryString.charCodeAt(i);
+    }
+
+    pdfjsLib.GlobalWorkerOptions.workerSrc = './lib/pdf.worker.min.js';
+    const loadingTask = pdfjsLib.getDocument({
+      data: bytes,
+      cMapUrl: 'https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174/cmaps/',
+      cMapPacked: true
+    });
+
+    loadingTask.onProgress = (progressData) => {
+      if (progressData.total > 0) {
+        magazine.userData.loadingProgress = Math.round((progressData.loaded / progressData.total) * 100);
+      }
+      if (magazine.userData.isOpen) {
+        updateMagazinePages(magazine);
+      }
+    };
+
+    const pdfDoc = await loadingTask.promise;
+
+    magazine.userData.pdfDocument = pdfDoc;
+    magazine.userData.totalPages = pdfDoc.numPages;
+    magazine.userData.currentPage = magazine.userData.currentPage || 0;
+    magazine.userData.renderedPages = {};
+    magazine.userData.pageTextures = {};
+    magazine.userData.isLoadingPdf = false;
+    magazine.userData.loadingProgress = 100;
+    magazine.userData.pdfDataUrl = dataUrl;
+
+    updateMagazineThickness(magazine);
+
+    if (magazine.userData.isOpen) {
+      await updateMagazinePagesWithPDF(magazine);
+    }
+  } catch (error) {
+    console.error('Error loading PDF from data URL:', error);
+    magazine.userData.isLoadingPdf = false;
+    magazine.userData.loadingProgress = 0;
+  }
+}
+
+async function updateMagazinePagesWithPDF(magazine) {
+  const openGroup = magazine.getObjectByName('openMagazine');
+  if (!openGroup) return;
+
+  const leftPage = openGroup.getObjectByName('leftPageSurface');
+  const rightPage = openGroup.getObjectByName('rightPageSurface');
+
+  const pdfDoc = magazine.userData.pdfDocument;
+
+  if (!pdfDoc) {
+    updateMagazinePages(magazine);
+    return;
+  }
+
+  // Use magazine's configured resolution
+  const canvasWidth = magazine.userData.pdfResolution || 512;
+  const canvasHeight = Math.round(canvasWidth * 1.4); // A4 aspect ratio
+
+  const pageOffset = magazine.userData.firstPageAsCover ? 1 : 0;
+
+  if (!magazine.userData.pageTextures) {
+    magazine.userData.pageTextures = {};
+  }
+
+  // Left page
+  const leftPageNum = magazine.userData.currentPage * 2 + 1 + pageOffset;
+  if (leftPage && leftPageNum <= pdfDoc.numPages) {
+    let texture = magazine.userData.pageTextures[leftPageNum];
+    if (!texture) {
+      let canvas = magazine.userData.renderedPages[leftPageNum];
+      if (!canvas) {
+        canvas = await renderPDFPageToCanvas(pdfDoc, leftPageNum, canvasWidth, canvasHeight);
+        if (canvas) {
+          magazine.userData.renderedPages[leftPageNum] = canvas;
+        }
+      }
+      if (canvas) {
+        texture = new THREE.CanvasTexture(canvas);
+        texture.anisotropy = 16;
+        texture.minFilter = THREE.LinearFilter;
+        texture.magFilter = THREE.LinearFilter;
+        texture.generateMipmaps = false;
+        magazine.userData.pageTextures[leftPageNum] = texture;
+      }
+    }
+    if (texture) {
+      leftPage.material.map = texture;
+      leftPage.material.color.set(0xffffff);
+      leftPage.material.needsUpdate = true;
+    }
+  }
+
+  // Right page
+  const rightPageNum = magazine.userData.currentPage * 2 + 2 + pageOffset;
+  if (rightPage && rightPageNum <= pdfDoc.numPages) {
+    let texture = magazine.userData.pageTextures[rightPageNum];
+    if (!texture) {
+      let canvas = magazine.userData.renderedPages[rightPageNum];
+      if (!canvas) {
+        canvas = await renderPDFPageToCanvas(pdfDoc, rightPageNum, canvasWidth, canvasHeight);
+        if (canvas) {
+          magazine.userData.renderedPages[rightPageNum] = canvas;
+        }
+      }
+      if (canvas) {
+        texture = new THREE.CanvasTexture(canvas);
+        texture.anisotropy = 16;
+        texture.minFilter = THREE.LinearFilter;
+        texture.magFilter = THREE.LinearFilter;
+        texture.generateMipmaps = false;
+        magazine.userData.pageTextures[rightPageNum] = texture;
+      }
+    }
+    if (texture) {
+      rightPage.material.map = texture;
+      rightPage.material.color.set(0xffffff);
+      rightPage.material.needsUpdate = true;
+    }
+  }
+}
+
+function updateMagazineThickness(magazine) {
+  const totalPages = magazine.userData.totalPages || 10;
+  // Magazines are generally thinner than books
+  const pagesPerMm = 15;
+  const calculatedThickness = Math.min(0.04, Math.max(0.008, totalPages / pagesPerMm / 100));
+
+  const closedGroup = magazine.getObjectByName('closedMagazine');
+  if (!closedGroup) return;
+
+  // Find cover and update its height
+  const cover = closedGroup.children.find(c => c.name === 'cover');
+  if (cover) {
+    const oldGeo = cover.geometry;
+    cover.geometry = new THREE.BoxGeometry(0.22, calculatedThickness + 0.003, 0.30);
+    oldGeo.dispose();
+    cover.position.y = (calculatedThickness + 0.003) / 2;
+  }
+
+  // Find pages block and update
+  const pages = closedGroup.children.find(c => c !== cover && c.name !== 'coverTitle' && c.geometry && c.geometry.type === 'BoxGeometry' && c.position.x > -0.1 && c.position.x < 0.1);
+  if (pages) {
+    const oldGeo = pages.geometry;
+    pages.geometry = new THREE.BoxGeometry(0.20, calculatedThickness, 0.28);
+    oldGeo.dispose();
+    pages.position.y = calculatedThickness / 2;
+  }
+
+  // Find spine and update
+  const spine = closedGroup.children.find(c => c.name !== 'cover' && c.name !== 'coverTitle' && c.geometry && c.geometry.type === 'BoxGeometry' && c.position.x < -0.1);
+  if (spine) {
+    const oldGeo = spine.geometry;
+    const spineThickness = calculatedThickness + 0.002;
+    spine.geometry = new THREE.BoxGeometry(0.008, spineThickness, 0.30);
+    oldGeo.dispose();
+    spine.position.y = calculatedThickness / 2;
+  }
+
+  magazine.userData.magazineThickness = calculatedThickness;
+}
+
+function updateMagazinePages(magazine) {
+  if (magazine.userData.pdfDocument) {
+    updateMagazinePagesWithPDF(magazine);
+    return;
+  }
+
+  const openGroup = magazine.getObjectByName('openMagazine');
+  if (!openGroup) return;
+
+  const leftPage = openGroup.getObjectByName('leftPageSurface');
+  const rightPage = openGroup.getObjectByName('rightPageSurface');
+
+  const canvasWidth = magazine.userData.pdfResolution || 512;
+  const canvasHeight = Math.round(canvasWidth * 1.4);
+
+  const isLoading = magazine.userData.isLoadingPdf;
+
+  // Placeholder for left page
+  if (leftPage && magazine.userData.totalPages > 0) {
+    const canvas = document.createElement('canvas');
+    canvas.width = canvasWidth;
+    canvas.height = canvasHeight;
+    const ctx = canvas.getContext('2d');
+
+    ctx.fillStyle = '#fff8f0';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+    ctx.fillStyle = '#333';
+    ctx.font = `${Math.floor(canvasWidth / 18)}px Arial`;
+    ctx.textAlign = 'center';
+
+    if (isLoading) {
+      const progress = magazine.userData.loadingProgress || 0;
+      ctx.fillText('Loading PDF...', canvas.width / 2, canvas.height / 2 - 30);
+      ctx.fillText(`${progress}%`, canvas.width / 2, canvas.height / 2 + 30);
+    } else {
+      ctx.fillText('No PDF loaded', canvas.width / 2, canvas.height / 2 - 30);
+      ctx.fillText('Right-click to add PDF', canvas.width / 2, canvas.height / 2 + 30);
+    }
+
+    const texture = new THREE.CanvasTexture(canvas);
+    texture.anisotropy = 16;
+    leftPage.material.map = texture;
+    leftPage.material.color.set(0xffffff);
+    leftPage.material.needsUpdate = true;
+  }
+
+  // Placeholder for right page
+  if (rightPage && magazine.userData.totalPages > 0) {
+    const canvas = document.createElement('canvas');
+    canvas.width = canvasWidth;
+    canvas.height = canvasHeight;
+    const ctx = canvas.getContext('2d');
+
+    ctx.fillStyle = '#fff8f0';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+    if (!isLoading) {
+      ctx.fillStyle = '#333';
+      ctx.font = `${Math.floor(canvasWidth / 18)}px Arial`;
+      ctx.textAlign = 'center';
+      ctx.fillText(magazine.userData.magazineTitle || 'Untitled', canvas.width / 2, canvas.height - 60);
+    }
+
+    const texture = new THREE.CanvasTexture(canvas);
+    texture.anisotropy = 16;
+    rightPage.material.map = texture;
+    rightPage.material.color.set(0xffffff);
+    rightPage.material.needsUpdate = true;
+  }
+}
+
+function toggleMagazineOpen(object) {
+  const closedGroup = object.getObjectByName('closedMagazine');
+  const openGroup = object.getObjectByName('openMagazine');
+
+  if (object.userData.isOpen) {
+    // Close magazine
+    object.userData.isOpen = false;
+    if (openGroup) openGroup.visible = false;
+    if (closedGroup) closedGroup.visible = true;
+  } else {
+    // Open magazine
+    object.userData.isOpen = true;
+    if (closedGroup) closedGroup.visible = false;
+    if (openGroup) openGroup.visible = true;
+
+    if (object.userData.currentPage === undefined) {
+      object.userData.currentPage = 0;
+    }
+
+    // If magazine has a saved PDF data URL but PDF not loaded yet, start loading
+    if (object.userData.pdfDataUrl && !object.userData.pdfDocument && !object.userData.isLoadingPdf) {
+      object.userData.isLoadingPdf = true;
+      updateMagazinePages(object);
+      loadPDFFromDataUrlToMagazine(object, object.userData.pdfDataUrl);
+    } else {
+      updateMagazinePages(object);
+    }
+  }
+}
+
+// Page turning animation for magazine
+function animateMagazinePageTurn(magazine, direction) {
+  if (magazine.userData.isTurningPage) return;
+
+  const currentPage = magazine.userData.currentPage || 0;
+  const totalPages = magazine.userData.totalPages || 10;
+  const maxPage = Math.ceil(totalPages / 2) - 1;
+
+  if (direction < 0 && currentPage <= 0) return;
+  if (direction > 0 && currentPage >= maxPage) return;
+
+  magazine.userData.isTurningPage = true;
+
+  const openGroup = magazine.getObjectByName('openMagazine');
+  if (!openGroup) {
+    magazine.userData.isTurningPage = false;
+    return;
+  }
+
+  // Create a temporary page for animation
+  const pageGeometry = new THREE.PlaneGeometry(0.20, 0.28);
+  const pageMaterial = new THREE.MeshStandardMaterial({
+    color: 0xfff8f0,
+    side: THREE.DoubleSide,
+    roughness: 0.9
+  });
+  const turningPage = new THREE.Mesh(pageGeometry, pageMaterial);
+
+  const pivotGroup = new THREE.Group();
+  pivotGroup.position.set(0, 0.013, 0); // At spine, at page surface height
+
+  // Position page so its inner edge is at the pivot
+  turningPage.position.set(direction > 0 ? 0.10 : -0.10, 0, 0);
+  turningPage.rotation.x = -Math.PI / 2;
+  pivotGroup.add(turningPage);
+  openGroup.add(pivotGroup);
+
+  const startAngle = 0;
+  const endAngle = direction > 0 ? -Math.PI : Math.PI;
+  const duration = 400;
+  const startTime = Date.now();
+
+  function animate() {
+    const elapsed = Date.now() - startTime;
+    const progress = Math.min(elapsed / duration, 1);
+
+    const easeProgress = progress < 0.5
+      ? 2 * progress * progress
+      : 1 - Math.pow(-2 * progress + 2, 2) / 2;
+
+    pivotGroup.rotation.z = startAngle + (endAngle - startAngle) * easeProgress;
+
+    const liftFactor = Math.sin(progress * Math.PI) * 0.04;
+    pivotGroup.position.y = 0.013 + liftFactor;
+
+    if (progress < 1) {
+      requestAnimationFrame(animate);
+    } else {
+      openGroup.remove(pivotGroup);
+      magazine.userData.currentPage += direction;
+      magazine.userData.isTurningPage = false;
+
+      updateMagazinePages(magazine);
+
+      if (interactionObject === magazine) {
+        const content = document.getElementById('interaction-content');
+        if (content) {
+          content.innerHTML = getInteractionContent(magazine);
+          setupMagazineHandlers(magazine);
+        }
+      }
+    }
+  }
+
+  // Pre-render upcoming pages
+  if (magazine.userData.pdfDocument) {
+    const nextPage1 = (magazine.userData.currentPage + direction) * 2 + 1;
+    const nextPage2 = (magazine.userData.currentPage + direction) * 2 + 2;
+    const pdfDoc = magazine.userData.pdfDocument;
+
+    const resWidth = magazine.userData.pdfResolution || 512;
+    const resHeight = Math.round(resWidth * 1.4);
+    if (nextPage1 > 0 && nextPage1 <= pdfDoc.numPages && !magazine.userData.renderedPages[nextPage1]) {
+      renderPDFPageToCanvas(pdfDoc, nextPage1, resWidth, resHeight).then(canvas => {
+        if (canvas) magazine.userData.renderedPages[nextPage1] = canvas;
+      });
+    }
+    if (nextPage2 > 0 && nextPage2 <= pdfDoc.numPages && !magazine.userData.renderedPages[nextPage2]) {
+      renderPDFPageToCanvas(pdfDoc, nextPage2, resWidth, resHeight).then(canvas => {
+        if (canvas) magazine.userData.renderedPages[nextPage2] = canvas;
+      });
+    }
+  }
+
+  animate();
+}
+
+// Apply cover image with fit mode for magazine
+function applyMagazineCoverImageWithFit(object, imageDataUrl, fitMode) {
+  const closedGroup = object.getObjectByName('closedMagazine');
+  if (!closedGroup) return;
+
+  const cover = closedGroup.getObjectByName('cover');
+  if (!cover) return;
+
+  const img = new Image();
+  img.onload = () => {
+    // Magazine cover dimensions (0.22 x 0.30)
+    const coverWidth = 512;
+    const coverHeight = Math.round(512 * (0.30 / 0.22));
+
+    const canvas = document.createElement('canvas');
+    canvas.width = coverWidth;
+    canvas.height = coverHeight;
+    const ctx = canvas.getContext('2d');
+
+    // Fill with main color as background
+    ctx.fillStyle = object.userData.mainColor || '#dc2626';
+    ctx.fillRect(0, 0, coverWidth, coverHeight);
+
+    const imgAspect = img.width / img.height;
+    const coverAspect = coverWidth / coverHeight;
+
+    let sx, sy, sw, sh, dx, dy, dw, dh;
+
+    if (fitMode === 'stretch') {
+      ctx.drawImage(img, 0, 0, coverWidth, coverHeight);
+    } else if (fitMode === 'cover') {
+      if (imgAspect > coverAspect) {
+        sh = img.height;
+        sw = sh * coverAspect;
+        sx = (img.width - sw) / 2;
+        sy = 0;
+      } else {
+        sw = img.width;
+        sh = sw / coverAspect;
+        sx = 0;
+        sy = (img.height - sh) / 2;
+      }
+      ctx.drawImage(img, sx, sy, sw, sh, 0, 0, coverWidth, coverHeight);
+    } else {
+      if (imgAspect > coverAspect) {
+        dw = coverWidth;
+        dh = coverWidth / imgAspect;
+        dx = 0;
+        dy = (coverHeight - dh) / 2;
+      } else {
+        dh = coverHeight;
+        dw = coverHeight * imgAspect;
+        dx = (coverWidth - dw) / 2;
+        dy = 0;
+      }
+      ctx.drawImage(img, dx, dy, dw, dh);
+    }
+
+    const texture = new THREE.CanvasTexture(canvas);
+    texture.colorSpace = THREE.SRGBColorSpace;
+    texture.needsUpdate = true;
+
+    // Apply to top face of cover
+    const materials = [
+      cover.material, // right
+      cover.material, // left
+      new THREE.MeshStandardMaterial({ map: texture, roughness: 0.5 }), // top
+      cover.material, // bottom
+      cover.material, // front
+      cover.material  // back
+    ];
+    cover.material = materials;
+
+    saveState();
+  };
+  img.src = imageDataUrl;
+}
+
+function setupMagazineCustomizationHandlers(object) {
+  const titleInput = document.getElementById('magazine-title-edit');
+  const titleColorsContainer = document.getElementById('magazine-title-colors');
+  const pdfInput = document.getElementById('magazine-pdf-edit');
+  const clearBtn = document.getElementById('magazine-pdf-clear-edit');
+
+  const updateMagazineTitleTextures = () => {
+    if (object.userData.createTitleTexture) {
+      const closedGroup = object.getObjectByName('closedMagazine');
+      if (closedGroup) {
+        const coverTitle = closedGroup.getObjectByName('coverTitle');
+        if (coverTitle) {
+          const title = object.userData.magazineTitle || '';
+          coverTitle.visible = title.trim().length > 0;
+
+          if (coverTitle.visible) {
+            const lines = title.split('\n');
+            const baseHeight = 124;
+            const lineAddition = 50;
+            const lineCount = Math.max(1, lines.length);
+            const canvasHeight = baseHeight + (lineCount - 1) * lineAddition;
+            const baseGeoHeight = 0.08;
+            const geoHeight = baseGeoHeight * (canvasHeight / baseHeight);
+
+            const newGeometry = new THREE.PlaneGeometry(0.18, geoHeight);
+            coverTitle.geometry.dispose();
+            coverTitle.geometry = newGeometry;
+            coverTitle.position.y = 0.016 + (lineCount - 1) * 0.008;
+
+            const newCoverTexture = object.userData.createTitleTexture(title, 280, canvasHeight, 48);
+            coverTitle.material.map = newCoverTexture;
+            coverTitle.material.needsUpdate = true;
+          }
+        }
+      }
+    }
+    saveState();
+  };
+
+  if (titleInput) {
+    titleInput.addEventListener('input', (e) => {
+      object.userData.magazineTitle = e.target.value;
+      updateMagazineTitleTextures();
+    });
+    titleInput.addEventListener('change', (e) => {
+      object.userData.magazineTitle = e.target.value;
+      updateMagazineTitleTextures();
+    });
+  }
+
+  if (titleColorsContainer) {
+    titleColorsContainer.querySelectorAll('.color-swatch').forEach(swatch => {
+      swatch.addEventListener('click', () => {
+        object.userData.titleColor = swatch.dataset.color;
+        titleColorsContainer.querySelectorAll('.color-swatch').forEach(s => {
+          s.style.border = '2px solid transparent';
+        });
+        swatch.style.border = '2px solid #fff';
+        updateMagazineTitleTextures();
+      });
+    });
+  }
+
+  if (pdfInput) {
+    pdfInput.addEventListener('change', (e) => {
+      const file = e.target.files[0];
+      if (file && file.type === 'application/pdf') {
+        object.userData.pdfPath = file.name;
+        loadPDFToMagazine(object, file);
+      }
+    });
+  }
+
+  if (clearBtn) {
+    clearBtn.addEventListener('click', () => {
+      object.userData.pdfDocument = null;
+      object.userData.pdfPath = null;
+      object.userData.pdfDataUrl = null;
+      object.userData.pdfDataDirty = false;
+      object.userData.renderedPages = {};
+      object.userData.pageTextures = {};
+      object.userData.totalPages = 0;
+      object.userData.currentPage = 0;
+
+      updateMagazineThickness(object);
+
+      if (object.userData.isOpen) {
+        updateMagazinePages(object);
+      }
+      saveState();
+    });
+  }
+
+  // Resolution slider
+  const resolutionSlider = document.getElementById('magazine-pdf-resolution');
+  const resolutionDisplay = document.getElementById('magazine-pdf-resolution-display');
+  if (resolutionSlider) {
+    resolutionSlider.addEventListener('input', (e) => {
+      const value = parseInt(e.target.value);
+      if (resolutionDisplay) {
+        resolutionDisplay.textContent = `${value}px`;
+      }
+      object.userData.pdfResolution = value;
+    });
+    resolutionSlider.addEventListener('change', () => {
+      object.userData.renderedPages = {};
+      object.userData.pageTextures = {};
+      if (object.userData.isOpen && object.userData.pdfDocument) {
+        updateMagazinePagesWithPDF(object);
+      }
+      saveState();
+    });
+  }
+
+  // Cover image handlers
+  const coverImageInput = document.getElementById('magazine-cover-image');
+  const coverUsePdfBtn = document.getElementById('magazine-cover-use-pdf');
+  const coverClearBtn = document.getElementById('magazine-cover-clear');
+
+  if (coverImageInput) {
+    coverImageInput.addEventListener('change', (e) => {
+      const file = e.target.files[0];
+      if (file && file.type.startsWith('image/')) {
+        const reader = new FileReader();
+        reader.onload = () => {
+          object.userData.coverImageDataUrl = reader.result;
+          object.userData.coverImageDirty = true;
+          const fitMode = object.userData.coverFitMode || 'cover';
+          applyMagazineCoverImageWithFit(object, reader.result, fitMode);
+
+          if (object.userData.isOpen) {
+            updateMagazinePagesWithPDF(object);
+          }
+
+          showEditModal(object);
+        };
+        reader.readAsDataURL(file);
+      }
+    });
+  }
+
+  if (coverUsePdfBtn && object.userData.pdfDocument) {
+    coverUsePdfBtn.addEventListener('click', async () => {
+      const canvas = await renderPDFPageToCanvas(object.userData.pdfDocument, 1, 512, 700);
+      if (canvas) {
+        const dataUrl = canvas.toDataURL('image/png');
+        object.userData.coverImageDataUrl = dataUrl;
+        object.userData.coverImageDirty = true;
+        object.userData.firstPageAsCover = true;
+        const fitMode = object.userData.coverFitMode || 'cover';
+        applyMagazineCoverImageWithFit(object, dataUrl, fitMode);
+
+        if (object.userData.isOpen) {
+          updateMagazinePagesWithPDF(object);
+        }
+
+        showEditModal(object);
+      }
+    });
+  }
+
+  if (coverClearBtn) {
+    coverClearBtn.addEventListener('click', () => {
+      object.userData.coverImageDataUrl = null;
+      object.userData.coverImageDirty = false;
+      object.userData.firstPageAsCover = false;
+
+      const closedGroup = object.getObjectByName('closedMagazine');
+      if (closedGroup) {
+        const cover = closedGroup.getObjectByName('cover');
+        if (cover) {
+          cover.material = new THREE.MeshStandardMaterial({
+            color: new THREE.Color(object.userData.mainColor || '#dc2626'),
+            roughness: 0.5
+          });
+        }
+      }
+
+      if (object.userData.isOpen) {
+        updateMagazinePagesWithPDF(object);
+      }
+
+      showEditModal(object);
+      saveState();
+    });
+  }
+
+  // Cover fit mode
+  const fitModeContainer = document.getElementById('magazine-cover-fit-mode');
+  if (fitModeContainer) {
+    fitModeContainer.querySelectorAll('.fit-mode-btn').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const mode = btn.dataset.mode;
+        object.userData.coverFitMode = mode;
+
+        if (object.userData.coverImageDataUrl) {
+          applyMagazineCoverImageWithFit(object, object.userData.coverImageDataUrl, mode);
+        }
+
+        showEditModal(object);
+      });
+    });
+  }
 }
 
 // ============================================================================
@@ -9408,6 +10700,34 @@ async function saveStateImmediate() {
           }
           data.currentPage = obj.userData.currentPage || 0;
           break;
+        case 'magazine':
+          data.magazineTitle = obj.userData.magazineTitle;
+          data.titleColor = obj.userData.titleColor;
+          data.pdfPath = obj.userData.pdfPath;
+          data.pdfResolution = obj.userData.pdfResolution;
+          // PDF and cover data are stored separately to avoid lag during position saves
+          if (obj.userData.pdfDataUrl) {
+            data.hasPdfData = true;
+            if (obj.userData.pdfDataDirty) {
+              window.electronAPI.saveObjectData(obj.userData.id, 'pdf', obj.userData.pdfDataUrl);
+              obj.userData.pdfDataDirty = false;
+            }
+          }
+          if (obj.userData.coverImageDataUrl) {
+            data.hasCoverImage = true;
+            if (obj.userData.coverImageDirty) {
+              window.electronAPI.saveObjectData(obj.userData.id, 'cover', obj.userData.coverImageDataUrl);
+              obj.userData.coverImageDirty = false;
+            }
+          }
+          if (obj.userData.coverFitMode) {
+            data.coverFitMode = obj.userData.coverFitMode;
+          }
+          if (obj.userData.firstPageAsCover) {
+            data.firstPageAsCover = true;
+          }
+          data.currentPage = obj.userData.currentPage || 0;
+          break;
         case 'coffee':
           data.drinkType = obj.userData.drinkType;
           data.liquidLevel = obj.userData.liquidLevel;
@@ -9640,6 +10960,90 @@ async function loadState() {
                   obj.userData.coverImageDirty = true; // Mark dirty to migrate to new storage
                   const fitMode = obj.userData.coverFitMode || 'contain';
                   applyCoverImageWithFit(obj, objData.coverImageDataUrl, fitMode);
+                }
+                break;
+              case 'magazine':
+                // Restore magazine-specific data
+                if (objData.hasOwnProperty('magazineTitle')) obj.userData.magazineTitle = objData.magazineTitle;
+                if (objData.titleColor) obj.userData.titleColor = objData.titleColor;
+                if (objData.pdfPath) obj.userData.pdfPath = objData.pdfPath;
+                if (objData.pdfResolution) obj.userData.pdfResolution = objData.pdfResolution;
+                if (objData.currentPage !== undefined) obj.userData.currentPage = objData.currentPage;
+                // Regenerate title texture with saved title
+                if (objData.hasOwnProperty('magazineTitle') && obj.userData.createTitleTexture) {
+                  const title = objData.magazineTitle || '';
+                  const hasTitle = title.trim().length > 0;
+
+                  obj.traverse(child => {
+                    if (child.name === 'coverTitle') {
+                      child.visible = hasTitle;
+
+                      if (hasTitle) {
+                        const lines = title.split('\n');
+                        const baseHeight = 124;
+                        const lineAddition = 50;
+                        const lineCount = Math.max(1, lines.length);
+                        const canvasHeight = baseHeight + (lineCount - 1) * lineAddition;
+
+                        const baseGeoHeight = 0.08;
+                        const geoHeight = baseGeoHeight * (canvasHeight / baseHeight);
+
+                        const newCoverTexture = obj.userData.createTitleTexture(
+                          title, 280, canvasHeight, 48
+                        );
+                        const newGeometry = new THREE.PlaneGeometry(0.18, geoHeight);
+                        child.geometry.dispose();
+                        child.geometry = newGeometry;
+                        child.position.y = 0.016 + (lineCount - 1) * 0.008;
+
+                        child.material.map = newCoverTexture;
+                        child.material.needsUpdate = true;
+                      }
+                    }
+                  });
+                }
+                // Restore cover fit mode first
+                if (objData.coverFitMode) {
+                  obj.userData.coverFitMode = objData.coverFitMode;
+                }
+                // Restore first page as cover flag
+                if (objData.firstPageAsCover) {
+                  obj.userData.firstPageAsCover = true;
+                }
+                // Load PDF data from separate storage if flagged
+                if (objData.hasPdfData) {
+                  obj.userData.isLoadingPdf = true;
+                  window.electronAPI.loadObjectData(obj.userData.id, 'pdf').then(result => {
+                    if (result.success && result.data) {
+                      obj.userData.pdfDataUrl = result.data;
+                      loadPDFFromDataUrlToMagazine(obj, result.data);
+                    } else {
+                      obj.userData.isLoadingPdf = false;
+                    }
+                  });
+                }
+                // Load cover image from separate storage if flagged
+                if (objData.hasCoverImage) {
+                  window.electronAPI.loadObjectData(obj.userData.id, 'cover').then(result => {
+                    if (result.success && result.data) {
+                      obj.userData.coverImageDataUrl = result.data;
+                      const fitMode = obj.userData.coverFitMode || 'cover';
+                      applyMagazineCoverImageWithFit(obj, result.data, fitMode);
+                    }
+                  });
+                }
+                // Legacy support: load from inline data if present
+                if (objData.pdfDataUrl) {
+                  obj.userData.pdfDataUrl = objData.pdfDataUrl;
+                  obj.userData.pdfDataDirty = true;
+                  obj.userData.isLoadingPdf = true;
+                  loadPDFFromDataUrlToMagazine(obj, objData.pdfDataUrl);
+                }
+                if (objData.coverImageDataUrl) {
+                  obj.userData.coverImageDataUrl = objData.coverImageDataUrl;
+                  obj.userData.coverImageDirty = true;
+                  const fitMode = obj.userData.coverFitMode || 'cover';
+                  applyMagazineCoverImageWithFit(obj, objData.coverImageDataUrl, fitMode);
                 }
                 break;
               case 'coffee':
@@ -10063,6 +11467,15 @@ function animate() {
       if (!obj.userData.lastLoadingAnimUpdate || Date.now() - obj.userData.lastLoadingAnimUpdate > 500) {
         obj.userData.lastLoadingAnimUpdate = Date.now();
         updateBookPages(obj);
+      }
+    }
+
+    // Magazine loading animation - update every 500ms
+    if (obj.userData.type === 'magazine' && obj.userData.isLoadingPdf && obj.userData.isOpen) {
+      // Track last update time for animation
+      if (!obj.userData.lastLoadingAnimUpdate || Date.now() - obj.userData.lastLoadingAnimUpdate > 500) {
+        obj.userData.lastLoadingAnimUpdate = Date.now();
+        updateMagazinePages(obj);
       }
     }
   });

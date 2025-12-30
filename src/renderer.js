@@ -1770,7 +1770,8 @@ function createMetronome(options = {}) {
     interactive: false, // Settings only in edit mode (RMB), middle-click just toggles
     isRunning: false,
     bpm: 120,
-    tickSound: false, // Tick sound off by default
+    tickSound: true, // Tick sound ON by default (strike sound)
+    tickSoundType: 'strike', // 'strike' (default) or 'beep'
     pendulumAngle: 0,
     pendulumDirection: 1,
     mainColor: options.mainColor || '#8b4513',
@@ -2005,6 +2006,7 @@ function updateObjectColor(object, colorType, colorValue) {
     case 'metronome':
       typeSpecificData.bpm = object.userData.bpm;
       typeSpecificData.tickSound = object.userData.tickSound;
+      typeSpecificData.tickSoundType = object.userData.tickSoundType;
       typeSpecificData.isRunning = object.userData.isRunning;
       break;
     case 'photo-frame':
@@ -3485,6 +3487,17 @@ function updateCustomizationPanel(object) {
             Enable tick sound
           </label>
         </div>
+        <div class="customization-group" style="margin-top: 15px;">
+          <label>Sound Type</label>
+          <div style="display: flex; gap: 10px; margin-top: 8px;">
+            <button id="sound-type-strike" class="timer-btn ${object.userData.tickSoundType !== 'beep' ? 'pause' : 'start'}" style="flex: 1;">
+              Strike
+            </button>
+            <button id="sound-type-beep" class="timer-btn ${object.userData.tickSoundType === 'beep' ? 'pause' : 'start'}" style="flex: 1;">
+              Beep
+            </button>
+          </div>
+        </div>
       `;
       setupMetronomeCustomizationHandlers(object);
       break;
@@ -3636,6 +3649,44 @@ function setupMetronomeCustomizationHandlers(object) {
     if (tickCheckbox) {
       tickCheckbox.addEventListener('change', (e) => {
         object.userData.tickSound = e.target.checked;
+        saveState();
+      });
+    }
+
+    // Sound type buttons
+    const strikeBtn = document.getElementById('sound-type-strike');
+    const beepBtn = document.getElementById('sound-type-beep');
+
+    const updateSoundTypeButtons = () => {
+      if (strikeBtn && beepBtn) {
+        if (object.userData.tickSoundType === 'beep') {
+          beepBtn.classList.remove('start');
+          beepBtn.classList.add('pause');
+          strikeBtn.classList.remove('pause');
+          strikeBtn.classList.add('start');
+        } else {
+          strikeBtn.classList.remove('start');
+          strikeBtn.classList.add('pause');
+          beepBtn.classList.remove('pause');
+          beepBtn.classList.add('start');
+        }
+      }
+    };
+
+    updateSoundTypeButtons();
+
+    if (strikeBtn) {
+      strikeBtn.addEventListener('click', () => {
+        object.userData.tickSoundType = 'strike';
+        updateSoundTypeButtons();
+        saveState();
+      });
+    }
+
+    if (beepBtn) {
+      beepBtn.addEventListener('click', () => {
+        object.userData.tickSoundType = 'beep';
+        updateSoundTypeButtons();
         saveState();
       });
     }
@@ -3854,7 +3905,7 @@ function enterExamineMode(object) {
   // Target position in front of the camera
   const targetPosition = new THREE.Vector3(
     camera.position.x + direction.x * examineDistance,
-    camera.position.y + direction.y * examineDistance + 0.3, // Slight offset up
+    camera.position.y + direction.y * examineDistance + 0.1, // Slight offset up (lowered per feedback)
     camera.position.z + direction.z * examineDistance
   );
 
@@ -5837,6 +5888,7 @@ async function saveState() {
         case 'metronome':
           data.bpm = obj.userData.bpm;
           data.tickSound = obj.userData.tickSound;
+          data.tickSoundType = obj.userData.tickSoundType;
           break;
         case 'laptop':
           data.bootTime = obj.userData.bootTime;
@@ -5962,6 +6014,7 @@ async function loadState() {
               case 'metronome':
                 if (objData.bpm) obj.userData.bpm = objData.bpm;
                 if (objData.tickSound !== undefined) obj.userData.tickSound = objData.tickSound;
+                if (objData.tickSoundType) obj.userData.tickSoundType = objData.tickSoundType;
                 break;
               case 'laptop':
                 if (objData.bootTime) obj.userData.bootTime = objData.bootTime;
@@ -6088,44 +6141,57 @@ function animate() {
           obj.userData.lastTickTime = now;
           obj.userData.pendulumDirection *= -1;
 
-          // Play strike/click sound at each swing endpoint
+          // Play sound at each swing endpoint
           if (obj.userData.tickSound) {
             try {
               const audioCtx = getSharedAudioContext();
               const currentTime = audioCtx.currentTime;
 
-              // Create a more percussive "strike" sound
-              // Use a short noise burst followed by quick decay for mechanical click
-              const osc = audioCtx.createOscillator();
-              const osc2 = audioCtx.createOscillator();
-              const gain = audioCtx.createGain();
-              const filter = audioCtx.createBiquadFilter();
+              if (obj.userData.tickSoundType === 'beep') {
+                // Simple beep sound
+                const osc = audioCtx.createOscillator();
+                const gain = audioCtx.createGain();
+                osc.connect(gain);
+                gain.connect(audioCtx.destination);
+                osc.frequency.value = 880; // A5 note
+                osc.type = 'sine';
+                gain.gain.setValueAtTime(0.1, currentTime);
+                gain.gain.exponentialRampToValueAtTime(0.01, currentTime + 0.08);
+                osc.start(currentTime);
+                osc.stop(currentTime + 0.1);
+              } else {
+                // Default: Strike/click sound (more percussive/mechanical)
+                const osc = audioCtx.createOscillator();
+                const osc2 = audioCtx.createOscillator();
+                const gain = audioCtx.createGain();
+                const filter = audioCtx.createBiquadFilter();
 
-              // Connect oscillators through filter
-              osc.connect(filter);
-              osc2.connect(filter);
-              filter.connect(gain);
-              gain.connect(audioCtx.destination);
+                // Connect oscillators through filter
+                osc.connect(filter);
+                osc2.connect(filter);
+                filter.connect(gain);
+                gain.connect(audioCtx.destination);
 
-              // High frequency strike with harmonics
-              osc.frequency.value = 2400;
-              osc.type = 'sine';
-              osc2.frequency.value = 800;
-              osc2.type = 'triangle';
+                // High frequency strike with harmonics
+                osc.frequency.value = 2400;
+                osc.type = 'sine';
+                osc2.frequency.value = 800;
+                osc2.type = 'triangle';
 
-              // Filter for wood-like strike
-              filter.type = 'highpass';
-              filter.frequency.value = 400;
-              filter.Q.value = 0.5;
+                // Filter for wood-like strike
+                filter.type = 'highpass';
+                filter.frequency.value = 400;
+                filter.Q.value = 0.5;
 
-              // Sharp attack, quick decay envelope for percussive sound
-              gain.gain.setValueAtTime(0.15, currentTime);
-              gain.gain.exponentialRampToValueAtTime(0.01, currentTime + 0.05);
+                // Sharp attack, quick decay envelope for percussive sound
+                gain.gain.setValueAtTime(0.15, currentTime);
+                gain.gain.exponentialRampToValueAtTime(0.01, currentTime + 0.05);
 
-              osc.start(currentTime);
-              osc2.start(currentTime);
-              osc.stop(currentTime + 0.06);
-              osc2.stop(currentTime + 0.06);
+                osc.start(currentTime);
+                osc2.start(currentTime);
+                osc.stop(currentTime + 0.06);
+                osc2.stop(currentTime + 0.06);
+              }
             } catch (e) {}
           }
         }

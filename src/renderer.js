@@ -60,6 +60,7 @@ let raycaster;
 let mouse;
 let previousMousePosition = { x: 0, y: 0 };
 let objectIdCounter = 0;
+let isLoadingState = false; // Flag to prevent saving during load
 
 // Pixel art post-processing state
 let pixelRenderTarget, normalRenderTarget;
@@ -1000,35 +1001,45 @@ function createCoffeeMug(options = {}) {
   rim.position.y = 0.2;
   group.add(rim);
 
-  // Handle - torus arc that sticks out from the mug side (vertical "D" shape)
+  // Handle - torus arc forming a "D" shape attached to the mug side
   // TorusGeometry(radius, tube, radialSegments, tubularSegments, arc)
-  // Mug handle: A proper "D" or "C" shaped handle attached on two points to the mug body
-  // radius=0.05 is the major radius (arc radius), tube=0.015 is the thickness
-  // Using full Math.PI for half a torus (semicircle shape)
+  // Handle arc radius=0.05, tube thickness=0.015, semicircle arc (PI)
   const handleGeometry = new THREE.TorusGeometry(0.05, 0.015, 8, 16, Math.PI);
   const handleMaterial = new THREE.MeshStandardMaterial({
     color: new THREE.Color(group.userData.mainColor),
     roughness: 0.4
   });
   const handle = new THREE.Mesh(handleGeometry, handleMaterial);
-  // The TorusGeometry creates a ring in the XY plane by default
-  // With arc=PI, we get a half-ring (semicircle):
-  // - Two ends at (-radius, 0, 0) and (+radius, 0, 0)
-  // - Arc bulges upward with peak at (0, radius, 0)
+  // TorusGeometry creates a half-ring in XY plane by default:
+  // - Endpoints at (-radius, 0, 0) and (+radius, 0, 0)
+  // - Arc bulges upward to (0, +radius, 0)
   //
-  // For a mug handle we need:
-  // - The two attachment points at different heights on the mug (vertical separation)
-  // - The arc bulging outward horizontally (away from mug center)
+  // We need a vertical "D" handle on the side of the mug:
+  // - Both attachment points on the mug body at different heights
+  // - Arc extending outward horizontally
   //
-  // Rotation Z=PI/2 swaps X and Y:
-  // - End points become (0, -radius, 0) and (0, +radius, 0) - vertical separation!
-  // - Arc now bulges in +X direction
-  handle.rotation.z = Math.PI / 2;
-  // Now we have vertical handle with arc bulging in +X
-  // Position it on the +X side of the mug so arc extends outward
-  // Mug outer radius ~0.12 at rim level, handle arc radius 0.05
-  // Position so the handle center is on the mug surface, arc extends outward
-  handle.position.set(0.12, 0.1, 0); // On mug side (+X direction), centered at mug height
+  // Solution: rotate so arc is in XZ plane (vertical in Y, extending in X)
+  // rotation.x = PI/2 tilts the arc so it's vertical
+  // Then rotation.z adjusts orientation
+  //
+  // After rotation.x = -PI/2:
+  // - Endpoints at (-radius, 0, 0) and (+radius, 0, 0) - horizontal
+  // - Arc bulges downward in -Z
+  //
+  // After rotation.z = PI/2 on that:
+  // - Endpoints become (0, -radius, 0) and (0, +radius, 0) - VERTICAL
+  // - Arc still extends in -Z direction? No...
+  //
+  // Let's try a different approach: position the torus outside the mug with proper rotation
+  // Default torus arc in XY plane: endpoints at (+-0.05, 0, 0), peak at (0, 0.05, 0)
+  // Rotate X by PI/2 to make it extend in Z direction instead of Y
+  // Then endpoints at (+-0.05, 0, 0), peak at (0, 0, 0.05)
+  // Rotate Y by PI/2 so endpoints become vertical at (0, +-0.05, 0), arc extends in +X
+  handle.rotation.set(Math.PI / 2, Math.PI / 2, 0);
+  // Now: endpoints at (0, -0.05, 0) and (0, +0.05, 0), arc peak at (0.05, 0, 0)
+  // Position so endpoints touch the mug body at radius 0.12
+  // Place handle center at mug surface so arc extends outward
+  handle.position.set(0.12, 0.1, 0);
   handle.castShadow = true;
   group.add(handle);
 
@@ -1150,18 +1161,19 @@ function createLaptop(options = {}) {
   // Power button (in top right corner of keyboard area)
   // Keyboard is centered at Z=0.05, extends from X=-0.3 to X=0.3
   // Top edge of keyboard is at Z = 0.05 - 0.175 = -0.125
-  // Make it a tall red cylinder for high visibility (user requested to see it)
-  const powerBtnGeometry = new THREE.CylinderGeometry(0.015, 0.015, 0.025, 16);
+  // Make it a visible tall red cylinder for easy identification
+  const powerBtnGeometry = new THREE.CylinderGeometry(0.02, 0.02, 0.04, 16);
   const powerBtnMaterial = new THREE.MeshStandardMaterial({
-    color: 0xcc2222, // Red color for visibility
-    emissive: 0x220000,
-    emissiveIntensity: 0.3,
-    roughness: 0.3,
-    metalness: 0.5
+    color: 0xff0000, // Bright red color for high visibility
+    emissive: 0x440000,
+    emissiveIntensity: 0.5,
+    roughness: 0.2,
+    metalness: 0.6
   });
   const powerButton = new THREE.Mesh(powerBtnGeometry, powerBtnMaterial);
   // Position in top-right corner of keyboard area, standing upright
-  powerButton.position.set(0.27, 0.032 + 0.0125, -0.10); // Raise by half height
+  // X: near right edge (0.27), Y: on keyboard surface + half height, Z: near top of keyboard
+  powerButton.position.set(0.27, 0.032 + 0.02, -0.08);
   powerButton.name = 'powerButton';
   group.add(powerButton);
 
@@ -1983,7 +1995,10 @@ function addObjectToDesk(type, options = {}) {
   deskObjects.push(object);
   scene.add(object);
 
-  saveState();
+  // Don't save state during loading to avoid overwriting loaded data
+  if (!isLoadingState) {
+    saveState();
+  }
 
   return object;
 }
@@ -2288,7 +2303,8 @@ function updatePhysics() {
     }
 
     // Apply tilt velocity and update tilt
-    if (tilt && tiltVel) {
+    // Skip tilt for pens - they already lie flat and shouldn't tilt
+    if (tilt && tiltVel && obj.userData.type !== 'pen') {
       // Apply tilt velocity
       tilt.x += tiltVel.x;
       tilt.z += tiltVel.z;
@@ -2308,14 +2324,22 @@ function updatePhysics() {
         // Object tips over! Complete the fall
         obj.userData.isFallen = true;
 
-        // Animate falling to the side
-        const fallDirection = { x: tilt.x / totalTilt, z: tilt.z / totalTilt };
-        obj.rotation.x = fallDirection.z * Math.PI / 2;
-        obj.rotation.z = -fallDirection.x * Math.PI / 2;
+        // Skip tip-over rotation for objects that already lie flat (like pens)
+        // These objects have very low height and are already horizontal
+        if (physics.height > 0.1) {
+          // Animate falling to the side
+          const fallDirection = { x: tilt.x / totalTilt, z: tilt.z / totalTilt };
+          obj.rotation.x = fallDirection.z * Math.PI / 2;
+          obj.rotation.z = -fallDirection.x * Math.PI / 2;
 
-        // Adjust position to rest on the side
-        const heightOffset = physics.height * 0.3;
-        obj.position.y = getDeskSurfaceY() + heightOffset;
+          // Adjust position to rest on the side
+          const heightOffset = physics.height * 0.3;
+          obj.position.y = getDeskSurfaceY() + heightOffset;
+        } else {
+          // For flat objects, just keep their current rotation
+          // Position them slightly above desk (their radius)
+          obj.position.y = getDeskSurfaceY() + 0.02;
+        }
 
         // Clear physics state for this object
         physicsState.tiltState.set(obj.userData.id, { x: 0, z: 0 });
@@ -2329,13 +2353,14 @@ function updatePhysics() {
           tilt.z = Math.sign(tilt.z) * physicsState.maxTilt;
         }
 
-        // Apply tilt to object rotation (add to existing rotation for objects like clock)
-        // Store original rotation if not stored
+        // Apply tilt to object rotation (add to existing rotation)
+        // Store original rotations if not stored
         if (obj.userData.baseTiltX === undefined) {
           obj.userData.baseTiltX = obj.rotation.x;
+          obj.userData.baseTiltZ = obj.rotation.z;
         }
         obj.rotation.x = obj.userData.baseTiltX + tilt.z;
-        obj.rotation.z = -tilt.x;
+        obj.rotation.z = obj.userData.baseTiltZ - tilt.x;
       }
     }
   });
@@ -3331,15 +3356,9 @@ function checkPenHolderInsertion(droppedObject) {
     return { inserted: false };
   }
 
-  // Get the pen's tip position in world coordinates
-  // The tip is the anchor point (at local Y=0 in the penBody, after group rotation)
-  // When the pen is lying flat (rotation.z = -PI/2), the tip is offset in world X
+  // Get the pen's position in world coordinates
   const penWorldPos = new THREE.Vector3();
   droppedObject.getWorldPosition(penWorldPos);
-
-  // The pen group's position is where the tip is (after our restructuring)
-  const penTipX = penWorldPos.x;
-  const penTipZ = penWorldPos.z;
 
   // Check all pen holders and empty mugs
   for (const obj of deskObjects) {
@@ -3353,22 +3372,19 @@ function checkPenHolderInsertion(droppedObject) {
     const holderZ = obj.position.z;
     const holderY = obj.position.y;
 
-    // Calculate distance from pen tip to holder center (XZ plane)
-    const dx = penTipX - holderX;
-    const dz = penTipZ - holderZ;
+    // Calculate distance from pen CENTER to holder center (XZ plane)
+    // This is more forgiving than checking the exact tip position
+    const dx = penWorldPos.x - holderX;
+    const dz = penWorldPos.z - holderZ;
     const dist = Math.sqrt(dx * dx + dz * dz);
 
-    // Holder opening radius - use actual holder dimensions
-    // Pen holder cylinder outer radius is 0.12, inner is slightly smaller
-    // For easier insertion, use 0.15 radius detection (within the holder opening)
-    const openingRadius = isHolder ? 0.15 : 0.12;
+    // Use a larger detection radius for easier insertion
+    // The holder inner radius is about 0.1, use 0.2 for forgiving detection
+    const detectionRadius = isHolder ? 0.25 : 0.15;
 
-    // Also check if pen is high enough (tip should be above holder opening)
-    const holderHeight = isHolder ? 0.2 : 0.2; // Approximate holder/mug height
-    const minY = holderY + holderHeight * 0.5; // Pen needs to be above the middle of holder
-
-    // If pen tip is within the holder opening and high enough
-    if (dist < openingRadius && penWorldPos.y > minY) {
+    // Check if pen is near the holder opening (horizontal distance)
+    // The user wants to just place the pen near/over the holder
+    if (dist < detectionRadius) {
       // Find an available slot position
       const slot = findAvailableHolderSlot(obj, droppedObject);
 
@@ -6165,10 +6181,11 @@ function updateBookPages(book) {
     const contentLines = pdfFileName ? [
       `📄 ${pdfFileName}`,
       '',
-      'PDF content placeholder.',
+      'Loading PDF...',
       '',
-      'PDF.js library required',
-      'for actual content.',
+      'If text remains, try:',
+      '1. Reload the page',
+      '2. Re-select the PDF file',
       '',
       `Pages ${pageNum + 1}-${pageNum + 2}`,
       '',
@@ -6799,11 +6816,11 @@ function enterBookReadingMode(book) {
   book.getWorldPosition(bookWorldPos);
 
   // Calculate target camera position - at comfortable reading height above the book
-  // Slightly higher for comfortable viewing, not too close to the book
+  // Higher position for comfortable viewing distance
   const targetCameraPos = new THREE.Vector3(
     bookWorldPos.x,
-    bookWorldPos.y + 0.55, // Higher position for comfortable reading (was 0.35)
-    bookWorldPos.z + 0.45  // Slightly further back for better overview
+    bookWorldPos.y + 0.85, // Higher position for comfortable reading distance
+    bookWorldPos.z + 0.65  // Further back for better overview
   );
 
   // Animate camera to reading position
@@ -7532,6 +7549,7 @@ async function saveState() {
 
 async function loadState() {
   try {
+    isLoadingState = true; // Prevent saveState during loading
     const result = await window.electronAPI.loadState();
 
     if (result.success && result.state) {
@@ -7715,6 +7733,8 @@ async function loadState() {
     // Add default objects on error
     addObjectToDesk('clock', { x: -2, z: -1 });
     addObjectToDesk('lamp', { x: 2, z: -1.2 });
+  } finally {
+    isLoadingState = false; // Re-enable saving
   }
 }
 

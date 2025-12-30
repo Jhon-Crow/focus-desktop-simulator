@@ -96,6 +96,10 @@ function getSharedAudioContext() {
 let draggedPresetType = null;
 let dragPreviewElement = null;
 
+// Drag layer offset - controlled by scroll during drag
+// This adds extra height to make objects stack on top of others
+let dragLayerOffset = 0;
+
 // Examine mode state (bringing object closer to camera)
 let examineState = {
   active: false,
@@ -925,7 +929,7 @@ function createCoffeeMug(options = {}) {
   mug.castShadow = true;
   group.add(mug);
 
-  // Handle - torus arc that sticks out from the mug side
+  // Handle - torus arc that sticks out from the mug side (vertical "C" shape)
   // TorusGeometry(radius, tube, radialSegments, tubularSegments, arc)
   // radius=0.05 makes a smaller arc, tube=0.015 is the thickness
   const handleGeometry = new THREE.TorusGeometry(0.05, 0.015, 8, 16, Math.PI);
@@ -934,13 +938,16 @@ function createCoffeeMug(options = {}) {
     roughness: 0.4
   });
   const handle = new THREE.Mesh(handleGeometry, handleMaterial);
-  // The torus is flat in XY plane by default, arc opens upward
-  // We need to rotate it so the arc is vertical (opens to the side) and attached to the mug
-  // First, rotate around X axis to make the arc plane vertical
-  handle.rotation.x = Math.PI / 2;  // Arc now in XZ plane, opening outward
-  // Position so the inner edge of the arc touches the mug side
-  // Mug outer radius is ~0.12, handle radius is 0.05, so handle center at mug edge + handle radius
-  handle.position.set(0.12 + 0.05, 0.1, 0); // Attach to side of mug
+  // The torus is flat in XY plane by default, arc opens upward (like a smile)
+  // We need to rotate it to make a vertical handle:
+  // 1. Rotate around Z axis by 90 degrees to make it open sideways (in XZ plane)
+  // 2. The handle should be a vertical "C" or "D" shape attached to the mug side
+  handle.rotation.z = Math.PI / 2;  // Rotate 90 degrees around Z - arc opens to the side
+  handle.rotation.y = Math.PI / 2;  // Rotate 90 degrees around Y - orient towards mug
+  // Position so both ends of the arc touch the mug side
+  // Mug outer radius is ~0.12, handle arc radius is 0.05
+  // The handle center should be at mug edge (0.12) + some offset
+  handle.position.set(0.12, 0.1, 0); // Center at mug side, vertically centered on mug
   handle.castShadow = true;
   group.add(handle);
 
@@ -2582,10 +2589,53 @@ function onMouseDown(event) {
 
   if (event.button !== 0) return; // Left click only
 
-  // If in examine mode, LMB click doesn't exit - only LMB held + scroll up exits
-  // LMB is used for holding while scrolling to exit, not for clicking to exit
-  if (examineState.active) {
-    // Don't exit on click, just return to prevent dragging while examining
+  // If in examine mode with LMB click:
+  // - If clicked on the examined object, start dragging it
+  // - Otherwise, don't exit (use LMB + scroll up to exit)
+  if (examineState.active && examineState.object) {
+    // Check if clicking on the examined object to start drag
+    updateMousePosition(event);
+    raycaster.setFromCamera(mouse, camera);
+    const intersects = raycaster.intersectObjects([examineState.object], true);
+
+    if (intersects.length > 0) {
+      // Start dragging from examine mode
+      const object = examineState.object;
+      const originalPosition = examineState.originalPosition.clone();
+
+      // Exit examine mode but don't animate back - start dragging instead
+      object.userData.isExamining = false;
+      object.userData.isReturning = false;
+      object.userData.examineTarget = null;
+      object.userData.examineScaleTarget = undefined;
+      closeInteractionModal();
+
+      // Move object back to desk level for dragging
+      object.position.copy(originalPosition);
+      if (examineState.originalScale) {
+        object.scale.copy(examineState.originalScale);
+      }
+
+      // Clear examine state
+      examineState.active = false;
+      examineState.object = null;
+      examineState.originalPosition = null;
+      examineState.originalRotation = null;
+      examineState.originalScale = null;
+
+      // Start dragging
+      selectedObject = object;
+      isDragging = true;
+      dragLayerOffset = 0;
+
+      // Lift the object
+      object.userData.isLifted = true;
+      object.userData.targetY = object.userData.originalY + CONFIG.physics.liftHeight;
+
+      document.getElementById('customization-panel').classList.remove('open');
+      return;
+    }
+    // If not clicking on the object, don't do anything
     return;
   }
 
@@ -2609,6 +2659,7 @@ function onMouseDown(event) {
 
       selectedObject = object;
       isDragging = true;
+      dragLayerOffset = 0; // Reset layer offset when starting drag
 
       // Clear any examine mode state that might be interfering
       object.userData.examineTarget = null;
@@ -2715,6 +2766,16 @@ function onMouseMove(event) {
     physicsState.lastDragPosition = { x: newX, z: newZ };
     physicsState.lastDragTime = now;
 
+    // Apply resistance when pulling object from under other objects
+    const resistance = calculatePullResistance(selectedObject, selectedObject.position.x, selectedObject.position.z, newX, newZ);
+
+    // If there's resistance, lerp toward target position instead of snapping
+    if (resistance > 0) {
+      const resistanceFactor = Math.max(0.1, 1 - resistance * 0.6);
+      newX = selectedObject.position.x + (newX - selectedObject.position.x) * resistanceFactor;
+      newZ = selectedObject.position.z + (newZ - selectedObject.position.z) * resistanceFactor;
+    }
+
     selectedObject.position.x = newX;
     selectedObject.position.z = newZ;
 
@@ -2773,6 +2834,7 @@ function onMouseUp(event) {
     selectedObject.userData.isLifted = false;
     selectedObject.userData.targetY = dropY;
     isDragging = false;
+    dragLayerOffset = 0; // Reset layer offset when dropping
 
     // Reset drag velocity tracking
     physicsState.lastDragPosition = null;
@@ -2784,6 +2846,7 @@ function onMouseUp(event) {
 }
 
 // Calculate Y position for dragging - allows object to ride on top of ANY object (no weight check)
+// Uses dragLayerOffset to allow user-controlled stacking via scroll
 function calculateDragStackingY(draggedObject, posX, posZ) {
   const draggedRadius = getObjectBounds(draggedObject);
   const baseY = getDeskSurfaceY();
@@ -2791,6 +2854,9 @@ function calculateDragStackingY(draggedObject, posX, posZ) {
 
   // Default Y position (on desk surface)
   let stackY = baseY + draggedBaseOffset;
+
+  // Collect all objects we're overlapping with and their heights
+  const overlappingObjects = [];
 
   // Check all other objects to see if we're above any of them
   deskObjects.forEach(obj => {
@@ -2805,29 +2871,51 @@ function calculateDragStackingY(draggedObject, posX, posZ) {
     const dz = posZ - obj.position.z;
     const horizontalDist = Math.sqrt(dx * dx + dz * dz);
 
-    // Check if objects overlap horizontally
-    const overlapThreshold = (draggedRadius + otherRadius) * 0.7;
+    // Check if objects overlap horizontally (use smaller threshold for thin objects like paper)
+    const collisionHeight = otherPhysics.height || 0.1;
+    const overlapFactor = collisionHeight < 0.05 ? 0.9 : 0.7;  // More lenient for thin objects
+    const overlapThreshold = (draggedRadius + otherRadius) * overlapFactor;
 
     if (horizontalDist < overlapThreshold) {
       // Calculate the top surface of the object below
       const objTopY = obj.position.y + otherPhysics.height;
-
-      // Stack on top of any object we overlap with (no weight restrictions while dragging)
-      stackY = Math.max(stackY, objTopY + draggedBaseOffset);
+      overlappingObjects.push({ obj, topY: objTopY });
     }
   });
+
+  // If dragLayerOffset is positive (user scrolled up), stack on top of overlapping objects
+  // Otherwise, try to stay at desk level or below other objects
+  if (overlappingObjects.length > 0) {
+    if (dragLayerOffset > 0) {
+      // Stack on top - find the highest object and add dragLayerOffset
+      const highestTop = overlappingObjects.reduce((max, o) => Math.max(max, o.topY), 0);
+      stackY = Math.max(stackY, highestTop + draggedBaseOffset + dragLayerOffset * 0.02);
+    } else {
+      // When dragLayerOffset is 0 or negative, dragged object goes under other objects
+      // Just use desk level (objects above will visually overlap it)
+      stackY = baseY + draggedBaseOffset;
+    }
+  }
 
   return stackY;
 }
 
 // Calculate Y position for stacking - checks if the object is above another and returns appropriate Y
+// Takes into account dragLayerOffset to decide if object should stack on top
 function calculateStackingY(droppedObject) {
   const droppedRadius = getObjectBounds(droppedObject);
   const droppedPhysics = getObjectPhysics(droppedObject);
   const baseY = getDeskSurfaceY();
+  const droppedBaseOffset = OBJECT_PHYSICS[droppedObject.userData.type]?.baseOffset || 0;
 
   // Default Y position (on desk surface)
-  let stackY = baseY + (OBJECT_PHYSICS[droppedObject.userData.type]?.baseOffset || 0);
+  let stackY = baseY + droppedBaseOffset;
+
+  // If dragLayerOffset was used, the user explicitly wants to stack on top
+  const wantsToStackOnTop = dragLayerOffset > 0;
+
+  // Collect all overlapping objects
+  const overlappingObjects = [];
 
   // Check all other objects to see if we're above any of them
   deskObjects.forEach(obj => {
@@ -2848,17 +2936,65 @@ function calculateStackingY(droppedObject) {
     if (horizontalDist < overlapThreshold) {
       // Calculate the top surface of the object below
       const objTopY = obj.position.y + otherPhysics.height;
+      overlappingObjects.push({ obj, topY: objTopY });
+    }
+  });
 
-      // If dropping would place us above this object's top, stack on it
-      // No weight restrictions - any object can stack on any other object
-      if (objTopY > stackY - 0.1) {
-        const droppedBaseOffset = OBJECT_PHYSICS[droppedObject.userData.type]?.baseOffset || 0;
-        stackY = Math.max(stackY, objTopY + droppedBaseOffset);
+  // If there are overlapping objects and user scrolled to stack on top
+  if (overlappingObjects.length > 0) {
+    if (wantsToStackOnTop) {
+      // Stack on top of all overlapping objects
+      const highestTop = overlappingObjects.reduce((max, o) => Math.max(max, o.topY), 0);
+      stackY = Math.max(stackY, highestTop + droppedBaseOffset);
+    }
+    // If not wanting to stack on top, just use desk level
+  }
+
+  return stackY;
+}
+
+// Calculate resistance when pulling an object from under other objects
+// Returns a value from 0 (no resistance) to 1 (maximum resistance)
+function calculatePullResistance(draggedObject, currentX, currentZ, targetX, targetZ) {
+  const draggedRadius = getObjectBounds(draggedObject);
+  const draggedPhysics = getObjectPhysics(draggedObject);
+  let totalResistance = 0;
+
+  // Check all other objects to see if dragged object is under any of them
+  deskObjects.forEach(obj => {
+    if (obj === draggedObject) return;
+    if (obj.userData.isFallen) return;
+    if (obj.userData.isLifted) return; // Don't apply resistance from lifted objects
+
+    const otherRadius = getObjectBounds(obj);
+    const otherPhysics = getObjectPhysics(obj);
+
+    // Calculate horizontal distance at current position
+    const dx = currentX - obj.position.x;
+    const dz = currentZ - obj.position.z;
+    const horizontalDist = Math.sqrt(dx * dx + dz * dz);
+
+    // Check if objects overlap horizontally
+    const overlapThreshold = (draggedRadius + otherRadius) * 0.8;
+
+    if (horizontalDist < overlapThreshold) {
+      // Check if dragged object is UNDER this object (based on Y positions)
+      const draggedTop = draggedObject.position.y + draggedPhysics.height;
+      const objBottom = obj.position.y;
+
+      // If the object above us has its bottom at or above our top, we're under it
+      if (objBottom >= draggedTop - 0.1 && objBottom < draggedTop + 0.3) {
+        // Calculate how much we're trying to pull out from under
+        const pullDist = Math.sqrt((targetX - currentX) ** 2 + (targetZ - currentZ) ** 2);
+        // Resistance based on overlap and weight of object on top
+        const overlap = 1 - (horizontalDist / overlapThreshold);
+        const weightFactor = Math.min(1, (otherPhysics.weight || 0.5) * 0.5);
+        totalResistance += overlap * weightFactor;
       }
     }
   });
 
-  return stackY;
+  return Math.min(1, totalResistance);
 }
 
 function onMouseWheel(event) {
@@ -2910,14 +3046,21 @@ function onMouseWheel(event) {
     return;
   }
 
-  // If dragging an object, scroll down enters examine mode (brings object closer)
-  if (isDragging && selectedObject && event.deltaY > 0) {
+  // If dragging an object
+  if (isDragging && selectedObject) {
     event.preventDefault();
-    // Stop dragging and enter examine mode
-    isDragging = false;
-    selectedObject.userData.isLifted = false;
-    selectedObject.userData.targetY = selectedObject.userData.originalY;
-    enterExamineMode(selectedObject);
+
+    if (event.deltaY > 0) {
+      // Scroll down - enter examine mode (brings object closer)
+      isDragging = false;
+      selectedObject.userData.isLifted = false;
+      selectedObject.userData.targetY = selectedObject.userData.originalY;
+      dragLayerOffset = 0; // Reset layer offset
+      enterExamineMode(selectedObject);
+    } else if (event.deltaY < 0) {
+      // Scroll up during drag - increase layer offset to stack on top
+      dragLayerOffset += 5;
+    }
     return;
   }
 
@@ -2990,6 +3133,12 @@ function onMouseWheel(event) {
 
 function onRightClick(event) {
   event.preventDefault();
+  // Don't re-process if customization panel is already open
+  // This prevents contextmenu from closing the panel opened by mousedown
+  const panel = document.getElementById('customization-panel');
+  if (panel && panel.classList.contains('open')) {
+    return;
+  }
   handleRightClick(event);
 }
 
@@ -3102,7 +3251,7 @@ function updateCustomizationPanel(object) {
       dynamicOptions.innerHTML = `
         <div class="customization-group" style="margin-top: 20px; padding-top: 15px; border-top: 1px solid rgba(255,255,255,0.1);">
           <label>BPM: <span id="bpm-display">${object.userData.bpm}</span></label>
-          <input type="range" id="metronome-bpm-edit" min="40" max="220" value="${object.userData.bpm}"
+          <input type="range" id="metronome-bpm-edit" min="10" max="220" value="${object.userData.bpm}"
                  style="width: 100%; margin-top: 8px; accent-color: #4f46e5;">
         </div>
         <div class="customization-group" style="margin-top: 15px;">
@@ -3636,7 +3785,7 @@ function getInteractionContent(object) {
             <div style="color: rgba(255,255,255,0.6); margin-top: 10px;">${object.userData.bpm} BPM</div>
           </div>
           <div class="timer-input-group">
-            <input type="range" id="metronome-bpm" min="40" max="220" value="${object.userData.bpm}"
+            <input type="range" id="metronome-bpm" min="10" max="220" value="${object.userData.bpm}"
                    style="width: 100%; accent-color: #4f46e5;">
           </div>
           <div class="timer-buttons">
@@ -5367,19 +5516,29 @@ function animate() {
     if (obj.userData.type === 'metronome' && obj.userData.isRunning) {
       const pendulum = obj.getObjectByName('pendulum');
       if (pendulum) {
-        // Calculate swing speed based on BPM
-        // One full swing (left to right or right to left) = one beat
+        // Calculate swing timing based on BPM
+        // One beat = one swing to the left + one swing to the right, so 2 direction changes per beat
         const bpm = obj.userData.bpm || 120;
-        const swingSpeed = (bpm / 60) * Math.PI * 0.02; // Speed factor
+        const msPerBeat = 60000 / bpm; // Milliseconds per beat
+        const msPerSwing = msPerBeat / 2; // Each half-swing (tick) takes half a beat
+        const now = Date.now();
+
+        // Initialize last tick time if needed
+        if (!obj.userData.lastTickTime) {
+          obj.userData.lastTickTime = now;
+        }
+
+        const timeSinceLastTick = now - obj.userData.lastTickTime;
         const maxAngle = Math.PI / 6; // ~30 degrees max swing
 
-        // Update pendulum angle
-        obj.userData.pendulumAngle += swingSpeed * obj.userData.pendulumDirection;
+        // Animate smoothly based on time
+        const swingProgress = (timeSinceLastTick % msPerSwing) / msPerSwing;
+        const swingAngle = Math.sin(swingProgress * Math.PI) * maxAngle * obj.userData.pendulumDirection;
 
-        // Reverse direction at extremes
-        if (Math.abs(obj.userData.pendulumAngle) > maxAngle) {
+        // Check if we've completed a half-swing (tick)
+        if (timeSinceLastTick >= msPerSwing) {
+          obj.userData.lastTickTime = now;
           obj.userData.pendulumDirection *= -1;
-          obj.userData.pendulumAngle = maxAngle * obj.userData.pendulumDirection;
 
           // Play tick sound at each swing endpoint (optional - simple click)
           if (obj.userData.tickSound) {
@@ -5393,12 +5552,13 @@ function animate() {
               osc.type = 'square';
               gain.gain.value = 0.1;
               osc.start();
-              osc.stop(audioCtx.currentTime + 0.02); // Use proper scheduling instead of setTimeout
+              osc.stop(audioCtx.currentTime + 0.02);
             } catch (e) {}
           }
         }
 
-        pendulum.rotation.z = obj.userData.pendulumAngle;
+        pendulum.rotation.z = swingAngle;
+        obj.userData.pendulumAngle = swingAngle;
       }
     }
 

@@ -4,9 +4,14 @@ const path = require('path');
 let mainWindow;
 
 function createWindow() {
+  // Get primary display dimensions for fullscreen window mode
+  const { screen } = require('electron');
+  const primaryDisplay = screen.getPrimaryDisplay();
+  const { width, height } = primaryDisplay.workAreaSize;
+
   mainWindow = new BrowserWindow({
-    width: 1280,
-    height: 720,
+    width: width,
+    height: height,
     minWidth: 800,
     minHeight: 600,
     title: 'Focus Desktop Simulator',
@@ -22,7 +27,9 @@ function createWindow() {
   mainWindow.loadFile(path.join(__dirname, 'index.html'));
 
   // Show window when ready to prevent visual flash
+  // Maximize the window for fullscreen mode
   mainWindow.once('ready-to-show', () => {
+    mainWindow.maximize();
     mainWindow.show();
   });
 

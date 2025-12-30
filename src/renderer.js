@@ -143,7 +143,11 @@ let bookReadingState = {
   originalCameraYaw: null,
   originalCameraPitch: null,
   middleMouseDownTime: 0,
-  holdTimeout: null
+  holdTimeout: null,
+  // Zoom and pan controls for reading mode
+  zoomDistance: 0.85, // Distance from book (Y offset)
+  panOffsetX: 0,      // Pan offset parallel to book
+  panOffsetZ: 0       // Pan offset forward/backward
 };
 
 // Double-click tracking for laptop desktop
@@ -2797,6 +2801,74 @@ function setupEventListeners() {
         }
       }
     }
+
+    // WASD movement controls
+    const wasdKey = e.code;
+    if (wasdKey === 'KeyW' || wasdKey === 'KeyA' || wasdKey === 'KeyS' || wasdKey === 'KeyD') {
+      // Don't process if typing in an input field
+      if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
+
+      const moveSpeed = 0.1;
+
+      // Book reading mode - pan parallel to text
+      if (bookReadingState.active && bookReadingState.book) {
+        e.preventDefault();
+        const book = bookReadingState.book;
+        const bookWorldPos = new THREE.Vector3();
+        book.getWorldPosition(bookWorldPos);
+
+        if (wasdKey === 'KeyW') bookReadingState.panOffsetZ -= moveSpeed;
+        if (wasdKey === 'KeyS') bookReadingState.panOffsetZ += moveSpeed;
+        if (wasdKey === 'KeyA') bookReadingState.panOffsetX -= moveSpeed;
+        if (wasdKey === 'KeyD') bookReadingState.panOffsetX += moveSpeed;
+
+        // Clamp pan offsets to reasonable limits
+        bookReadingState.panOffsetX = Math.max(-1.5, Math.min(1.5, bookReadingState.panOffsetX));
+        bookReadingState.panOffsetZ = Math.max(-1.5, Math.min(1.5, bookReadingState.panOffsetZ));
+
+        // Update camera position
+        camera.position.set(
+          bookWorldPos.x + bookReadingState.panOffsetX,
+          bookWorldPos.y + bookReadingState.zoomDistance,
+          bookWorldPos.z + 0.65 + bookReadingState.panOffsetZ
+        );
+        return;
+      }
+
+      // Normal mode and inspection mode - camera movement
+      if (!examineState.active || (examineState.active && examineState.object)) {
+        e.preventDefault();
+        const cameraMoveSpeed = 0.15;
+
+        // Get camera direction for forward/back movement
+        const direction = new THREE.Vector3();
+        camera.getWorldDirection(direction);
+        direction.y = 0; // Keep movement on horizontal plane
+        direction.normalize();
+
+        // Get right vector for strafe movement
+        const right = new THREE.Vector3();
+        right.crossVectors(direction, new THREE.Vector3(0, 1, 0)).normalize();
+
+        if (wasdKey === 'KeyW') {
+          camera.position.addScaledVector(direction, cameraMoveSpeed);
+        }
+        if (wasdKey === 'KeyS') {
+          camera.position.addScaledVector(direction, -cameraMoveSpeed);
+        }
+        if (wasdKey === 'KeyA') {
+          camera.position.addScaledVector(right, -cameraMoveSpeed);
+        }
+        if (wasdKey === 'KeyD') {
+          camera.position.addScaledVector(right, cameraMoveSpeed);
+        }
+
+        // Optional: clamp camera position to reasonable bounds
+        camera.position.x = Math.max(-8, Math.min(8, camera.position.x));
+        camera.position.z = Math.max(-5, Math.min(12, camera.position.z));
+        camera.position.y = Math.max(1, Math.min(8, camera.position.y));
+      }
+    }
   });
 
   // Window resize
@@ -3853,6 +3925,27 @@ function calculatePullResistance(draggedObject, currentX, currentZ, targetX, tar
 
 function onMouseWheel(event) {
   updateMousePosition(event);
+
+  // If in book reading mode: scroll zooms in/out on the book (no rotation)
+  if (bookReadingState.active && bookReadingState.book) {
+    event.preventDefault();
+
+    // Zoom: scroll up = zoom in (closer), scroll down = zoom out (further)
+    const zoomDelta = event.deltaY > 0 ? 0.08 : -0.08;
+    bookReadingState.zoomDistance = Math.max(0.3, Math.min(2.0, bookReadingState.zoomDistance + zoomDelta));
+
+    // Update camera position
+    const book = bookReadingState.book;
+    const bookWorldPos = new THREE.Vector3();
+    book.getWorldPosition(bookWorldPos);
+
+    camera.position.set(
+      bookWorldPos.x + bookReadingState.panOffsetX,
+      bookWorldPos.y + bookReadingState.zoomDistance,
+      bookWorldPos.z + 0.65 + bookReadingState.panOffsetZ
+    );
+    return;
+  }
 
   // If in examine mode: scroll rotates object, LMB held + scroll UP exits, Shift+scroll scales
   if (examineState.active && examineState.object) {
@@ -6294,6 +6387,15 @@ function setupBookHandlers(object) {
 }
 
 async function loadPDFToBook(book, file) {
+  // Prevent multiple simultaneous loads
+  if (book.userData.isLoadingPdf) {
+    console.log('PDF already loading, skipping duplicate load request');
+    return;
+  }
+
+  // Set loading flag immediately
+  book.userData.isLoadingPdf = true;
+
   // Use PDF.js to load and render the PDF
   const reader = new FileReader();
 
@@ -6460,8 +6562,9 @@ async function updateBookPagesWithPDF(book) {
   }
 
   // Optimized resolution for PDF text (balanced performance vs quality)
-  const canvasWidth = 1024;
-  const canvasHeight = 1448;
+  // Reduced from 1024x1448 to 768x1086 for better performance
+  const canvasWidth = 768;
+  const canvasHeight = 1086;
 
   // Render left page (current page)
   const leftPageNum = book.userData.currentPage * 2 + 1; // 1-indexed
@@ -6552,10 +6655,11 @@ function updateBookPages(book) {
   const rightPage = openGroup.getObjectByName('rightPageSurface');
 
   // Optimized resolution for placeholder text (balanced performance vs quality)
-  const canvasWidth = 1024;
-  const canvasHeight = 1448;
-  const margin = 80;
-  const lineHeight = 56;
+  // Reduced from 1024x1448 to 768x1086 for better performance
+  const canvasWidth = 768;
+  const canvasHeight = 1086;
+  const margin = 60;
+  const lineHeight = 42;
 
   // Check if PDF is loading - show animated ellipsis
   const isLoading = book.userData.isLoadingPdf;
@@ -6577,21 +6681,21 @@ function updateBookPages(book) {
     ctx.fillStyle = '#333';
     const pageNum = book.userData.currentPage * 2;
 
-    // Page number header - scaled for 2x resolution
-    ctx.font = 'bold 56px Georgia, serif';
+    // Page number header - scaled for optimized resolution
+    ctx.font = 'bold 42px Georgia, serif';
     ctx.textAlign = 'center';
-    ctx.fillText(`Page ${pageNum + 1}`, canvas.width / 2, 120);
+    ctx.fillText(`Page ${pageNum + 1}`, canvas.width / 2, 90);
 
     // Divider line
     ctx.strokeStyle = '#ccc';
     ctx.lineWidth = 2;
     ctx.beginPath();
-    ctx.moveTo(margin, 160);
-    ctx.lineTo(canvas.width - margin, 160);
+    ctx.moveTo(margin, 120);
+    ctx.lineTo(canvas.width - margin, 120);
     ctx.stroke();
 
-    // Content area - clear font for 2x resolution
-    ctx.font = '48px Georgia, serif';
+    // Content area - clear font for optimized resolution
+    ctx.font = '36px Georgia, serif';
     ctx.textAlign = 'left';
 
     const pdfFileName = book.userData.pdfPath
@@ -7176,14 +7280,14 @@ function animatePageTurn(book, direction) {
     const nextPage2 = (book.userData.currentPage + direction) * 2 + 2;
     const pdfDoc = book.userData.pdfDocument;
 
-    // Pre-render in background (using optimized resolution)
+    // Pre-render in background (using optimized resolution 768x1086)
     if (nextPage1 > 0 && nextPage1 <= pdfDoc.numPages && !book.userData.renderedPages[nextPage1]) {
-      renderPDFPageToCanvas(pdfDoc, nextPage1, 1024, 1448).then(canvas => {
+      renderPDFPageToCanvas(pdfDoc, nextPage1, 768, 1086).then(canvas => {
         if (canvas) book.userData.renderedPages[nextPage1] = canvas;
       });
     }
     if (nextPage2 > 0 && nextPage2 <= pdfDoc.numPages && !book.userData.renderedPages[nextPage2]) {
-      renderPDFPageToCanvas(pdfDoc, nextPage2, 1024, 1448).then(canvas => {
+      renderPDFPageToCanvas(pdfDoc, nextPage2, 768, 1086).then(canvas => {
         if (canvas) book.userData.renderedPages[nextPage2] = canvas;
       });
     }
@@ -7211,6 +7315,13 @@ function enterLaptopZoomMode(object) {
   laptopCursorState.y = 192;
   laptopCursorState.visible = object.userData.isOn && !object.userData.isBooting;
   laptopCursorState.targetLaptop = object;
+
+  // If laptop is on, exit pointer lock to show system cursor for screen interaction
+  if (object.userData.isOn && !object.userData.isBooting) {
+    if (document.pointerLockElement) {
+      document.exitPointerLock();
+    }
+  }
 
   // Get screen position in world coordinates
   const screenGroup = object.getObjectByName('screenGroup');
@@ -7256,16 +7367,8 @@ function enterLaptopZoomMode(object) {
 
   // When entering laptop zoom mode:
   // - If laptop is off: just zoom in, user can click power button to turn on
-  // - If laptop is on with saved editor content: open the editor directly
   // - Otherwise: just zoom in, user sees the desktop and can interact
-  setTimeout(() => {
-    if (object.userData.isOn && object.userData.screenState === 'desktop' &&
-        object.userData.editorContent && object.userData.editorContent.trim().length > 0) {
-      // Has saved editor content, go directly to editor
-      openMarkdownEditor(object);
-    }
-    // No dialog opened - user can see the screen and interact directly
-  }, 550);
+  // Note: Editor is NOT auto-opened even if there's saved content - user must click Obsidian icon
 }
 
 function exitLaptopZoomMode(object) {
@@ -7327,6 +7430,14 @@ function exitLaptopZoomMode(object) {
           cameraLookState.pitch = object.userData.originalCameraPitch;
         }
         updateCameraLook();
+
+        // Re-acquire pointer lock after exiting laptop zoom mode
+        const container = document.getElementById('canvas-container');
+        if (container && !document.pointerLockElement) {
+          setTimeout(() => {
+            container.requestPointerLock();
+          }, 100);
+        }
       }
     }
 
@@ -7344,6 +7455,11 @@ function enterBookReadingMode(book) {
   bookReadingState.active = true;
   bookReadingState.book = book;
 
+  // Reset zoom and pan offsets
+  bookReadingState.zoomDistance = 0.85;
+  bookReadingState.panOffsetX = 0;
+  bookReadingState.panOffsetZ = 0;
+
   // Store original camera state
   bookReadingState.originalCameraPos = camera.position.clone();
   bookReadingState.originalCameraYaw = cameraLookState.yaw;
@@ -7357,7 +7473,7 @@ function enterBookReadingMode(book) {
   // Higher position for comfortable viewing distance
   const targetCameraPos = new THREE.Vector3(
     bookWorldPos.x,
-    bookWorldPos.y + 0.85, // Higher position for comfortable reading distance
+    bookWorldPos.y + bookReadingState.zoomDistance, // Use zoomDistance for reading
     bookWorldPos.z + 0.65  // Further back for better overview
   );
 
@@ -7464,8 +7580,10 @@ function createLaptopDesktopTexture(laptop, hasNote = false) {
   }
 
   // Draw Obsidian icon (purple/violet gemstone shape)
-  const iconX = 60;
-  const iconY = 60;
+  // Use saved icon positions if available
+  const iconPos = laptop.userData.iconPositions || { obsidian: { x: 60, y: 60 } };
+  const iconX = iconPos.obsidian?.x || 60;
+  const iconY = iconPos.obsidian?.y || 60;
   const iconSize = 48;
 
   // Icon background (darker circle)
@@ -8783,10 +8901,11 @@ async function loadState() {
                   obj.userData.isOn = true;
                   obj.userData.isBooting = false;
                   obj.userData.screenState = objData.screenState || 'desktop';
-                  // Update screen to show desktop
+                  // Update screen to show desktop with persisted state (icons, taskbar, start menu)
                   const screen = obj.getObjectByName('screen');
                   if (screen) {
-                    updateLaptopDesktop(obj);
+                    // Use the persisted state renderer for proper icon positions and taskbar
+                    updateLaptopDesktopWithPersistedState(obj);
                   }
                   // Update power LED to show on state
                   const powerLed = obj.getObjectByName('powerLed');

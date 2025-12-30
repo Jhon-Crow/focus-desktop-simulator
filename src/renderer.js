@@ -230,7 +230,7 @@ let cameraLookState = {
   // Initial angles calculated from CONFIG.camera.lookAt control point
   yaw: DEFAULT_CAMERA_ANGLES.yaw,     // Horizontal rotation - facing the desk
   pitch: DEFAULT_CAMERA_ANGLES.pitch, // Vertical rotation - looking down at desk surface
-  minPitch: -1.32,   // Looking down limit - extended by ~10 degrees more (~76 degrees total)
+  minPitch: -1.57,   // Looking down limit - ~90 degrees total (extended by ~15 degrees more)
   maxPitch: 0.42,    // Looking up limit - extended by ~10 degrees more (~24 degrees total)
   // Yaw limits centered around the default yaw (±1.40 radians ~ ±80 degrees)
   // Extended by 10 degrees to reach all desk corners
@@ -1465,7 +1465,7 @@ function createBooks(options = {}) {
     // Word wrap for long titles with padding
     // Also supports explicit line breaks entered by user
     const paddingX = 30; // Horizontal padding on each side
-    const paddingY = 15; // Vertical padding top/bottom
+    const paddingY = 35; // Vertical padding top/bottom (increased from 15 for more spacing)
     const maxWidth = width - paddingX * 2;
     const maxHeight = height - paddingY * 2;
 
@@ -1507,8 +1507,9 @@ function createBooks(options = {}) {
   };
 
   // Cover title - doubled font size from 32 to 64 for better readability
-  const coverTitleGeometry = new THREE.PlaneGeometry(0.22, 0.08);
-  const coverTitleTexture = createTitleTexture(group.userData.bookTitle, 320, 116, 64);
+  // Increased vertical size from 0.08 to 0.12 for more top/bottom padding
+  const coverTitleGeometry = new THREE.PlaneGeometry(0.22, 0.12);
+  const coverTitleTexture = createTitleTexture(group.userData.bookTitle, 320, 174, 64);
   const coverTitleMaterial = new THREE.MeshStandardMaterial({
     map: coverTitleTexture,
     roughness: 0.5
@@ -2788,63 +2789,20 @@ function setupEventListeners() {
       }
     }
 
-    // Arrow keys for book page navigation
-    if ((e.key === 'ArrowLeft' || e.key === 'ArrowRight') && !e.altKey && !e.ctrlKey) {
-      // Check if we're examining a book or have a book modal open
-      let bookObject = null;
-      if (examineState.active && examineState.object && examineState.object.userData.type === 'books') {
-        bookObject = examineState.object;
-      } else if (interactionObject && interactionObject.userData.type === 'books') {
-        bookObject = interactionObject;
-      } else {
-        // Also check if crosshair is aimed at a book (raycast from center of screen)
-        const centerMouse = new THREE.Vector2(0, 0);
-        raycaster.setFromCamera(centerMouse, camera);
-        const intersects = raycaster.intersectObjects(deskObjects, true);
-        for (const hit of intersects) {
-          const obj = getParentDeskObject(hit.object);
-          if (obj && obj.userData.type === 'books' && obj.userData.isOpen) {
-            bookObject = obj;
-            break;
-          }
-        }
-      }
-
-      if (bookObject && bookObject.userData.isOpen) {
-        e.preventDefault();
-        // If no PDF is loaded, use a default number of pages for the animation
-        const totalPages = bookObject.userData.totalPages || 10;
-        if (e.key === 'ArrowLeft' && bookObject.userData.currentPage > 0) {
-          // Previous page with animation
-          animatePageTurn(bookObject, -1);
-        } else if (e.key === 'ArrowRight' && bookObject.userData.currentPage < totalPages - 1) {
-          // Next page with animation
-          // Ensure totalPages is set for the animation
-          if (!bookObject.userData.totalPages) bookObject.userData.totalPages = 10;
-          animatePageTurn(bookObject, 1);
-        }
-      }
-    }
-
-    // WASD movement controls
-    const wasdKey = e.code;
-    if (wasdKey === 'KeyW' || wasdKey === 'KeyA' || wasdKey === 'KeyS' || wasdKey === 'KeyD') {
-      // Don't process if typing in an input field
-      if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
-
-      const moveSpeed = 0.1;
-
-      // Book reading mode - pan parallel to text
+    // Arrow keys for book - either panning (in reading mode) or page navigation
+    if ((e.key === 'ArrowLeft' || e.key === 'ArrowRight' || e.key === 'ArrowUp' || e.key === 'ArrowDown') && !e.altKey && !e.ctrlKey) {
+      // In reading mode, arrow keys control panning (not page turning)
       if (bookReadingState.active && bookReadingState.book) {
         e.preventDefault();
         const book = bookReadingState.book;
         const bookWorldPos = new THREE.Vector3();
         book.getWorldPosition(bookWorldPos);
 
-        if (wasdKey === 'KeyW') bookReadingState.panOffsetZ -= moveSpeed;
-        if (wasdKey === 'KeyS') bookReadingState.panOffsetZ += moveSpeed;
-        if (wasdKey === 'KeyA') bookReadingState.panOffsetX -= moveSpeed;
-        if (wasdKey === 'KeyD') bookReadingState.panOffsetX += moveSpeed;
+        const moveSpeed = 0.1;
+        if (e.key === 'ArrowUp') bookReadingState.panOffsetZ -= moveSpeed;
+        if (e.key === 'ArrowDown') bookReadingState.panOffsetZ += moveSpeed;
+        if (e.key === 'ArrowLeft') bookReadingState.panOffsetX -= moveSpeed;
+        if (e.key === 'ArrowRight') bookReadingState.panOffsetX += moveSpeed;
 
         // Clamp pan offsets to reasonable limits
         bookReadingState.panOffsetX = Math.max(-1.5, Math.min(1.5, bookReadingState.panOffsetX));
@@ -2858,6 +2816,53 @@ function setupEventListeners() {
         );
         return;
       }
+
+      // Page navigation (only ArrowLeft/ArrowRight, not in reading mode)
+      if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
+        // Check if we're examining a book or have a book modal open
+        let bookObject = null;
+        if (examineState.active && examineState.object && examineState.object.userData.type === 'books') {
+          bookObject = examineState.object;
+        } else if (interactionObject && interactionObject.userData.type === 'books') {
+          bookObject = interactionObject;
+        } else {
+          // Also check if crosshair is aimed at a book (raycast from center of screen)
+          const centerMouse = new THREE.Vector2(0, 0);
+          raycaster.setFromCamera(centerMouse, camera);
+          const intersects = raycaster.intersectObjects(deskObjects, true);
+          for (const hit of intersects) {
+            const obj = getParentDeskObject(hit.object);
+            if (obj && obj.userData.type === 'books' && obj.userData.isOpen) {
+              bookObject = obj;
+              break;
+            }
+          }
+        }
+
+        if (bookObject && bookObject.userData.isOpen) {
+          e.preventDefault();
+          // If no PDF is loaded, use a default number of pages for the animation
+          const totalPages = bookObject.userData.totalPages || 10;
+          if (e.key === 'ArrowLeft' && bookObject.userData.currentPage > 0) {
+            // Previous page with animation
+            animatePageTurn(bookObject, -1);
+          } else if (e.key === 'ArrowRight' && bookObject.userData.currentPage < totalPages - 1) {
+            // Next page with animation
+            // Ensure totalPages is set for the animation
+            if (!bookObject.userData.totalPages) bookObject.userData.totalPages = 10;
+            animatePageTurn(bookObject, 1);
+          }
+        }
+      }
+    }
+
+    // WASD movement controls
+    const wasdKey = e.code;
+    if (wasdKey === 'KeyW' || wasdKey === 'KeyA' || wasdKey === 'KeyS' || wasdKey === 'KeyD') {
+      // Don't process if typing in an input field
+      if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
+
+      const moveSpeed = 0.1;
 
       // Normal mode and inspection mode - camera movement
       if (!examineState.active || (examineState.active && examineState.object)) {
@@ -3139,6 +3144,18 @@ function onMouseDown(event) {
   // Middle mouse button - quick interaction or hold for book reading mode
   if (event.button === 1) {
     event.preventDefault();
+
+    // If already in reading mode, MMB starts exit on hold
+    if (bookReadingState.active) {
+      bookReadingState.middleMouseDownTime = Date.now();
+      bookReadingState.holdTimeout = setTimeout(() => {
+        // Exit reading mode after holding for 300ms
+        exitBookReadingMode();
+        bookReadingState.holdTimeout = null;
+      }, 300);
+      return;
+    }
+
     updateMousePosition(event);
 
     raycaster.setFromCamera(mouse, camera);
@@ -3390,6 +3407,16 @@ function onMouseDown(event) {
 
       // Close customization panel when starting drag
       document.getElementById('customization-panel').classList.remove('open');
+    }
+  } else {
+    // LMB clicked on empty space - close customization panel (exit edit mode)
+    const panel = document.getElementById('customization-panel');
+    if (panel && panel.classList.contains('open')) {
+      panel.classList.remove('open');
+      selectedObject = null;
+      // Clear dynamic options
+      const dynamicOptions = document.getElementById('object-specific-options');
+      if (dynamicOptions) dynamicOptions.innerHTML = '';
     }
   }
 }
@@ -4130,9 +4157,9 @@ function handleRightClick(event) {
   raycaster.setFromCamera(raycastMouse, camera);
   const intersects = raycaster.intersectObjects(deskObjects, true);
 
-  // Filter intersections to only consider objects within a reasonable distance (5 units)
-  // This prevents accidentally selecting objects that are far from the camera center
-  const validIntersects = intersects.filter(hit => hit.distance < 5);
+  // Filter intersections to only consider objects within a reasonable distance (10 units)
+  // Increased from 5 to 10 to ensure objects at the edge of the desk are detected
+  const validIntersects = intersects.filter(hit => hit.distance < 10);
 
   if (validIntersects.length > 0) {
     let object = validIntersects[0].object;
@@ -4169,19 +4196,23 @@ function handleRightClick(event) {
       updateCustomizationPanel(object);
     }
   } else {
-    // RMB on empty space - open left sidebar menu
-    document.getElementById('customization-panel').classList.remove('open');
-    selectedObject = null;
-    // Clear dynamic options
-    const dynamicOptions = document.getElementById('object-specific-options');
-    if (dynamicOptions) dynamicOptions.innerHTML = '';
+    // RMB on empty space - only open left sidebar if right sidebar is not open
+    // This ensures right sidebar (customization panel) has priority
+    const customizationPanel = document.getElementById('customization-panel');
+    if (!customizationPanel.classList.contains('open')) {
+      // Clear any selected object
+      selectedObject = null;
+      // Clear dynamic options
+      const dynamicOptions = document.getElementById('object-specific-options');
+      if (dynamicOptions) dynamicOptions.innerHTML = '';
 
-    // Open left sidebar menu
-    const menu = document.getElementById('menu');
-    menu.classList.add('open');
-    // Exit pointer lock when opening menu so cursor is visible
-    if (document.pointerLockElement) {
-      document.exitPointerLock();
+      // Open left sidebar menu
+      const menu = document.getElementById('menu');
+      menu.classList.add('open');
+      // Exit pointer lock when opening menu so cursor is visible
+      if (document.pointerLockElement) {
+        document.exitPointerLock();
+      }
     }
   }
 }
@@ -5041,9 +5072,26 @@ function setupBookCustomizationHandlers(object) {
             if (!object.userData.originalCoverMaterial) {
               object.userData.originalCoverMaterial = cover.material.clone();
             }
-            // Apply the image texture to the top face
-            cover.material.map = texture;
-            cover.material.needsUpdate = true;
+            // For BoxGeometry, face order is: +x, -x, +y (top), -y, +z, -z
+            // Create material array with cover image on top face (+y, index 2)
+            const baseMaterial = new THREE.MeshStandardMaterial({
+              color: new THREE.Color(object.userData.mainColor),
+              roughness: 0.7
+            });
+            const topMaterial = new THREE.MeshStandardMaterial({
+              map: texture,
+              roughness: 0.5
+            });
+            // Apply 6 materials - one for each face of the box
+            cover.material = [
+              baseMaterial, // +x
+              baseMaterial, // -x
+              topMaterial,  // +y (top face - this gets the cover image)
+              baseMaterial, // -y
+              baseMaterial, // +z
+              baseMaterial  // -z
+            ];
+            cover.material.forEach(m => m.needsUpdate = true);
           }
         }
         object.userData.coverImageDataUrl = dataUrl;
@@ -5087,6 +5135,17 @@ function setupBookCustomizationHandlers(object) {
             // Convert to data URL and apply
             const dataUrl = canvas.toDataURL('image/png');
             applyCoverImage(dataUrl);
+
+            // Mark that first page is used as cover - skip it in content
+            object.userData.firstPageAsCover = true;
+            // Reset to page 0 and update content (which now skips page 1)
+            object.userData.currentPage = 0;
+            // Clear cached pages to force re-render with offset
+            object.userData.renderedPages = {};
+            if (object.userData.isOpen) {
+              updateBookPagesWithPDF(object);
+            }
+            saveState();
           } catch (error) {
             console.error('Error rendering PDF page for cover:', error);
           }
@@ -5096,19 +5155,29 @@ function setupBookCustomizationHandlers(object) {
 
     if (coverClearBtn) {
       coverClearBtn.addEventListener('click', () => {
-        // Restore original material
+        // Restore original single material (no image)
         const closedGroup = object.getObjectByName('closedBook');
         if (closedGroup) {
           const cover = closedGroup.getObjectByName('cover');
-          if (cover && object.userData.originalCoverMaterial) {
-            cover.material = object.userData.originalCoverMaterial.clone();
-            cover.material.needsUpdate = true;
-          } else if (cover) {
-            cover.material.map = null;
+          if (cover) {
+            // Create a fresh single material for all faces
+            const baseMaterial = new THREE.MeshStandardMaterial({
+              color: new THREE.Color(object.userData.mainColor),
+              roughness: 0.7
+            });
+            cover.material = baseMaterial;
             cover.material.needsUpdate = true;
           }
         }
         object.userData.coverImageDataUrl = null;
+        object.userData.originalCoverMaterial = null;
+        // Also clear the first page as cover flag
+        object.userData.firstPageAsCover = false;
+        // Clear cached pages to force re-render without offset
+        object.userData.renderedPages = {};
+        if (object.userData.isOpen) {
+          updateBookPagesWithPDF(object);
+        }
         saveState();
         updateCustomizationPanel(object);
       });
@@ -6657,6 +6726,9 @@ async function loadPDFToBook(book, file) {
       book.userData.renderedPages = {}; // Cache for rendered page canvases
       book.userData.isLoadingPdf = false; // Clear loading flag
 
+      // Update book thickness based on page count
+      updateBookThickness(book);
+
       // Store PDF as base64 data URL for persistence after reload
       const base64Reader = new FileReader();
       base64Reader.onload = () => {
@@ -6744,6 +6816,9 @@ async function loadPDFFromDataUrl(book, dataUrl) {
     book.userData.loadingProgress = 100; // Mark as complete
     book.userData.pdfDataUrl = dataUrl; // Keep the data URL
 
+    // Update book thickness based on page count
+    updateBookThickness(book);
+
     // Update pages if book is open
     if (book.userData.isOpen) {
       await updateBookPagesWithPDF(book);
@@ -6819,8 +6894,11 @@ async function updateBookPagesWithPDF(book) {
   const canvasWidth = book.userData.pdfResolution || 768;
   const canvasHeight = Math.round(canvasWidth * 1.414); // A4 aspect ratio
 
+  // Page offset: if first page is used as cover, skip it in content
+  const pageOffset = book.userData.firstPageAsCover ? 1 : 0;
+
   // Render left page (current page)
-  const leftPageNum = book.userData.currentPage * 2 + 1; // 1-indexed
+  const leftPageNum = book.userData.currentPage * 2 + 1 + pageOffset; // 1-indexed with offset
   if (leftPage && leftPageNum <= pdfDoc.numPages) {
     let canvas = book.userData.renderedPages[leftPageNum];
     if (!canvas) {
@@ -6846,7 +6924,7 @@ async function updateBookPagesWithPDF(book) {
   }
 
   // Render right page (current page + 1)
-  const rightPageNum = book.userData.currentPage * 2 + 2; // 1-indexed
+  const rightPageNum = book.userData.currentPage * 2 + 2 + pageOffset; // 1-indexed with offset
   if (rightPage && rightPageNum <= pdfDoc.numPages) {
     let canvas = book.userData.renderedPages[rightPageNum];
     if (!canvas) {
@@ -6892,6 +6970,58 @@ function createBlankPageTexture(pageMesh, width, height, pageNum) {
   texture.anisotropy = 16;
   pageMesh.material.map = texture;
   pageMesh.material.needsUpdate = true;
+}
+
+// Update book thickness based on page count
+function updateBookThickness(book) {
+  const totalPages = book.userData.totalPages || 10;
+  // Base thickness for 100 pages, scale proportionally
+  // Min thickness 0.02, max thickness 0.12 (for ~500+ pages)
+  const baseThickness = 0.04;
+  const thicknessPerPage = 0.0002; // Each page adds 0.2mm
+  const calculatedThickness = Math.max(0.02, Math.min(0.12, baseThickness + (totalPages * thicknessPerPage)));
+
+  const closedGroup = book.getObjectByName('closedBook');
+  if (closedGroup) {
+    const cover = closedGroup.getObjectByName('cover');
+    const pages = closedGroup.children.find(c => c !== cover && c.name !== 'coverTitle' && c.geometry && c.geometry.type === 'BoxGeometry' && c.material && c.material.color && c.material.color.r > 0.9);
+    const spine = closedGroup.children.find(c => c.name !== 'cover' && c.name !== 'coverTitle' && c.geometry && c.geometry.type === 'BoxGeometry' && c.position.x < -0.1);
+
+    if (cover) {
+      // Update cover geometry height
+      const oldGeo = cover.geometry;
+      cover.geometry = new THREE.BoxGeometry(0.28, calculatedThickness, 0.38);
+      oldGeo.dispose();
+      cover.position.y = calculatedThickness / 2;
+    }
+
+    if (pages) {
+      // Update pages geometry height (slightly less than cover)
+      const oldGeo = pages.geometry;
+      const pagesThickness = calculatedThickness - 0.005;
+      pages.geometry = new THREE.BoxGeometry(0.26, pagesThickness, 0.36);
+      oldGeo.dispose();
+      pages.position.y = calculatedThickness / 2;
+    }
+
+    if (spine) {
+      // Update spine geometry height
+      const oldGeo = spine.geometry;
+      const spineThickness = calculatedThickness + 0.005;
+      spine.geometry = new THREE.BoxGeometry(0.02, spineThickness, 0.38);
+      oldGeo.dispose();
+      spine.position.y = calculatedThickness / 2;
+    }
+
+    // Update cover title position
+    const coverTitle = closedGroup.getObjectByName('coverTitle');
+    if (coverTitle) {
+      coverTitle.position.y = calculatedThickness + 0.001;
+    }
+  }
+
+  // Store thickness for reference
+  book.userData.bookThickness = calculatedThickness;
 }
 
 function updateBookPages(book) {
@@ -7903,8 +8033,10 @@ function createLaptopDesktopTexture(laptop, hasNote = false) {
   ctx.textAlign = 'center';
   ctx.fillText('Obsidian', iconX, iconY + iconSize / 2 + 16);
 
-  // If there's a saved note, show an open editor window
-  if (hasNote && laptop.userData.editorContent) {
+  // Show open editor window only if editorWasOpen flag is true
+  // (This means user exited laptop mode with editor still open)
+  const showEditorWindow = laptop.userData.editorWasOpen && hasNote && laptop.userData.editorContent;
+  if (showEditorWindow) {
     // Large window covering most of the screen (like a real open app)
     const winWidth = 380;
     const winHeight = 260;
@@ -8520,8 +8652,9 @@ function updateLaptopDesktopWithPersistedState(laptop) {
   ctx.textAlign = 'center';
   ctx.fillText('Obsidian', iconX, iconY + iconSize / 2 + 16);
 
-  // Draw editor window if editor was open (even if empty) or has note content
-  const showEditorWindow = laptop.userData.editorWasOpen || hasNote;
+  // Draw editor window only if editorWasOpen flag is true
+  // (This means user exited laptop mode with editor still open)
+  const showEditorWindow = laptop.userData.editorWasOpen;
   if (showEditorWindow) {
     const winWidth = 380;
     const winHeight = 260;
@@ -8934,6 +9067,10 @@ async function saveState() {
           if (obj.userData.coverImageDataUrl) {
             data.coverImageDataUrl = obj.userData.coverImageDataUrl;
           }
+          // Save first page as cover flag
+          if (obj.userData.firstPageAsCover) {
+            data.firstPageAsCover = true;
+          }
           data.currentPage = obj.userData.currentPage || 0;
           break;
         case 'coffee':
@@ -9132,14 +9269,33 @@ async function loadState() {
                     if (closedGroup) {
                       const cover = closedGroup.getObjectByName('cover');
                       if (cover) {
-                        if (!obj.userData.originalCoverMaterial) {
-                          obj.userData.originalCoverMaterial = cover.material.clone();
-                        }
-                        cover.material.map = texture;
-                        cover.material.needsUpdate = true;
+                        // For BoxGeometry, face order is: +x, -x, +y (top), -y, +z, -z
+                        // Create material array with cover image on top face (+y, index 2)
+                        const baseMaterial = new THREE.MeshStandardMaterial({
+                          color: new THREE.Color(obj.userData.mainColor),
+                          roughness: 0.7
+                        });
+                        const topMaterial = new THREE.MeshStandardMaterial({
+                          map: texture,
+                          roughness: 0.5
+                        });
+                        // Apply 6 materials - one for each face of the box
+                        cover.material = [
+                          baseMaterial, // +x
+                          baseMaterial, // -x
+                          topMaterial,  // +y (top face - this gets the cover image)
+                          baseMaterial, // -y
+                          baseMaterial, // +z
+                          baseMaterial  // -z
+                        ];
+                        cover.material.forEach(m => m.needsUpdate = true);
                       }
                     }
                   });
+                }
+                // Restore first page as cover flag
+                if (objData.firstPageAsCover) {
+                  obj.userData.firstPageAsCover = true;
                 }
                 break;
               case 'coffee':

@@ -990,14 +990,15 @@ function createCoffeeMug(options = {}) {
     roughness: 0.4
   });
   const handle = new THREE.Mesh(handleGeometry, handleMaterial);
-  // The torus is flat in XY plane by default, arc opens upward (like a smile)
-  // We need to rotate it to make a vertical handle shaped like "D" when viewed from side:
-  // 1. Rotate 90° around X axis to make the arc vertical (perpendicular to table)
-  // 2. The handle sticks out horizontally from the mug body
-  handle.rotation.x = Math.PI / 2;  // Rotate 90 degrees around X - handle is now vertical
-  // Position so both ends of the arc touch the mug side
-  // Mug outer radius is ~0.12, handle arc radius is 0.05
-  // The handle center should be at mug edge - positioned on Z axis side
+  // The torus is flat in XY plane by default, arc opens upward (like a smile ∩)
+  // We want a vertical "D" shape handle that sticks out horizontally from the mug:
+  // - The "D" loop should be in a vertical plane (perpendicular to table)
+  // - The handle should stick out to the side (along Z axis)
+  // Default torus is in XY plane (vertical), which is correct for the "D" shape
+  // Rotate 90° around Y to orient the arc to stick out along Z axis
+  handle.rotation.y = Math.PI / 2;  // Rotate so handle sticks out along Z axis
+  // Position: mug outer radius ~0.12, handle arc radius 0.05
+  // Place handle center at mug edge + handle radius so both ends touch mug
   handle.position.set(0, 0.1, 0.12 + 0.05); // Center at mug side (Z), plus handle radius offset
   handle.castShadow = true;
   group.add(handle);
@@ -1264,7 +1265,15 @@ function createPen(options = {}) {
     colorHex: colorHex
   };
 
-  // Pen body
+  // Create a sub-group for pen parts so we can pivot around the cap
+  // When dragging, we rotate this subgroup, keeping the cap anchored
+  const penBody = new THREE.Group();
+  penBody.name = 'penBody';
+
+  // Cap position is the anchor point (will be at Y=0)
+  const capY = 0; // Cap at origin for pivot
+
+  // Pen body - offset from cap
   const bodyGeometry = new THREE.CylinderGeometry(0.012, 0.012, 0.3, 8);
   const bodyMaterial = new THREE.MeshStandardMaterial({
     color: colorHex,
@@ -1272,11 +1281,11 @@ function createPen(options = {}) {
     metalness: 0.2
   });
   const body = new THREE.Mesh(bodyGeometry, bodyMaterial);
-  body.position.y = 0.15;
+  body.position.y = capY - 0.175; // Body center below cap
   body.castShadow = true;
-  group.add(body);
+  penBody.add(body);
 
-  // Pen tip (silver/metallic)
+  // Pen tip (silver/metallic) - furthest from cap
   const tipGeometry = new THREE.ConeGeometry(0.012, 0.04, 8);
   const tipMaterial = new THREE.MeshStandardMaterial({
     color: 0xc0c0c0,
@@ -1284,15 +1293,15 @@ function createPen(options = {}) {
     metalness: 0.8
   });
   const tip = new THREE.Mesh(tipGeometry, tipMaterial);
-  tip.position.y = -0.02;
-  tip.rotation.x = Math.PI;
-  group.add(tip);
+  tip.position.y = capY - 0.345; // Tip at bottom
+  tip.rotation.x = Math.PI; // Point down
+  penBody.add(tip);
 
-  // Pen cap
+  // Pen cap - at anchor point
   const capGeometry = new THREE.CylinderGeometry(0.013, 0.013, 0.05, 8);
   const cap = new THREE.Mesh(capGeometry, bodyMaterial);
-  cap.position.y = 0.325;
-  group.add(cap);
+  cap.position.y = capY; // Cap at pivot
+  penBody.add(cap);
 
   // Clip on cap
   const clipGeometry = new THREE.BoxGeometry(0.003, 0.04, 0.015);
@@ -1302,10 +1311,17 @@ function createPen(options = {}) {
     metalness: 0.8
   });
   const clip = new THREE.Mesh(clipGeometry, clipMaterial);
-  clip.position.set(0.014, 0.32, 0);
-  group.add(clip);
+  clip.position.set(0.014, capY - 0.005, 0);
+  penBody.add(clip);
 
-  group.position.y = getDeskSurfaceY();
+  group.add(penBody);
+
+  // Rotate pen to lie flat on the desk (along X axis)
+  // The pen lies with cap toward +X, tip toward -X
+  group.rotation.z = -Math.PI / 2;
+  // Position so the pen sits on the desk surface
+  // After rotation, the pen's radius determines the height above desk
+  group.position.y = getDeskSurfaceY() + 0.015; // Raise by pen radius
 
   return group;
 }
@@ -2834,11 +2850,16 @@ function onMouseDown(event) {
 
       if (deskObjects.includes(object)) {
         // For books, check if user is holding for reading mode
-        if (object.userData.type === 'books' && object.userData.isOpen) {
+        if (object.userData.type === 'books') {
           bookReadingState.middleMouseDownTime = Date.now();
+          bookReadingState.book = object;
           bookReadingState.holdTimeout = setTimeout(() => {
-            // Enter reading mode after holding for 300ms
-            enterBookReadingMode(object);
+            // If book is open, enter reading mode after holding for 300ms
+            // If book is closed, a hold does nothing extra (will just toggle on quick release)
+            if (object.userData.isOpen) {
+              enterBookReadingMode(object);
+              bookReadingState.holdTimeout = null; // Mark as already handled
+            }
           }, 300);
         } else {
           // Perform quick toggle interaction based on object type
@@ -2859,6 +2880,12 @@ function onMouseDown(event) {
   }
 
   if (event.button !== 0) return; // Left click only
+
+  // If in book reading mode, LMB click exits reading mode
+  if (bookReadingState.active) {
+    exitBookReadingMode();
+    return;
+  }
 
   // If in examine mode with LMB click:
   // - If clicked on the examined object, start dragging it
@@ -3137,16 +3164,23 @@ function onMouseMove(event) {
 }
 
 function onMouseUp(event) {
-  // Middle mouse button - cancel hold timeout or exit reading mode
+  // Middle mouse button - handle book quick click or cancel hold timeout
   if (event.button === 1) {
-    // Cancel the hold timeout if user releases before threshold
+    // If in reading mode, don't exit on release - stay in mode until user clicks elsewhere
+    if (bookReadingState.active) {
+      return;
+    }
+
+    // If user releases before the hold timeout fired, it's a quick click - toggle book
     if (bookReadingState.holdTimeout) {
       clearTimeout(bookReadingState.holdTimeout);
       bookReadingState.holdTimeout = null;
-    }
-    // If in reading mode, exit on release
-    if (bookReadingState.active) {
-      exitBookReadingMode();
+
+      // Quick click on book - toggle open/close
+      if (bookReadingState.book) {
+        toggleBookOpen(bookReadingState.book);
+        bookReadingState.book = null;
+      }
     }
     return;
   }
@@ -3164,9 +3198,16 @@ function onMouseUp(event) {
       selectedObject.userData.targetY = insertionResult.y;
       selectedObject.position.x = insertionResult.x;
       selectedObject.position.z = insertionResult.z;
-      // Rotate pen to be upright in holder
+      // Rotate pen to stand upright in holder (reset from lying flat position)
       selectedObject.rotation.x = 0;
+      selectedObject.rotation.y = 0;
       selectedObject.rotation.z = Math.random() * 0.2 - 0.1; // Slight random lean
+      // Also reset the penBody sub-group rotation
+      const penBody = selectedObject.getObjectByName('penBody');
+      if (penBody) {
+        penBody.rotation.x = 0;
+        penBody.rotation.z = 0;
+      }
     } else {
       // Check if dropping on top of another object (stacking)
       const dropY = calculateStackingY(selectedObject);
@@ -3224,9 +3265,10 @@ function checkPenHolderInsertion(droppedObject) {
     const dz = penZ - holderZ;
     const dist = Math.sqrt(dx * dx + dz * dz);
 
-    // Holder opening radius - expanded for easier insertion
-    // Pen holder cylinder outer radius is 0.12, but we expand to 0.2 for easier drop detection
-    const openingRadius = isHolder ? 0.2 : 0.15;
+    // Holder opening radius - very generous for easier insertion
+    // Pen holder cylinder outer radius is 0.12, expand to 0.3 for easy drop detection
+    // This creates a large target area around the holder
+    const openingRadius = isHolder ? 0.3 : 0.2;
 
     // If pen is within the holder opening (generous detection area)
     if (dist < openingRadius) {
@@ -4350,18 +4392,30 @@ function enterExamineMode(object) {
   examineState.originalPosition = object.position.clone();
   examineState.originalRotation = object.rotation.clone();
   examineState.originalScale = object.scale.clone();
-  // Store the examine distance for keeping object centered
-  examineState.examineDistance = 2.5;
+
+  // Use shorter examine distance for small objects like pens
+  // This brings them closer to the camera for better visibility
+  let examineDistance = 2.0; // Default distance
+  let yOffset = -0.1; // Position slightly below center of view
+
+  // Adjust distance based on object type
+  if (object.userData.type === 'pen') {
+    examineDistance = 1.2; // Bring pen much closer
+    yOffset = -0.2; // Lower position so cursor can reach
+  } else if (object.userData.type === 'books') {
+    examineDistance = 1.5;
+  }
+
+  examineState.examineDistance = examineDistance;
 
   // Calculate position close to camera
-  const examineDistance = examineState.examineDistance;
   const direction = new THREE.Vector3();
   camera.getWorldDirection(direction);
 
-  // Target position in front of the camera
+  // Target position in front of the camera (slightly below center)
   const targetPosition = new THREE.Vector3(
     camera.position.x + direction.x * examineDistance,
-    camera.position.y + direction.y * examineDistance + 0.1, // Slight offset up (lowered per feedback)
+    camera.position.y + direction.y * examineDistance + yOffset,
     camera.position.z + direction.z * examineDistance
   );
 
@@ -5744,11 +5798,12 @@ function updateBookPages(book) {
   const leftPage = openGroup.getObjectByName('leftPageSurface');
   const rightPage = openGroup.getObjectByName('rightPageSurface');
 
-  // Higher resolution canvas for readable text
-  const canvasWidth = 512;
-  const canvasHeight = 724;
-  const margin = 40;
-  const lineHeight = 36;
+  // High resolution canvas for crisp, readable text
+  // Using 1024x1448 for sharper rendering (2x the previous resolution)
+  const canvasWidth = 1024;
+  const canvasHeight = 1448;
+  const margin = 80;
+  const lineHeight = 56;
 
   // Create page texture for left page
   if (leftPage && book.userData.totalPages > 0) {
@@ -5767,21 +5822,21 @@ function updateBookPages(book) {
     ctx.fillStyle = '#333';
     const pageNum = book.userData.currentPage * 2;
 
-    // Page number header
-    ctx.font = 'bold 28px Georgia, serif';
+    // Page number header - doubled font size for 2x resolution
+    ctx.font = 'bold 56px Georgia, serif';
     ctx.textAlign = 'center';
-    ctx.fillText(`Page ${pageNum + 1}`, canvas.width / 2, 60);
+    ctx.fillText(`Page ${pageNum + 1}`, canvas.width / 2, 120);
 
     // Divider line
     ctx.strokeStyle = '#ccc';
-    ctx.lineWidth = 1;
+    ctx.lineWidth = 2;
     ctx.beginPath();
-    ctx.moveTo(margin, 80);
-    ctx.lineTo(canvas.width - margin, 80);
+    ctx.moveTo(margin, 160);
+    ctx.lineTo(canvas.width - margin, 160);
     ctx.stroke();
 
-    // Content area
-    ctx.font = '24px Georgia, serif';
+    // Content area - larger, clearer font
+    ctx.font = '48px Georgia, serif';
     ctx.textAlign = 'left';
 
     const pdfFileName = book.userData.pdfPath
@@ -5793,36 +5848,32 @@ function updateBookPages(book) {
       '',
       'PDF content placeholder.',
       '',
-      'In a full implementation,',
-      'actual PDF pages would',
-      'be rendered here using',
-      'PDF.js library.',
+      'PDF.js library required',
+      'for actual content.',
       '',
-      `Current spread: ${pageNum + 1}-${pageNum + 2}`,
+      `Pages ${pageNum + 1}-${pageNum + 2}`,
       '',
-      'Use Arrow Left/Right',
-      'to turn pages.'
+      '← / → to turn pages'
     ] : [
       'No PDF loaded',
       '',
-      'Right-click this book',
-      'to open customization,',
-      'then select a PDF file.',
+      'Right-click to open',
+      'customization panel,',
+      'then select PDF file.',
       '',
-      'Page content will',
-      'appear here once',
-      'a PDF is selected.'
+      'Content will appear',
+      'once a PDF is selected.'
     ];
 
     contentLines.forEach((line, i) => {
-      ctx.fillText(line, margin, 120 + i * lineHeight);
+      ctx.fillText(line, margin, 240 + i * lineHeight);
     });
 
     // Page footer
-    ctx.font = '18px Georgia, serif';
+    ctx.font = '36px Georgia, serif';
     ctx.textAlign = 'center';
     ctx.fillStyle = '#888';
-    ctx.fillText(book.userData.title || 'Untitled', canvas.width / 2, canvas.height - 30);
+    ctx.fillText(book.userData.bookTitle || 'Untitled', canvas.width / 2, canvas.height - 60);
 
     const texture = new THREE.CanvasTexture(canvas);
     texture.anisotropy = 16; // Better quality at angles
@@ -5847,50 +5898,48 @@ function updateBookPages(book) {
     ctx.fillStyle = '#333';
     const pageNum = book.userData.currentPage * 2 + 1;
 
-    // Page number header
-    ctx.font = 'bold 28px Georgia, serif';
+    // Page number header - doubled font size for 2x resolution
+    ctx.font = 'bold 56px Georgia, serif';
     ctx.textAlign = 'center';
-    ctx.fillText(`Page ${pageNum + 1}`, canvas.width / 2, 60);
+    ctx.fillText(`Page ${pageNum + 1}`, canvas.width / 2, 120);
 
     // Divider line
     ctx.strokeStyle = '#ccc';
-    ctx.lineWidth = 1;
+    ctx.lineWidth = 2;
     ctx.beginPath();
-    ctx.moveTo(margin, 80);
-    ctx.lineTo(canvas.width - margin, 80);
+    ctx.moveTo(margin, 160);
+    ctx.lineTo(canvas.width - margin, 160);
     ctx.stroke();
 
-    // Content area
-    ctx.font = '24px Georgia, serif';
+    // Content area - larger, clearer font
+    ctx.font = '48px Georgia, serif';
     ctx.textAlign = 'left';
 
     const totalPages = book.userData.totalPages || 10;
     const contentLines = [
-      'Lorem ipsum dolor sit',
-      'amet, consectetur',
+      'Lorem ipsum dolor',
+      'sit amet, consectetur',
       'adipiscing elit.',
       '',
-      'Sed do eiusmod tempor',
-      'incididunt ut labore',
-      'et dolore magna aliqua.',
+      'Sed do eiusmod',
+      'tempor incididunt ut',
+      'labore et dolore.',
       '',
-      'Ut enim ad minim veniam,',
-      'quis nostrud exercitation',
-      'ullamco laboris nisi ut',
-      'aliquip ex ea commodo.',
+      'Ut enim ad minim,',
+      'quis nostrud ullamco.',
       '',
-      `Pages: ${pageNum + 1} of ${totalPages * 2}`
+      `Page ${pageNum + 1} of ${totalPages * 2}`
     ];
 
     contentLines.forEach((line, i) => {
-      ctx.fillText(line, margin, 120 + i * lineHeight);
+      ctx.fillText(line, margin, 240 + i * lineHeight);
     });
 
     // Page footer
-    ctx.font = '18px Georgia, serif';
+    ctx.font = '36px Georgia, serif';
     ctx.textAlign = 'center';
     ctx.fillStyle = '#888';
-    ctx.fillText(`${pageNum + 1} / ${totalPages * 2}`, canvas.width / 2, canvas.height - 30);
+    ctx.fillText(`${pageNum + 1} / ${totalPages * 2}`, canvas.width / 2, canvas.height - 60);
 
     const texture = new THREE.CanvasTexture(canvas);
     texture.anisotropy = 16; // Better quality at angles
@@ -6221,7 +6270,7 @@ function animatePageTurn(book, direction) {
   }
 
   // Create a temporary page for animation
-  // The page lies flat, so geometry should be oriented to match
+  // The page should flip from one side to the other, rotating around the spine
   const pageGeometry = new THREE.PlaneGeometry(0.24, 0.34);
   const pageMaterial = new THREE.MeshStandardMaterial({
     color: 0xfff8f0,
@@ -6229,21 +6278,23 @@ function animatePageTurn(book, direction) {
     roughness: 0.9
   });
   const turningPage = new THREE.Mesh(pageGeometry, pageMaterial);
-  // Rotate page to lie flat (same as existing page surfaces)
-  turningPage.rotation.x = -Math.PI / 2;
-  turningPage.position.y = 0.028;
 
-  // Set pivot point at the spine (center of book, along Z axis)
+  // Create a pivot group positioned at the spine edge of the page
+  // The pivot is at the spine (X=0), and the page extends outward
   const pivotGroup = new THREE.Group();
-  pivotGroup.position.set(0, 0, 0);
-  // Position page to left or right of spine
-  turningPage.position.x = direction > 0 ? 0.12 : -0.12; // Start from left or right
+  pivotGroup.position.set(0, 0.028, 0); // At spine, at page surface height
+
+  // Position page so its inner edge is at the pivot (spine)
+  // The page center is offset by half the page width from the spine
+  turningPage.position.set(direction > 0 ? 0.12 : -0.12, 0, 0);
+  turningPage.rotation.x = -Math.PI / 2; // Lie flat, facing up
   pivotGroup.add(turningPage);
   openGroup.add(pivotGroup);
 
   const startAngle = 0;
-  // Rotate around Z axis (the spine runs along Z)
-  const endAngle = direction > 0 ? -Math.PI : Math.PI; // Flip to opposite side
+  // Rotate around Z axis (spine direction) to flip the page from one side to the other
+  // This is the correct axis for a flat book lying on a desk
+  const endAngle = direction > 0 ? -Math.PI : Math.PI; // Flip 180° to opposite side
   const duration = 400;
   const startTime = Date.now();
 
@@ -6251,17 +6302,18 @@ function animatePageTurn(book, direction) {
     const elapsed = Date.now() - startTime;
     const progress = Math.min(elapsed / duration, 1);
 
-    // Ease in-out curve
+    // Ease in-out curve for smooth animation
     const easeProgress = progress < 0.5
       ? 2 * progress * progress
       : 1 - Math.pow(-2 * progress + 2, 2) / 2;
 
-    // Rotate the page around Z axis (horizontal axis along the spine)
+    // Rotate the pivot group around Z axis (spine runs along Z)
+    // This flips the page from right-to-left or left-to-right
     pivotGroup.rotation.z = startAngle + (endAngle - startAngle) * easeProgress;
 
-    // Add a slight curve/lift to the page during turn
-    const liftFactor = Math.sin(progress * Math.PI) * 0.03;
-    turningPage.position.y = 0.028 + liftFactor;
+    // Page arcs up slightly at midpoint of animation
+    const liftFactor = Math.sin(progress * Math.PI) * 0.06;
+    pivotGroup.position.y = 0.028 + liftFactor;
 
     if (progress < 1) {
       requestAnimationFrame(animate);
@@ -6410,12 +6462,12 @@ function enterBookReadingMode(book) {
   const bookWorldPos = new THREE.Vector3();
   book.getWorldPosition(bookWorldPos);
 
-  // Calculate target camera position - slightly above and in front of the book
-  // For comfortable reading position
+  // Calculate target camera position - at comfortable reading height above the book
+  // Not too high, just enough to see the pages clearly
   const targetCameraPos = new THREE.Vector3(
     bookWorldPos.x,
-    bookWorldPos.y + 0.6, // Above the book
-    bookWorldPos.z + 0.5  // In front of the book
+    bookWorldPos.y + 0.35, // Comfortable reading height (not too high)
+    bookWorldPos.z + 0.35  // Closer to the book for reading
   );
 
   // Animate camera to reading position
@@ -7062,8 +7114,10 @@ function animate() {
     }
 
     // Pen sway animation when being dragged
+    // The penBody sub-group rotates to create sway, keeping the cap anchored
     if (obj.userData.type === 'pen') {
-      if (isDragging && selectedObject === obj) {
+      const penBody = obj.getObjectByName('penBody');
+      if (isDragging && selectedObject === obj && penBody) {
         // Initialize sway state if not exists
         if (obj.userData.swayPhase === undefined) {
           obj.userData.swayPhase = 0;
@@ -7078,27 +7132,28 @@ function animate() {
           // Add some natural oscillation
           obj.userData.swayPhase += dt * 8;
 
-          // Apply pendulum-like sway motion
-          const swayAmount = Math.sin(obj.userData.swayPhase) * 0.15;
-          const secondarySwayAmount = Math.cos(obj.userData.swayPhase * 0.7) * 0.08;
+          // Apply pendulum-like sway motion to the pen body
+          // This rotates around the cap position, making the tip swing
+          const swayAmount = Math.sin(obj.userData.swayPhase) * 0.2;
+          const secondarySwayAmount = Math.cos(obj.userData.swayPhase * 0.7) * 0.1;
 
-          // Target rotation based on sway
+          // Target rotation for the pen body (relative to the group)
           const targetRotX = swayAmount;
           const targetRotZ = secondarySwayAmount;
 
           // Smoothly interpolate to target
-          obj.rotation.x += (targetRotX - obj.rotation.x) * 0.15;
-          obj.rotation.z += (targetRotZ - obj.rotation.z) * 0.15;
+          penBody.rotation.x += (targetRotX - penBody.rotation.x) * 0.15;
+          penBody.rotation.z += (targetRotZ - penBody.rotation.z) * 0.15;
         }
         obj.userData.lastSwayUpdate = now;
-      } else {
-        // When not dragging, gradually return to neutral position
-        if (Math.abs(obj.rotation.x) > 0.001 || Math.abs(obj.rotation.z) > 0.001) {
-          obj.rotation.x *= 0.9;
-          obj.rotation.z *= 0.9;
+      } else if (penBody) {
+        // When not dragging, gradually return pen body to neutral position
+        if (Math.abs(penBody.rotation.x) > 0.001 || Math.abs(penBody.rotation.z) > 0.001) {
+          penBody.rotation.x *= 0.9;
+          penBody.rotation.z *= 0.9;
         } else {
-          obj.rotation.x = 0;
-          obj.rotation.z = 0;
+          penBody.rotation.x = 0;
+          penBody.rotation.z = 0;
         }
         // Reset sway state
         obj.userData.swayPhase = undefined;

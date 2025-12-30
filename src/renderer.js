@@ -3559,6 +3559,31 @@ function updateCustomizationPanel(object) {
   }
 }
 
+// Helper function to add scroll-based slider adjustment
+function addScrollToSlider(slider, onChange) {
+  if (!slider) return;
+  slider.addEventListener('wheel', (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    const step = parseFloat(slider.step) || 1;
+    const min = parseFloat(slider.min) || 0;
+    const max = parseFloat(slider.max) || 100;
+    let newValue = parseFloat(slider.value);
+
+    // Scroll up = increase, scroll down = decrease
+    if (e.deltaY < 0) {
+      newValue = Math.min(max, newValue + step);
+    } else {
+      newValue = Math.max(min, newValue - step);
+    }
+
+    slider.value = newValue;
+    // Trigger the input event so existing handlers work
+    slider.dispatchEvent(new Event('input'));
+    if (onChange) onChange(newValue);
+  }, { passive: false });
+}
+
 function setupMugCustomizationHandlers(object) {
   // Drink type buttons
   setTimeout(() => {
@@ -3619,6 +3644,9 @@ function setupMugCustomizationHandlers(object) {
 
         saveState();
       });
+
+      // Add scroll-based adjustment for fill slider
+      addScrollToSlider(fillSlider);
     }
 
     // Hot drink checkbox
@@ -3643,6 +3671,9 @@ function setupMetronomeCustomizationHandlers(object) {
         bpmDisplay.textContent = e.target.value;
         saveState();
       });
+
+      // Add scroll-based adjustment for BPM slider
+      addScrollToSlider(bpmSlider);
     }
 
     const tickCheckbox = document.getElementById('tick-sound');
@@ -4948,6 +4979,9 @@ function setupMetronomeHandlers(object) {
       bpmDisplay.textContent = `${object.userData.bpm} BPM`;
     }
   });
+
+  // Add scroll-based adjustment for BPM slider
+  addScrollToSlider(bpmSlider);
 }
 
 function setupPhotoFrameHandlers(object) {

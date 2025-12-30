@@ -3056,15 +3056,39 @@ function onMouseUp(event) {
   }
 
   if (isDragging && selectedObject) {
-    // Check if dropping on top of another object (stacking)
-    const dropY = calculateStackingY(selectedObject);
+    // Check for pen holder insertion
+    const insertionResult = checkPenHolderInsertion(selectedObject);
 
-    // Update the original Y to the new stacking position
-    selectedObject.userData.originalY = dropY;
+    if (insertionResult.inserted) {
+      // Pen was inserted into a holder - animate to position inside holder
+      selectedObject.userData.isLifted = false;
+      selectedObject.userData.inHolder = insertionResult.holder;
+      selectedObject.userData.holderSlot = insertionResult.slot;
+      selectedObject.userData.originalY = insertionResult.y;
+      selectedObject.userData.targetY = insertionResult.y;
+      selectedObject.position.x = insertionResult.x;
+      selectedObject.position.z = insertionResult.z;
+      // Rotate pen to be upright in holder
+      selectedObject.rotation.x = 0;
+      selectedObject.rotation.z = Math.random() * 0.2 - 0.1; // Slight random lean
+    } else {
+      // Check if dropping on top of another object (stacking)
+      const dropY = calculateStackingY(selectedObject);
 
-    // Drop the object
-    selectedObject.userData.isLifted = false;
-    selectedObject.userData.targetY = dropY;
+      // Update the original Y to the new stacking position
+      selectedObject.userData.originalY = dropY;
+
+      // Drop the object
+      selectedObject.userData.isLifted = false;
+      selectedObject.userData.targetY = dropY;
+
+      // Clear holder reference if pen was removed from holder
+      if (selectedObject.userData.inHolder) {
+        selectedObject.userData.inHolder = null;
+        selectedObject.userData.holderSlot = null;
+      }
+    }
+
     isDragging = false;
     dragLayerOffset = 0; // Reset layer offset when dropping
 
@@ -3075,6 +3099,105 @@ function onMouseUp(event) {
 
     saveState();
   }
+}
+
+// Check if a pen is being dropped on/into a pen holder (or empty mug)
+// Returns { inserted: false } if not, or { inserted: true, holder, x, y, z, slot } if yes
+function checkPenHolderInsertion(droppedObject) {
+  // Only check for pens
+  if (droppedObject.userData.type !== 'pen') {
+    return { inserted: false };
+  }
+
+  const penX = droppedObject.position.x;
+  const penZ = droppedObject.position.z;
+
+  // Check all pen holders and empty mugs
+  for (const obj of deskObjects) {
+    const isHolder = obj.userData.type === 'pen-holder';
+    const isEmptyMug = obj.userData.type === 'coffee' && obj.userData.liquidLevel < 0.1;
+
+    if (!isHolder && !isEmptyMug) continue;
+    if (obj === droppedObject) continue;
+
+    const holderX = obj.position.x;
+    const holderZ = obj.position.z;
+
+    // Calculate distance from pen to holder center
+    const dx = penX - holderX;
+    const dz = penZ - holderZ;
+    const dist = Math.sqrt(dx * dx + dz * dz);
+
+    // Holder opening radius (pen holder is 0.12, mug is about 0.1)
+    const openingRadius = isHolder ? 0.12 : 0.08;
+
+    // If pen is within the holder opening
+    if (dist < openingRadius) {
+      // Find an available slot position
+      const slot = findAvailableHolderSlot(obj, droppedObject);
+
+      // Calculate Y position inside holder
+      const holderScale = obj.userData.scale || obj.scale.x || 1.0;
+      const baseY = obj.position.y;
+      const penY = baseY + 0.15 * holderScale; // Pen tip rests inside, cap sticks up
+
+      return {
+        inserted: true,
+        holder: obj,
+        x: holderX + slot.offsetX,
+        y: penY,
+        z: holderZ + slot.offsetZ,
+        slot: slot.index
+      };
+    }
+  }
+
+  return { inserted: false };
+}
+
+// Find an available slot position for a pen in a holder
+function findAvailableHolderSlot(holder, excludePen) {
+  // Get all pens currently in this holder
+  const pensInHolder = deskObjects.filter(obj =>
+    obj.userData.type === 'pen' &&
+    obj.userData.inHolder === holder &&
+    obj !== excludePen
+  );
+
+  // Slot positions (circular arrangement)
+  const maxSlots = 6;
+  const slotRadius = 0.04;
+  const slots = [];
+
+  for (let i = 0; i < maxSlots; i++) {
+    const angle = (i / maxSlots) * Math.PI * 2;
+    slots.push({
+      index: i,
+      offsetX: Math.cos(angle) * slotRadius,
+      offsetZ: Math.sin(angle) * slotRadius,
+      occupied: false
+    });
+  }
+
+  // Mark occupied slots
+  pensInHolder.forEach(pen => {
+    if (pen.userData.holderSlot !== undefined && pen.userData.holderSlot < maxSlots) {
+      slots[pen.userData.holderSlot].occupied = true;
+    }
+  });
+
+  // Find first unoccupied slot
+  const availableSlot = slots.find(s => !s.occupied);
+  if (availableSlot) {
+    return availableSlot;
+  }
+
+  // If all slots are full, use center with random offset
+  return {
+    index: -1,
+    offsetX: (Math.random() - 0.5) * 0.02,
+    offsetZ: (Math.random() - 0.5) * 0.02
+  };
 }
 
 // Calculate Y position for dragging - allows object to ride on top of ANY object (no weight check)
@@ -6207,6 +6330,14 @@ async function saveState() {
         case 'pen':
           data.penColor = obj.userData.penColor;
           data.inkColor = obj.userData.inkColor;
+          // Save holder info if pen is in a holder
+          if (obj.userData.inHolder) {
+            const holderIndex = deskObjects.indexOf(obj.userData.inHolder);
+            if (holderIndex >= 0) {
+              data.inHolderIndex = holderIndex;
+              data.holderSlot = obj.userData.holderSlot;
+            }
+          }
           break;
       }
 
@@ -6350,6 +6481,18 @@ async function loadState() {
                   });
                 }
                 break;
+            }
+          }
+        });
+
+        // Second pass: restore pen holder references
+        result.state.objects.forEach((objData, index) => {
+          if (objData.type === 'pen' && objData.inHolderIndex !== undefined) {
+            const pen = deskObjects[index];
+            const holder = deskObjects[objData.inHolderIndex];
+            if (pen && holder) {
+              pen.userData.inHolder = holder;
+              pen.userData.holderSlot = objData.holderSlot;
             }
           }
         });

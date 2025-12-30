@@ -8712,9 +8712,13 @@ async function updateMagazinePagesWithPDF(magazine) {
 
 function updateMagazineThickness(magazine) {
   const totalPages = magazine.userData.totalPages || 10;
-  // Magazines are generally thinner than books
-  const pagesPerMm = 15;
-  const calculatedThickness = Math.min(0.04, Math.max(0.008, totalPages / pagesPerMm / 100));
+  // Magazines should be slightly thinner than books
+  // Magazine paper is typically thinner (0.07mm vs 0.08mm for books)
+  const thicknessPerPage = 0.00007; // Each page adds 0.07mm (thinner than book's 0.08mm)
+  const baseThickness = 0.012; // Thinner base than book's 0.015
+  const minThickness = 0.006; // Minimum thickness for very thin magazines
+  const maxThickness = 0.06; // Max thickness (thinner than book's 0.08)
+  const calculatedThickness = Math.max(minThickness, Math.min(maxThickness, baseThickness + (totalPages * thicknessPerPage)));
 
   const closedGroup = magazine.getObjectByName('closedMagazine');
   if (!closedGroup) return;

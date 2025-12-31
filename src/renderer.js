@@ -5175,11 +5175,13 @@ async function startDictaphoneRecording(object) {
 
 // Stop recording
 async function stopDictaphoneRecording(object) {
-  console.log('stopDictaphoneRecording called:');
-  console.log('  - object?.userData?.id:', object?.userData?.id);
-  console.log('  - object?.userData?.isRecording:', object?.userData?.isRecording);
-  console.log('  - dictaphoneState.isRecording:', dictaphoneState.isRecording);
-  console.log('  - dictaphoneState.pcmChunks.length:', dictaphoneState.pcmChunks?.length);
+  console.log('=== stopDictaphoneRecording START ===');
+  console.log('  object?.userData?.id:', object?.userData?.id);
+  console.log('  object?.userData?.isRecording:', object?.userData?.isRecording);
+  console.log('  object?.userData?.recordingsFolderPath:', object?.userData?.recordingsFolderPath);
+  console.log('  dictaphoneState.isRecording:', dictaphoneState.isRecording);
+  console.log('  dictaphoneState.currentRecorderId:', dictaphoneState.currentRecorderId);
+  console.log('  dictaphoneState.pcmChunks.length:', dictaphoneState.pcmChunks?.length);
 
   // Check both local and global state to be robust
   const isRecordingLocal = object?.userData?.isRecording;
@@ -5187,6 +5189,9 @@ async function stopDictaphoneRecording(object) {
 
   if (!object || (!isRecordingLocal && !isRecordingGlobal)) {
     console.log('stopDictaphoneRecording: early return - object invalid or not recording');
+    console.log('  object is null:', !object);
+    console.log('  isRecordingLocal:', isRecordingLocal);
+    console.log('  isRecordingGlobal:', isRecordingGlobal);
     return;
   }
 
@@ -5224,75 +5229,104 @@ async function stopDictaphoneRecording(object) {
     // Update LED visual
     updateDictaphoneLed(object, false);
 
-    console.log('Dictaphone recording stopped');
+    console.log('Dictaphone recording stopped, pcmChunks collected:', dictaphoneState.pcmChunks?.length || 0);
     saveState();
 
     // Save the recording
+    console.log('Calling saveDictaphoneRecording...');
     await saveDictaphoneRecording(object);
+    console.log('=== stopDictaphoneRecording END ===');
 
   } catch (error) {
     console.error('Error stopping dictaphone recording:', error);
+    console.error('Error stack:', error.stack);
   }
 }
 
 // Save recording to file
 async function saveDictaphoneRecording(object) {
-  console.log('saveDictaphoneRecording called, pcmChunks:', dictaphoneState.pcmChunks.length, 'folderPath:', object?.userData?.recordingsFolderPath);
+  console.log('=== saveDictaphoneRecording START ===');
+  console.log('  pcmChunks:', dictaphoneState.pcmChunks?.length || 0);
+  console.log('  folderPath:', object?.userData?.recordingsFolderPath);
+  console.log('  recordingNumber:', object?.userData?.recordingNumber);
+  console.log('  recordingFormat:', object?.userData?.recordingFormat);
 
-  if (dictaphoneState.pcmChunks.length === 0) {
-    console.log('No recording data to save');
+  if (!dictaphoneState.pcmChunks || dictaphoneState.pcmChunks.length === 0) {
+    console.log('No recording data to save - pcmChunks is empty');
     return;
   }
 
   // Check if folder path is set
   if (!object || !object.userData || !object.userData.recordingsFolderPath) {
     console.error('Cannot save recording: folder path is not set');
+    console.error('  object:', !!object);
+    console.error('  userData:', !!object?.userData);
+    console.error('  recordingsFolderPath:', object?.userData?.recordingsFolderPath);
     alert('Cannot save recording: please select a folder first');
     dictaphoneState.pcmChunks = [];
     return;
   }
 
   try {
-    console.log('Encoding PCM to WAV, chunks:', dictaphoneState.pcmChunks.length, 'sample rate:', dictaphoneState.sampleRate);
+    const totalSamples = dictaphoneState.pcmChunks.reduce((acc, chunk) => acc + chunk.length, 0);
+    const durationSec = totalSamples / dictaphoneState.sampleRate;
+    console.log('Encoding PCM to WAV:');
+    console.log('  chunks:', dictaphoneState.pcmChunks.length);
+    console.log('  total samples:', totalSamples);
+    console.log('  duration:', durationSec.toFixed(2), 'seconds');
+    console.log('  sample rate:', dictaphoneState.sampleRate);
 
     // Encode PCM directly to WAV (no decodeAudioData required!)
     const wavBuffer = encodePcmToWav(dictaphoneState.pcmChunks, dictaphoneState.sampleRate, 1);
-    console.log('WAV buffer size:', wavBuffer.byteLength, 'bytes');
+    console.log('WAV buffer created, size:', wavBuffer.byteLength, 'bytes');
 
     // Convert WAV ArrayBuffer to base64
+    console.log('Converting to base64...');
     const wavArray = new Uint8Array(wavBuffer);
     let binary = '';
     for (let i = 0; i < wavArray.byteLength; i++) {
       binary += String.fromCharCode(wavArray[i]);
     }
     const base64Data = btoa(binary);
-    console.log('Base64 encoded, length:', base64Data.length);
+    console.log('Base64 encoded, length:', base64Data.length, 'characters');
 
     // Save via IPC - always WAV format (MP3 conversion requires FFmpeg on server)
     const format = object.userData.recordingFormat || 'wav';
-    console.log('Saving recording to:', object.userData.recordingsFolderPath, 'as', format);
+    const folderPath = object.userData.recordingsFolderPath;
+    const recordingNumber = object.userData.recordingNumber || 1;
+
+    console.log('Calling saveRecording IPC:');
+    console.log('  folderPath:', folderPath);
+    console.log('  recordingNumber:', recordingNumber);
+    console.log('  format:', format);
+
     const result = await window.electronAPI.saveRecording(
-      object.userData.recordingsFolderPath,
-      object.userData.recordingNumber,
+      folderPath,
+      recordingNumber,
       base64Data,
       format
     );
 
+    console.log('saveRecording IPC result:', JSON.stringify(result));
+
     if (result.success) {
-      console.log('Recording saved:', result.fileName);
+      console.log('✓ Recording saved successfully:', result.fileName);
+      console.log('  File path:', result.filePath);
       // Increment recording number for next recording
-      object.userData.recordingNumber++;
+      object.userData.recordingNumber = recordingNumber + 1;
       saveState();
     } else {
-      console.error('Failed to save recording:', result.error);
+      console.error('✗ Failed to save recording:', result.error);
       alert('Failed to save recording: ' + result.error);
     }
 
     // Clear PCM chunks
     dictaphoneState.pcmChunks = [];
+    console.log('=== saveDictaphoneRecording END ===');
 
   } catch (error) {
     console.error('Error saving recording:', error);
+    console.error('Error stack:', error.stack);
     alert('Error saving recording: ' + error.message);
     dictaphoneState.pcmChunks = [];
   }

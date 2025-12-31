@@ -482,13 +482,22 @@ async function convertToMp3(inputPath, outputPath) {
 // Save recording to file
 // Audio data is already in WAV format from browser-side encoding
 ipcMain.handle('save-recording', async (event, folderPath, recordingNumber, audioDataBase64, format = 'wav') => {
+  console.log('=== save-recording IPC START ===');
+  console.log('  folderPath:', folderPath);
+  console.log('  recordingNumber:', recordingNumber);
+  console.log('  format:', format);
+  console.log('  audioDataBase64 length:', audioDataBase64?.length || 0);
+
   try {
     if (!fs.existsSync(folderPath)) {
-      return { success: false, error: 'Folder not found' };
+      console.error('Folder not found:', folderPath);
+      return { success: false, error: 'Folder not found: ' + folderPath };
     }
+    console.log('Folder exists, creating audio buffer...');
 
     // Audio data is already WAV from browser-side encoding
     const audioBuffer = Buffer.from(audioDataBase64, 'base64');
+    console.log('Audio buffer created, size:', audioBuffer.length, 'bytes');
 
     // If MP3 format requested, try FFmpeg conversion
     if (format === 'mp3') {

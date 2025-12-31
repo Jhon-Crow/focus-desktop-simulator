@@ -458,3 +458,70 @@ ipcMain.handle('get-next-recording-number', async (event, folderPath) => {
     return { success: false, error: error.message };
   }
 });
+
+// ============================================================================
+// MARKDOWN EDITOR - Notes Folder Selection and Saving
+// ============================================================================
+
+// Get default notes folder path (app working directory)
+ipcMain.handle('get-default-notes-folder', async () => {
+  const userDataPath = app.getPath('userData');
+  const notesDir = path.join(userDataPath, 'notes');
+
+  // Ensure default notes directory exists
+  if (!fs.existsSync(notesDir)) {
+    fs.mkdirSync(notesDir, { recursive: true });
+  }
+
+  return { success: true, folderPath: notesDir };
+});
+
+// Open folder selection dialog for notes
+ipcMain.handle('select-notes-folder', async () => {
+  try {
+    const result = await dialog.showOpenDialog(mainWindow, {
+      properties: ['openDirectory'],
+      title: 'Select Notes Folder'
+    });
+
+    if (result.canceled || result.filePaths.length === 0) {
+      return { success: true, canceled: true };
+    }
+
+    const folderPath = result.filePaths[0];
+
+    return {
+      success: true,
+      folderPath: folderPath
+    };
+  } catch (error) {
+    console.error('Error selecting notes folder:', error);
+    return { success: false, error: error.message };
+  }
+});
+
+// Save markdown file to the notes folder
+ipcMain.handle('save-markdown-file', async (event, folderPath, fileName, content) => {
+  try {
+    // Ensure folder exists
+    if (!fs.existsSync(folderPath)) {
+      fs.mkdirSync(folderPath, { recursive: true });
+    }
+
+    // Ensure filename has .md extension
+    if (!fileName.endsWith('.md')) {
+      fileName = fileName + '.md';
+    }
+
+    const filePath = path.join(folderPath, fileName);
+    fs.writeFileSync(filePath, content, 'utf8');
+
+    return {
+      success: true,
+      filePath: filePath
+    };
+  } catch (error) {
+    console.error('Error saving markdown file:', error);
+    return { success: false, error: error.message };
+  }
+});

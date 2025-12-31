@@ -1766,6 +1766,7 @@ function createLaptop(options = {}) {
     isZoomedIn: false, // Whether user is in laptop control mode
     editorContent: '', // Markdown editor content
     editorFileName: 'notes.md',
+    notesFolderPath: options.notesFolderPath || null, // Folder path for saving notes (null = use default app folder)
     mainColor: options.mainColor || '#1e293b',
     accentColor: options.accentColor || '#60a5fa',
     bootScreenDataUrl: null, // Custom boot screen image data URL
@@ -8296,6 +8297,24 @@ function updateCustomizationPanel(object) {
             ` : ''}
           </div>
         </div>
+        <div class="customization-group" style="margin-top: 15px;">
+          <label>Notes Save Folder</label>
+          <div style="display: flex; flex-direction: column; gap: 10px; margin-top: 8px;">
+            <div id="laptop-notes-folder-display" style="color: rgba(255,255,255,0.5); font-size: 12px; word-break: break-all;">
+              ${object.userData.notesFolderPath
+                ? (object.userData.notesFolderPath.split('/').pop() || object.userData.notesFolderPath.split('\\').pop())
+                : 'Default (App folder)'}
+            </div>
+            <button id="laptop-notes-folder-select" style="padding: 10px 15px; background: rgba(79, 70, 229, 0.3); border: 1px solid rgba(79, 70, 229, 0.5); border-radius: 8px; color: #fff; cursor: pointer;">
+              ${object.userData.notesFolderPath ? 'Change Folder' : 'Select Notes Folder'}
+            </button>
+            ${object.userData.notesFolderPath ? `
+              <button id="laptop-notes-folder-clear" style="padding: 10px 15px; background: rgba(239, 68, 68, 0.2); border: 1px solid rgba(239, 68, 68, 0.4); border-radius: 8px; color: #ef4444; cursor: pointer;">
+                Use Default Folder
+              </button>
+            ` : ''}
+          </div>
+        </div>
       `;
       setupLaptopCustomizationHandlers(object);
       break;
@@ -9069,6 +9088,43 @@ function setupLaptopCustomizationHandlers(object) {
         object.userData.bootScreenDataUrl = null;
         saveState();
         // Refresh the panel to update button text
+        updateCustomizationPanel(object);
+      });
+    }
+
+    // Notes folder selection handlers
+    const notesFolderSelect = document.getElementById('laptop-notes-folder-select');
+    const notesFolderClear = document.getElementById('laptop-notes-folder-clear');
+    const notesFolderDisplay = document.getElementById('laptop-notes-folder-display');
+
+    // If no custom folder is set, show the actual default folder path
+    if (notesFolderDisplay && !object.userData.notesFolderPath) {
+      window.electronAPI.getDefaultNotesFolder().then(result => {
+        if (result.success && notesFolderDisplay) {
+          notesFolderDisplay.textContent = result.folderPath;
+        }
+      }).catch(err => console.error('Error getting default notes folder:', err));
+    }
+
+    if (notesFolderSelect) {
+      notesFolderSelect.addEventListener('click', async () => {
+        try {
+          const result = await window.electronAPI.selectNotesFolder();
+          if (result.success && !result.canceled) {
+            object.userData.notesFolderPath = result.folderPath;
+            saveState();
+            updateCustomizationPanel(object);
+          }
+        } catch (error) {
+          console.error('Error selecting notes folder:', error);
+        }
+      });
+    }
+
+    if (notesFolderClear) {
+      notesFolderClear.addEventListener('click', () => {
+        object.userData.notesFolderPath = null;
+        saveState();
         updateCustomizationPanel(object);
       });
     }
@@ -11066,6 +11122,28 @@ function setupLaptopHandlers(object) {
 }
 
 // Markdown Editor Functions
+// Helper function to generate filename with timestamp for saving notes
+function getTimestampedFilename(baseName) {
+  // Remove .md extension if present
+  let name = baseName;
+  if (name.endsWith('.md')) {
+    name = name.slice(0, -3);
+  }
+
+  // Create timestamp in format: YYYY-MM-DD HH-MM-SS
+  const now = new Date();
+  const year = now.getFullYear();
+  const month = String(now.getMonth() + 1).padStart(2, '0');
+  const day = String(now.getDate()).padStart(2, '0');
+  const hours = String(now.getHours()).padStart(2, '0');
+  const minutes = String(now.getMinutes()).padStart(2, '0');
+  const seconds = String(now.getSeconds()).padStart(2, '0');
+  const timestamp = `${year}-${month}-${day} ${hours}-${minutes}-${seconds}`;
+
+  // Return filename with timestamp (space separated) and .md extension
+  return `${name} ${timestamp}.md`;
+}
+
 function openMarkdownEditor(laptop) {
   // Close the interaction modal
   closeInteractionModal();
@@ -11339,14 +11417,45 @@ function openMarkdownEditor(laptop) {
     sourceTextarea.setSelectionRange(sourceTextarea.value.length, sourceTextarea.value.length);
   }, 100);
 
-  saveBtn.addEventListener('click', () => {
+  saveBtn.addEventListener('click', async () => {
     laptop.userData.editorContent = sourceTextarea.value;
     laptop.userData.editorFileName = filenameInput.value || 'notes.md';
     saveState();
+
+    // Save to file if content is not empty
+    if (sourceTextarea.value.trim().length > 0) {
+      try {
+        // Use configured folder or default app folder
+        let folderPath = laptop.userData.notesFolderPath;
+        if (!folderPath) {
+          const defaultResult = await window.electronAPI.getDefaultNotesFolder();
+          if (defaultResult.success) {
+            folderPath = defaultResult.folderPath;
+          }
+        }
+
+        if (folderPath) {
+          // Add timestamp to filename when saving
+          const timestampedFilename = getTimestampedFilename(laptop.userData.editorFileName);
+          const result = await window.electronAPI.saveMarkdownFile(
+            folderPath,
+            timestampedFilename,
+            sourceTextarea.value
+          );
+          if (result.success) {
+            console.log('Note saved to:', result.filePath);
+          } else {
+            console.error('Failed to save note:', result.error);
+          }
+        }
+      } catch (error) {
+        console.error('Error saving note to file:', error);
+      }
+    }
   });
 
   // Function to save and close the editor (exitLaptopMode: also exit laptop zoom mode)
-  function saveAndClose(exitLaptopMode = false) {
+  async function saveAndClose(exitLaptopMode = false) {
     laptop.userData.editorContent = sourceTextarea.value;
     laptop.userData.editorFileName = filenameInput.value || 'notes.md';
 
@@ -11373,6 +11482,37 @@ function openMarkdownEditor(laptop) {
     saveState();
     document.removeEventListener('keydown', handleEditorKeys);
     document.removeEventListener('mousedown', handleEditorMiddleClick);
+
+    // Save to file if content is not empty
+    if (sourceTextarea.value.trim().length > 0) {
+      try {
+        // Use configured folder or default app folder
+        let folderPath = laptop.userData.notesFolderPath;
+        if (!folderPath) {
+          const defaultResult = await window.electronAPI.getDefaultNotesFolder();
+          if (defaultResult.success) {
+            folderPath = defaultResult.folderPath;
+          }
+        }
+
+        if (folderPath) {
+          // Add timestamp to filename when saving
+          const timestampedFilename = getTimestampedFilename(laptop.userData.editorFileName);
+          const result = await window.electronAPI.saveMarkdownFile(
+            folderPath,
+            timestampedFilename,
+            sourceTextarea.value
+          );
+          if (result.success) {
+            console.log('Note saved to:', result.filePath);
+          } else {
+            console.error('Failed to save note:', result.error);
+          }
+        }
+      } catch (error) {
+        console.error('Error saving note to file:', error);
+      }
+    }
 
     // Exit laptop zoom mode if requested
     if (exitLaptopMode) {
@@ -15369,6 +15509,10 @@ async function saveStateImmediate() {
           if (obj.userData.editorFileName) {
             data.editorFileName = obj.userData.editorFileName;
           }
+          // Save notes folder path
+          if (obj.userData.notesFolderPath) {
+            data.notesFolderPath = obj.userData.notesFolderPath;
+          }
           // Save editor open state
           if (obj.userData.editorWasOpen) {
             data.editorWasOpen = obj.userData.editorWasOpen;
@@ -15803,6 +15947,7 @@ async function loadState() {
                 // Restore markdown editor content and state
                 if (objData.editorContent !== undefined) obj.userData.editorContent = objData.editorContent;
                 if (objData.editorFileName) obj.userData.editorFileName = objData.editorFileName;
+                if (objData.notesFolderPath) obj.userData.notesFolderPath = objData.notesFolderPath;
                 if (objData.editorWasOpen) obj.userData.editorWasOpen = objData.editorWasOpen;
                 // Restore wallpaper and update desktop texture
                 if (objData.wallpaperDataUrl) {

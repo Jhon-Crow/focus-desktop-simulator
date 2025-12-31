@@ -110,6 +110,92 @@ function getSharedAudioContext() {
   return sharedAudioCtx;
 }
 
+// Robust audio decoding function with fallback methods
+async function decodeAudioBuffer(arrayBuffer) {
+  const audioCtx = getSharedAudioContext();
+
+  // Ensure audio context is running
+  if (audioCtx.state === 'suspended') {
+    try {
+      await audioCtx.resume();
+    } catch (e) {
+      console.warn('Could not resume audio context:', e);
+    }
+  }
+
+  // Make a copy of the buffer since decodeAudioData can detach it
+  const bufferCopy = arrayBuffer.slice(0);
+
+  return new Promise((resolve, reject) => {
+    let handled = false;
+
+    const handleSuccess = (decodedBuffer) => {
+      if (handled) return;
+      handled = true;
+      console.log('Audio decoded successfully, duration:', decodedBuffer.duration);
+      resolve(decodedBuffer);
+    };
+
+    const handleError = (err) => {
+      if (handled) return;
+      handled = true;
+      console.error('decodeAudioData error:', err);
+      reject(new Error('Unable to decode audio file. The file format may not be supported by your browser. Try converting to a standard format like MP3 (128kbps) or WAV (16-bit PCM).'));
+    };
+
+    try {
+      // Use callback form for maximum compatibility
+      audioCtx.decodeAudioData(bufferCopy, handleSuccess, handleError);
+    } catch (e) {
+      // Some browsers throw synchronously instead of calling the error callback
+      console.error('decodeAudioData sync error:', e);
+      handleError(e);
+    }
+  });
+}
+
+// Safe wrapper for loading audio files from File objects
+async function loadAudioFromFile(file) {
+  console.log('loadAudioFromFile:', file.name, 'type:', file.type, 'size:', file.size);
+
+  // Read file as ArrayBuffer
+  const arrayBuffer = await new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result);
+    reader.onerror = () => reject(new Error('Failed to read audio file'));
+    reader.readAsArrayBuffer(file);
+  });
+
+  console.log('File read complete, buffer size:', arrayBuffer.byteLength);
+
+  // Decode the audio
+  const audioBuffer = await decodeAudioBuffer(arrayBuffer);
+
+  // Also create data URL for persistence
+  const dataUrl = await new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result);
+    reader.onerror = () => reject(new Error('Failed to create data URL'));
+    reader.readAsDataURL(file);
+  });
+
+  return { audioBuffer, dataUrl };
+}
+
+// Safe wrapper for loading audio from data URL (for preloading saved sounds)
+async function loadAudioFromDataUrl(dataUrl) {
+  console.log('loadAudioFromDataUrl, dataUrl length:', dataUrl.length);
+
+  // Convert data URL to ArrayBuffer using fetch
+  const response = await fetch(dataUrl);
+  const arrayBuffer = await response.arrayBuffer();
+
+  console.log('DataURL converted to ArrayBuffer, size:', arrayBuffer.byteLength);
+
+  // Decode the audio
+  return await decodeAudioBuffer(arrayBuffer);
+}
+
 // Drag-and-drop state for menu items
 let draggedPresetType = null;
 let dragPreviewElement = null;
@@ -6896,77 +6982,41 @@ function setupMetronomeCustomizationHandlers(object) {
     const customSoundInput = document.getElementById('metronome-custom-sound');
     if (customSoundInput) {
       customSoundInput.addEventListener('change', async (e) => {
-        const file = e.target.files[0];
-        if (!file) return;
+        try {
+          const file = e.target.files[0];
+          if (!file) return;
 
-        // Check if file is audio by MIME type or extension (some files may not have proper MIME type in Electron)
-        const isAudioByType = file.type.startsWith('audio/');
-        const extension = file.name.split('.').pop().toLowerCase();
-        const audioExtensions = ['mp3', 'wav', 'ogg', 'flac', 'aac', 'm4a', 'webm'];
-        const isAudioByExtension = audioExtensions.includes(extension);
+          // Check if file is audio by MIME type or extension (some files may not have proper MIME type in Electron)
+          const isAudioByType = file.type.startsWith('audio/');
+          const extension = file.name.split('.').pop().toLowerCase();
+          const audioExtensions = ['mp3', 'wav', 'ogg', 'flac', 'aac', 'm4a', 'webm'];
+          const isAudioByExtension = audioExtensions.includes(extension);
 
-        if (isAudioByType || isAudioByExtension) {
-          try {
-            console.log('Loading audio file:', file.name, 'type:', file.type, 'size:', file.size);
-
-            // Use FileReader.readAsArrayBuffer for better compatibility with Electron
-            const arrayBuffer = await new Promise((resolve, reject) => {
-              const reader = new FileReader();
-              reader.onload = (event) => resolve(event.target.result);
-              reader.onerror = (err) => reject(new Error('Failed to read file: ' + err));
-              reader.readAsArrayBuffer(file);
-            });
-
-            console.log('ArrayBuffer loaded, size:', arrayBuffer.byteLength);
-
-            // Also create data URL for persistence in parallel
-            const dataUrlPromise = new Promise((resolve, reject) => {
-              const reader = new FileReader();
-              reader.onload = (event) => resolve(event.target.result);
-              reader.onerror = (err) => reject(new Error('Failed to create data URL: ' + err));
-              reader.readAsDataURL(file);
-            });
-
-            // Decode the audio
-            const audioCtx = getSharedAudioContext();
-            if (audioCtx.state === 'suspended') {
-              await audioCtx.resume();
-            }
-            console.log('AudioContext state:', audioCtx.state);
-
-            // decodeAudioData with callback fallback for older implementations
-            const buffer = await new Promise((resolve, reject) => {
-              // Make a copy since some implementations detach the buffer
-              const bufferCopy = arrayBuffer.slice(0);
-              audioCtx.decodeAudioData(
-                bufferCopy,
-                (decodedBuffer) => resolve(decodedBuffer),
-                (err) => reject(err || new Error('Failed to decode audio data'))
-              );
-            });
-
-            console.log('Audio decoded, duration:', buffer.duration, 'channels:', buffer.numberOfChannels);
-
-            object.userData.customSoundBuffer = buffer;
-            object.userData.tickSoundType = 'custom';
-
-            // Wait for data URL and save it
-            const dataUrl = await dataUrlPromise;
-            object.userData.customSoundDataUrl = dataUrl;
-            saveState();
-
-            console.log('Metronome custom sound loaded successfully');
-
-            // Refresh the customization panel to show the new buttons
-            updateCustomizationPanel(object);
-          } catch (err) {
-            console.error('Error loading custom sound:', err);
-            console.error('Error details:', err.message, err.stack);
-            alert('Could not load audio file: ' + (err.message || 'Unknown error') + '\nPlease try a different file format (WAV, MP3, OGG recommended).');
+          if (!isAudioByType && !isAudioByExtension) {
+            console.log('File rejected - not recognized as audio:', file.name, 'type:', file.type);
+            alert('Please select an audio file (MP3, WAV, OGG, etc.)');
+            return;
           }
-        } else {
-          console.log('File rejected - not recognized as audio:', file.name, 'type:', file.type);
-          alert('Please select an audio file (MP3, WAV, OGG, etc.)');
+
+          console.log('Loading metronome custom sound:', file.name);
+
+          // Use the robust audio loading helper
+          const { audioBuffer, dataUrl } = await loadAudioFromFile(file);
+
+          object.userData.customSoundBuffer = audioBuffer;
+          object.userData.tickSoundType = 'custom';
+          object.userData.customSoundDataUrl = dataUrl;
+          saveState();
+
+          console.log('Metronome custom sound loaded successfully');
+
+          // Refresh the customization panel to show the new buttons
+          updateCustomizationPanel(object);
+        } catch (err) {
+          console.error('Error loading metronome custom sound:', err);
+          alert('Could not load audio file: ' + (err.message || 'Unknown error') + '\nPlease try a different file format.');
+          // Reset the file input
+          e.target.value = '';
         }
       });
     }
@@ -6993,38 +7043,19 @@ async function preloadMetronomeCustomSound(object) {
   if (!object.userData.customSoundDataUrl) return;
 
   try {
-    const audioCtx = getSharedAudioContext();
-    // Resume audio context if suspended (browsers require user interaction)
-    if (audioCtx.state === 'suspended') {
-      await audioCtx.resume();
-    }
+    console.log('Preloading metronome custom sound...');
 
-    // Use fetch to convert data URL to ArrayBuffer more reliably
-    // This works better for both .wav and .mp3 files
-    const response = await fetch(object.userData.customSoundDataUrl);
-    const arrayBuffer = await response.arrayBuffer();
+    // Use the robust audio loading helper
+    const audioBuffer = await loadAudioFromDataUrl(object.userData.customSoundDataUrl);
 
-    console.log('Preloading metronome sound, buffer size:', arrayBuffer.byteLength);
-
-    // decodeAudioData with callback fallback for better compatibility
-    const buffer = await new Promise((resolve, reject) => {
-      const bufferCopy = arrayBuffer.slice(0);
-      audioCtx.decodeAudioData(
-        bufferCopy,
-        (decodedBuffer) => resolve(decodedBuffer),
-        (err) => reject(err || new Error('Failed to decode audio data'))
-      );
-    });
-
-    object.userData.customSoundBuffer = buffer;
+    object.userData.customSoundBuffer = audioBuffer;
     // Automatically switch to custom sound when loaded successfully
     object.userData.tickSoundType = 'custom';
-    console.log('Metronome custom sound preloaded successfully, duration:', buffer.duration);
+    console.log('Metronome custom sound preloaded successfully, duration:', audioBuffer.duration);
     // Don't call saveState() here - this function is called during loading
     // and calling saveState during load causes race conditions
   } catch (e) {
-    console.error('Error preloading custom sound:', e);
-    console.error('Error details:', e.message);
+    console.error('Error preloading metronome custom sound:', e);
     // Reset custom sound state on error - but don't show alert during preload
     // as this could be triggered during page load
     object.userData.customSoundBuffer = null;
@@ -8467,80 +8498,44 @@ function setupTimerHandlers() {
   const customSoundInput = document.getElementById('timer-custom-sound');
   if (customSoundInput) {
     customSoundInput.addEventListener('change', async (e) => {
-      const file = e.target.files[0];
-      if (!file) return;
+      try {
+        const file = e.target.files[0];
+        if (!file) return;
 
-      // Check if file is audio by MIME type or extension (some files may not have proper MIME type in Electron)
-      const isAudioByType = file.type.startsWith('audio/');
-      const extension = file.name.split('.').pop().toLowerCase();
-      const audioExtensions = ['mp3', 'wav', 'ogg', 'flac', 'aac', 'm4a', 'webm'];
-      const isAudioByExtension = audioExtensions.includes(extension);
+        // Check if file is audio by MIME type or extension (some files may not have proper MIME type in Electron)
+        const isAudioByType = file.type.startsWith('audio/');
+        const extension = file.name.split('.').pop().toLowerCase();
+        const audioExtensions = ['mp3', 'wav', 'ogg', 'flac', 'aac', 'm4a', 'webm'];
+        const isAudioByExtension = audioExtensions.includes(extension);
 
-      if (isAudioByType || isAudioByExtension) {
-        try {
-          console.log('Loading timer audio file:', file.name, 'type:', file.type, 'size:', file.size);
-
-          // Use FileReader.readAsArrayBuffer for better compatibility with Electron
-          const arrayBuffer = await new Promise((resolve, reject) => {
-            const reader = new FileReader();
-            reader.onload = (event) => resolve(event.target.result);
-            reader.onerror = (err) => reject(new Error('Failed to read file: ' + err));
-            reader.readAsArrayBuffer(file);
-          });
-
-          console.log('Timer ArrayBuffer loaded, size:', arrayBuffer.byteLength);
-
-          // Also create data URL for persistence in parallel
-          const dataUrlPromise = new Promise((resolve, reject) => {
-            const reader = new FileReader();
-            reader.onload = (event) => resolve(event.target.result);
-            reader.onerror = (err) => reject(new Error('Failed to create data URL: ' + err));
-            reader.readAsDataURL(file);
-          });
-
-          // Decode the audio - use shared audio context for consistency
-          const audioCtx = getSharedAudioContext();
-          if (audioCtx.state === 'suspended') {
-            await audioCtx.resume();
-          }
-          console.log('Timer AudioContext state:', audioCtx.state);
-
-          // decodeAudioData with callback fallback for older implementations
-          const buffer = await new Promise((resolve, reject) => {
-            // Make a copy since some implementations detach the buffer
-            const bufferCopy = arrayBuffer.slice(0);
-            audioCtx.decodeAudioData(
-              bufferCopy,
-              (decodedBuffer) => resolve(decodedBuffer),
-              (err) => reject(err || new Error('Failed to decode audio data'))
-            );
-          });
-
-          console.log('Timer audio decoded, duration:', buffer.duration, 'channels:', buffer.numberOfChannels);
-
-          timerState.customSoundBuffer = buffer;
-          timerState.useCustomSound = true;
-
-          // Wait for data URL and save it
-          const dataUrl = await dataUrlPromise;
-          timerState.customSoundDataUrl = dataUrl;
-
-          console.log('Timer custom sound loaded successfully');
-
-          // Refresh the modal to show new buttons
-          if (interactionObject && interactionObject.userData.type === 'clock') {
-            const content = document.getElementById('interaction-content');
-            content.innerHTML = getInteractionContent(interactionObject);
-            setupTimerHandlers();
-          }
-        } catch (err) {
-          console.error('Error loading timer custom sound:', err);
-          console.error('Error details:', err.message, err.stack);
-          alert('Could not load audio file: ' + (err.message || 'Unknown error') + '\nPlease try a different file format (WAV, MP3, OGG recommended).');
+        if (!isAudioByType && !isAudioByExtension) {
+          console.log('Timer file rejected - not recognized as audio:', file.name, 'type:', file.type);
+          alert('Please select an audio file (MP3, WAV, OGG, etc.)');
+          return;
         }
-      } else {
-        console.log('Timer file rejected - not recognized as audio:', file.name, 'type:', file.type);
-        alert('Please select an audio file (MP3, WAV, OGG, etc.)');
+
+        console.log('Loading timer custom sound:', file.name);
+
+        // Use the robust audio loading helper
+        const { audioBuffer, dataUrl } = await loadAudioFromFile(file);
+
+        timerState.customSoundBuffer = audioBuffer;
+        timerState.useCustomSound = true;
+        timerState.customSoundDataUrl = dataUrl;
+
+        console.log('Timer custom sound loaded successfully');
+
+        // Refresh the modal to show new buttons
+        if (interactionObject && interactionObject.userData.type === 'clock') {
+          const content = document.getElementById('interaction-content');
+          content.innerHTML = getInteractionContent(interactionObject);
+          setupTimerHandlers();
+        }
+      } catch (err) {
+        console.error('Error loading timer custom sound:', err);
+        alert('Could not load audio file: ' + (err.message || 'Unknown error') + '\nPlease try a different file format.');
+        // Reset the file input
+        e.target.value = '';
       }
     });
   }
@@ -8599,37 +8594,17 @@ async function preloadTimerCustomSound() {
   if (!timerState.customSoundDataUrl) return;
 
   try {
-    // Use shared audio context for consistency
-    const audioCtx = getSharedAudioContext();
-    // Resume audio context if suspended (browsers require user interaction)
-    if (audioCtx.state === 'suspended') {
-      await audioCtx.resume();
-    }
+    console.log('Preloading timer custom sound...');
 
-    // Use fetch to convert data URL to ArrayBuffer more reliably
-    // This works better for both .wav and .mp3 files
-    const response = await fetch(timerState.customSoundDataUrl);
-    const arrayBuffer = await response.arrayBuffer();
+    // Use the robust audio loading helper
+    const audioBuffer = await loadAudioFromDataUrl(timerState.customSoundDataUrl);
 
-    console.log('Preloading timer sound, buffer size:', arrayBuffer.byteLength);
-
-    // decodeAudioData with callback fallback for better compatibility
-    const buffer = await new Promise((resolve, reject) => {
-      const bufferCopy = arrayBuffer.slice(0);
-      audioCtx.decodeAudioData(
-        bufferCopy,
-        (decodedBuffer) => resolve(decodedBuffer),
-        (err) => reject(err || new Error('Failed to decode audio data'))
-      );
-    });
-
-    timerState.customSoundBuffer = buffer;
+    timerState.customSoundBuffer = audioBuffer;
     // Automatically enable custom sound when loaded successfully
     timerState.useCustomSound = true;
-    console.log('Timer custom sound preloaded successfully, duration:', buffer.duration);
+    console.log('Timer custom sound preloaded successfully, duration:', audioBuffer.duration);
   } catch (e) {
     console.error('Error preloading timer custom sound:', e);
-    console.error('Error details:', e.message);
     // Reset custom sound state on error - but don't show alert during preload
     // as this could be triggered during page load
     timerState.customSoundBuffer = null;

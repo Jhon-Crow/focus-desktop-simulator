@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog } = require('electron');
 const path = require('path');
 const { exec, spawn } = require('child_process');
 const fs = require('fs');
@@ -245,5 +245,118 @@ ipcMain.handle('transcode-audio', async (event, audioDataBase64, fileName) => {
       success: false,
       error: error.message
     };
+  }
+});
+
+// ============================================================================
+// CASSETTE PLAYER - Music Folder Selection and Audio File Reading
+// ============================================================================
+
+// Supported audio extensions for the cassette player
+const AUDIO_EXTENSIONS = ['.mp3', '.wav', '.ogg', '.flac', '.aac', '.m4a', '.webm', '.opus'];
+
+// Open folder selection dialog and return audio files in the folder
+ipcMain.handle('select-music-folder', async () => {
+  try {
+    const result = await dialog.showOpenDialog(mainWindow, {
+      properties: ['openDirectory'],
+      title: 'Select Music Folder'
+    });
+
+    if (result.canceled || result.filePaths.length === 0) {
+      return { success: true, canceled: true };
+    }
+
+    const folderPath = result.filePaths[0];
+
+    // Read all audio files from the folder
+    const files = fs.readdirSync(folderPath);
+    const audioFiles = files
+      .filter(file => {
+        const ext = path.extname(file).toLowerCase();
+        return AUDIO_EXTENSIONS.includes(ext);
+      })
+      .map(file => ({
+        name: path.basename(file, path.extname(file)), // Name without extension
+        fullName: file,
+        path: path.join(folderPath, file)
+      }))
+      .sort((a, b) => a.name.localeCompare(b.name)); // Sort alphabetically
+
+    return {
+      success: true,
+      folderPath: folderPath,
+      audioFiles: audioFiles
+    };
+  } catch (error) {
+    console.error('Error selecting music folder:', error);
+    return { success: false, error: error.message };
+  }
+});
+
+// Read audio file and return as base64 data URL
+ipcMain.handle('read-audio-file', async (event, filePath) => {
+  try {
+    if (!fs.existsSync(filePath)) {
+      return { success: false, error: 'File not found' };
+    }
+
+    const ext = path.extname(filePath).toLowerCase();
+    const buffer = fs.readFileSync(filePath);
+    const base64 = buffer.toString('base64');
+
+    // Determine MIME type
+    const mimeTypes = {
+      '.mp3': 'audio/mpeg',
+      '.wav': 'audio/wav',
+      '.ogg': 'audio/ogg',
+      '.flac': 'audio/flac',
+      '.aac': 'audio/aac',
+      '.m4a': 'audio/mp4',
+      '.webm': 'audio/webm',
+      '.opus': 'audio/opus'
+    };
+
+    const mimeType = mimeTypes[ext] || 'audio/mpeg';
+    const dataUrl = `data:${mimeType};base64,${base64}`;
+
+    return {
+      success: true,
+      dataUrl: dataUrl,
+      fileName: path.basename(filePath)
+    };
+  } catch (error) {
+    console.error('Error reading audio file:', error);
+    return { success: false, error: error.message };
+  }
+});
+
+// Refresh music folder - re-scan for audio files
+ipcMain.handle('refresh-music-folder', async (event, folderPath) => {
+  try {
+    if (!fs.existsSync(folderPath)) {
+      return { success: false, error: 'Folder not found' };
+    }
+
+    const files = fs.readdirSync(folderPath);
+    const audioFiles = files
+      .filter(file => {
+        const ext = path.extname(file).toLowerCase();
+        return AUDIO_EXTENSIONS.includes(ext);
+      })
+      .map(file => ({
+        name: path.basename(file, path.extname(file)),
+        fullName: file,
+        path: path.join(folderPath, file)
+      }))
+      .sort((a, b) => a.name.localeCompare(b.name));
+
+    return {
+      success: true,
+      audioFiles: audioFiles
+    };
+  } catch (error) {
+    console.error('Error refreshing music folder:', error);
+    return { success: false, error: error.message };
   }
 });

@@ -1145,7 +1145,8 @@ const PRESET_CREATORS = {
   trophy: createTrophy,
   hourglass: createHourglass,
   paper: createPaper,
-  metronome: createMetronome
+  metronome: createMetronome,
+  'cassette-player': createCassettePlayer
 };
 
 // ============================================================================
@@ -1202,7 +1203,8 @@ const PALETTE_CATEGORIES = {
     name: 'Audio',
     icon: '🎵',
     variants: [
-      { id: 'metronome', name: 'Metronome', icon: '🎵' }
+      { id: 'metronome', name: 'Metronome', icon: '🎵' },
+      { id: 'cassette-player', name: 'Cassette Player', icon: '📼' }
     ],
     activeIndex: 0
   },
@@ -2886,6 +2888,746 @@ function createMetronome(options = {}) {
   group.position.y = getDeskSurfaceY();
 
   return group;
+}
+
+// ============================================================================
+// CASSETTE PLAYER
+// ============================================================================
+// Cassette player state for audio effects
+let cassettePlayerState = {
+  audioContext: null,
+  audioElement: null,
+  sourceNode: null,
+  gainNode: null,
+  // Effect nodes for tape simulation
+  tapeHissNode: null,
+  lowpassNode: null,
+  highpassNode: null,
+  wowFlutterNode: null,
+  saturationNode: null,
+  // State
+  isPlaying: false,
+  currentTrackIndex: 0,
+  currentPlayerId: null // Track which player is active
+};
+
+function createCassettePlayer(options = {}) {
+  const group = new THREE.Group();
+  group.userData = {
+    type: 'cassette-player',
+    name: 'Cassette Player',
+    interactive: false, // Uses button clicks, not modal interaction
+    // Playback state
+    isPlaying: false,
+    currentTrackIndex: 0,
+    // Music folder
+    musicFolderPath: options.musicFolderPath || null,
+    audioFiles: options.audioFiles || [], // Array of {name, fullName, path}
+    // Audio effects settings
+    tapeHissLevel: options.tapeHissLevel !== undefined ? options.tapeHissLevel : 0.3, // 0-1
+    wowFlutterLevel: options.wowFlutterLevel !== undefined ? options.wowFlutterLevel : 0.5, // 0-1
+    saturationLevel: options.saturationLevel !== undefined ? options.saturationLevel : 0.4, // 0-1
+    lowCutoff: options.lowCutoff !== undefined ? options.lowCutoff : 80, // Hz
+    highCutoff: options.highCutoff !== undefined ? options.highCutoff : 12000, // Hz
+    volume: options.volume !== undefined ? options.volume : 0.7, // 0-1
+    // Cassette animation state
+    reelRotation: 0,
+    // Colors
+    mainColor: options.mainColor || '#2c3e50', // Dark blue-gray body
+    accentColor: options.accentColor || '#c0c0c0' // Silver accents
+  };
+
+  const bodyMaterial = new THREE.MeshStandardMaterial({
+    color: new THREE.Color(group.userData.mainColor),
+    roughness: 0.6,
+    metalness: 0.2
+  });
+
+  const metalMaterial = new THREE.MeshStandardMaterial({
+    color: new THREE.Color(group.userData.accentColor),
+    roughness: 0.3,
+    metalness: 0.7
+  });
+
+  const blackMaterial = new THREE.MeshStandardMaterial({
+    color: 0x1a1a1a,
+    roughness: 0.8,
+    metalness: 0.1
+  });
+
+  // Main body - rectangular portable player
+  const bodyWidth = 0.6;
+  const bodyHeight = 0.15;
+  const bodyDepth = 0.4;
+
+  const bodyGeometry = new THREE.BoxGeometry(bodyWidth, bodyHeight, bodyDepth);
+  const body = new THREE.Mesh(bodyGeometry, bodyMaterial);
+  body.position.y = bodyHeight / 2;
+  body.castShadow = true;
+  group.add(body);
+
+  // Rounded edges using small cylinders at corners (simplified visual)
+  const edgeRadius = 0.02;
+  const edgeMaterial = bodyMaterial;
+
+  // Front panel (slightly recessed area for cassette window)
+  const frontPanelGeometry = new THREE.BoxGeometry(bodyWidth * 0.85, bodyHeight * 0.6, 0.02);
+  const frontPanelMaterial = new THREE.MeshStandardMaterial({
+    color: 0x1a1a1a,
+    roughness: 0.9,
+    metalness: 0.0
+  });
+  const frontPanel = new THREE.Mesh(frontPanelGeometry, frontPanelMaterial);
+  frontPanel.position.set(0, bodyHeight / 2, bodyDepth / 2 + 0.01);
+  group.add(frontPanel);
+
+  // Cassette window (transparent area showing reels)
+  const windowGeometry = new THREE.BoxGeometry(bodyWidth * 0.5, bodyHeight * 0.35, 0.01);
+  const windowMaterial = new THREE.MeshStandardMaterial({
+    color: 0x87ceeb,
+    roughness: 0.1,
+    metalness: 0.0,
+    transparent: true,
+    opacity: 0.3
+  });
+  const cassetteWindow = new THREE.Mesh(windowGeometry, windowMaterial);
+  cassetteWindow.position.set(0, bodyHeight / 2 + 0.02, bodyDepth / 2 + 0.015);
+  group.add(cassetteWindow);
+
+  // Cassette reels (visible through window)
+  const reelGroup = new THREE.Group();
+  reelGroup.name = 'reels';
+
+  const reelGeometry = new THREE.CylinderGeometry(0.04, 0.04, 0.02, 16);
+  const reelMaterial = new THREE.MeshStandardMaterial({
+    color: 0x2d2d2d,
+    roughness: 0.5,
+    metalness: 0.3
+  });
+
+  // Left reel (supply)
+  const leftReel = new THREE.Mesh(reelGeometry, reelMaterial);
+  leftReel.rotation.x = Math.PI / 2;
+  leftReel.position.set(-0.08, bodyHeight / 2 + 0.02, bodyDepth / 2 + 0.02);
+  leftReel.name = 'leftReel';
+  reelGroup.add(leftReel);
+
+  // Right reel (take-up)
+  const rightReel = new THREE.Mesh(reelGeometry, reelMaterial);
+  rightReel.rotation.x = Math.PI / 2;
+  rightReel.position.set(0.08, bodyHeight / 2 + 0.02, bodyDepth / 2 + 0.02);
+  rightReel.name = 'rightReel';
+  reelGroup.add(rightReel);
+
+  // Reel center hubs
+  const hubGeometry = new THREE.CylinderGeometry(0.015, 0.015, 0.025, 8);
+  const hubMaterial = new THREE.MeshStandardMaterial({
+    color: 0xffffff,
+    roughness: 0.3
+  });
+
+  const leftHub = new THREE.Mesh(hubGeometry, hubMaterial);
+  leftHub.rotation.x = Math.PI / 2;
+  leftHub.position.set(-0.08, bodyHeight / 2 + 0.02, bodyDepth / 2 + 0.025);
+  reelGroup.add(leftHub);
+
+  const rightHub = new THREE.Mesh(hubGeometry, hubMaterial);
+  rightHub.rotation.x = Math.PI / 2;
+  rightHub.position.set(0.08, bodyHeight / 2 + 0.02, bodyDepth / 2 + 0.025);
+  reelGroup.add(rightHub);
+
+  group.add(reelGroup);
+
+  // Display screen for track name (LCD-style)
+  const screenWidth = bodyWidth * 0.7;
+  const screenHeight = 0.035;
+  const screenGeometry = new THREE.PlaneGeometry(screenWidth, screenHeight);
+  const screenMaterial = new THREE.MeshStandardMaterial({
+    color: 0x2d4a3e, // Dark green LCD background
+    roughness: 0.8,
+    metalness: 0.0
+  });
+  const screen = new THREE.Mesh(screenGeometry, screenMaterial);
+  screen.position.set(0, bodyHeight / 2 - 0.035, bodyDepth / 2 + 0.011);
+  screen.name = 'screen';
+  group.add(screen);
+
+  // Screen text will be created dynamically when track changes
+  // Create a canvas texture for the screen
+  const screenCanvas = document.createElement('canvas');
+  screenCanvas.width = 256;
+  screenCanvas.height = 32;
+  const screenCtx = screenCanvas.getContext('2d');
+
+  // Initial screen display
+  screenCtx.fillStyle = '#2d4a3e';
+  screenCtx.fillRect(0, 0, 256, 32);
+  screenCtx.fillStyle = '#7cfc7c'; // Green LCD text
+  screenCtx.font = 'bold 18px Courier New, monospace';
+  screenCtx.textAlign = 'center';
+  screenCtx.textBaseline = 'middle';
+  screenCtx.fillText('NO FOLDER', 128, 16);
+
+  const screenTexture = new THREE.CanvasTexture(screenCanvas);
+  screenTexture.needsUpdate = true;
+
+  const screenDisplayMaterial = new THREE.MeshBasicMaterial({
+    map: screenTexture,
+    transparent: true
+  });
+  const screenDisplay = new THREE.Mesh(
+    new THREE.PlaneGeometry(screenWidth * 0.95, screenHeight * 0.85),
+    screenDisplayMaterial
+  );
+  screenDisplay.position.set(0, bodyHeight / 2 - 0.035, bodyDepth / 2 + 0.012);
+  screenDisplay.name = 'screenDisplay';
+  group.add(screenDisplay);
+
+  // Store canvas reference for updates
+  group.userData.screenCanvas = screenCanvas;
+  group.userData.screenCtx = screenCtx;
+  group.userData.screenTexture = screenTexture;
+
+  // Control buttons on the front (below the screen)
+  const buttonWidth = 0.06;
+  const buttonHeight = 0.025;
+  const buttonDepth = 0.015;
+  const buttonY = bodyHeight / 2 - 0.065;
+  const buttonZ = bodyDepth / 2 + 0.005;
+  const buttonSpacing = 0.08;
+
+  const buttonGeometry = new THREE.BoxGeometry(buttonWidth, buttonHeight, buttonDepth);
+
+  // Button materials with different colors
+  const buttonMaterials = {
+    prev: new THREE.MeshStandardMaterial({ color: 0x4a4a4a, roughness: 0.6, metalness: 0.3 }),
+    play: new THREE.MeshStandardMaterial({ color: 0x2ecc71, roughness: 0.6, metalness: 0.3 }),
+    stop: new THREE.MeshStandardMaterial({ color: 0xe74c3c, roughness: 0.6, metalness: 0.3 }),
+    next: new THREE.MeshStandardMaterial({ color: 0x4a4a4a, roughness: 0.6, metalness: 0.3 })
+  };
+
+  // Create buttons group
+  const buttonsGroup = new THREE.Group();
+  buttonsGroup.name = 'buttons';
+
+  // Previous track button (|◀)
+  const prevButton = new THREE.Mesh(buttonGeometry, buttonMaterials.prev);
+  prevButton.position.set(-buttonSpacing * 1.5, buttonY, buttonZ);
+  prevButton.name = 'prevButton';
+  prevButton.userData.buttonType = 'prev';
+  buttonsGroup.add(prevButton);
+
+  // Play/Pause button (▶/❚❚)
+  const playButton = new THREE.Mesh(buttonGeometry, buttonMaterials.play);
+  playButton.position.set(-buttonSpacing * 0.5, buttonY, buttonZ);
+  playButton.name = 'playButton';
+  playButton.userData.buttonType = 'play';
+  buttonsGroup.add(playButton);
+
+  // Stop button (■)
+  const stopButton = new THREE.Mesh(buttonGeometry, buttonMaterials.stop);
+  stopButton.position.set(buttonSpacing * 0.5, buttonY, buttonZ);
+  stopButton.name = 'stopButton';
+  stopButton.userData.buttonType = 'stop';
+  buttonsGroup.add(stopButton);
+
+  // Next track button (▶|)
+  const nextButton = new THREE.Mesh(buttonGeometry, buttonMaterials.next);
+  nextButton.position.set(buttonSpacing * 1.5, buttonY, buttonZ);
+  nextButton.name = 'nextButton';
+  nextButton.userData.buttonType = 'next';
+  buttonsGroup.add(nextButton);
+
+  // Add button symbols using small geometries
+  const symbolMaterial = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.5 });
+
+  // Prev symbol (◀|)
+  const prevSymbol1 = new THREE.Mesh(
+    new THREE.ConeGeometry(0.008, 0.015, 3),
+    symbolMaterial
+  );
+  prevSymbol1.rotation.z = Math.PI / 2;
+  prevSymbol1.position.set(-buttonSpacing * 1.5 + 0.005, buttonY, buttonZ + buttonDepth / 2 + 0.002);
+  buttonsGroup.add(prevSymbol1);
+
+  const prevSymbol2 = new THREE.Mesh(
+    new THREE.BoxGeometry(0.003, 0.015, 0.002),
+    symbolMaterial
+  );
+  prevSymbol2.position.set(-buttonSpacing * 1.5 - 0.015, buttonY, buttonZ + buttonDepth / 2 + 0.002);
+  buttonsGroup.add(prevSymbol2);
+
+  // Play symbol (▶)
+  const playSymbol = new THREE.Mesh(
+    new THREE.ConeGeometry(0.01, 0.018, 3),
+    symbolMaterial
+  );
+  playSymbol.rotation.z = -Math.PI / 2;
+  playSymbol.position.set(-buttonSpacing * 0.5, buttonY, buttonZ + buttonDepth / 2 + 0.002);
+  playSymbol.name = 'playSymbol';
+  buttonsGroup.add(playSymbol);
+
+  // Stop symbol (■)
+  const stopSymbol = new THREE.Mesh(
+    new THREE.BoxGeometry(0.012, 0.012, 0.002),
+    symbolMaterial
+  );
+  stopSymbol.position.set(buttonSpacing * 0.5, buttonY, buttonZ + buttonDepth / 2 + 0.002);
+  buttonsGroup.add(stopSymbol);
+
+  // Next symbol (|▶)
+  const nextSymbol1 = new THREE.Mesh(
+    new THREE.BoxGeometry(0.003, 0.015, 0.002),
+    symbolMaterial
+  );
+  nextSymbol1.position.set(buttonSpacing * 1.5 - 0.015, buttonY, buttonZ + buttonDepth / 2 + 0.002);
+  buttonsGroup.add(nextSymbol1);
+
+  const nextSymbol2 = new THREE.Mesh(
+    new THREE.ConeGeometry(0.008, 0.015, 3),
+    symbolMaterial
+  );
+  nextSymbol2.rotation.z = -Math.PI / 2;
+  nextSymbol2.position.set(buttonSpacing * 1.5 + 0.005, buttonY, buttonZ + buttonDepth / 2 + 0.002);
+  buttonsGroup.add(nextSymbol2);
+
+  group.add(buttonsGroup);
+
+  // Volume wheel on the side
+  const volumeWheelGeometry = new THREE.CylinderGeometry(0.02, 0.02, 0.015, 16);
+  const volumeWheel = new THREE.Mesh(volumeWheelGeometry, metalMaterial);
+  volumeWheel.rotation.z = Math.PI / 2;
+  volumeWheel.position.set(bodyWidth / 2 + 0.008, bodyHeight / 2, 0);
+  volumeWheel.name = 'volumeWheel';
+  group.add(volumeWheel);
+
+  // Speaker grill on the side (small holes pattern)
+  const grillGroup = new THREE.Group();
+  grillGroup.name = 'speakerGrill';
+
+  const holeGeometry = new THREE.CircleGeometry(0.005, 8);
+  const holeMaterial = new THREE.MeshStandardMaterial({
+    color: 0x1a1a1a,
+    roughness: 1.0
+  });
+
+  for (let row = 0; row < 3; row++) {
+    for (let col = 0; col < 5; col++) {
+      const hole = new THREE.Mesh(holeGeometry, holeMaterial);
+      hole.position.set(
+        -bodyWidth / 2 - 0.001,
+        bodyHeight / 2 - 0.03 + row * 0.02,
+        -0.06 + col * 0.03
+      );
+      hole.rotation.y = -Math.PI / 2;
+      grillGroup.add(hole);
+    }
+  }
+  group.add(grillGroup);
+
+  // Headphone jack
+  const jackGeometry = new THREE.CylinderGeometry(0.008, 0.008, 0.02, 8);
+  const jack = new THREE.Mesh(jackGeometry, blackMaterial);
+  jack.rotation.x = Math.PI / 2;
+  jack.position.set(bodyWidth / 4, 0, -bodyDepth / 2 - 0.01);
+  group.add(jack);
+
+  // Belt clip on the back
+  const clipGeometry = new THREE.BoxGeometry(0.08, 0.02, 0.03);
+  const clip = new THREE.Mesh(clipGeometry, metalMaterial);
+  clip.position.set(0, bodyHeight - 0.01, -bodyDepth / 2 + 0.015);
+  group.add(clip);
+
+  group.position.y = getDeskSurfaceY();
+
+  return group;
+}
+
+// Update cassette player screen display
+function updateCassetteScreen(object, text, scrolling = false) {
+  if (!object.userData.screenCtx || !object.userData.screenTexture) return;
+
+  const ctx = object.userData.screenCtx;
+  const canvas = object.userData.screenCanvas;
+
+  // Clear screen with LCD background
+  ctx.fillStyle = '#2d4a3e';
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+  // Draw text in LCD green
+  ctx.fillStyle = '#7cfc7c';
+  ctx.font = 'bold 16px Courier New, monospace';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+
+  // Handle long text with scrolling or truncation
+  let displayText = text;
+  if (text.length > 18) {
+    if (scrolling && object.userData.isPlaying) {
+      // Animate scrolling text
+      const time = Date.now();
+      const scrollOffset = Math.floor((time / 200) % (text.length + 5));
+      const paddedText = text + '     ' + text;
+      displayText = paddedText.substring(scrollOffset, scrollOffset + 18);
+    } else {
+      displayText = text.substring(0, 15) + '...';
+    }
+  }
+
+  ctx.fillText(displayText, canvas.width / 2, canvas.height / 2);
+
+  object.userData.screenTexture.needsUpdate = true;
+}
+
+// ============================================================================
+// CASSETTE AUDIO EFFECTS
+// ============================================================================
+// Creates tape-like audio effects: hiss, wow & flutter, frequency limiting, saturation
+
+function createCassetteAudioNodes(audioContext) {
+  const nodes = {};
+
+  // Tape hiss generator (white noise)
+  const bufferSize = 2 * audioContext.sampleRate;
+  const noiseBuffer = audioContext.createBuffer(1, bufferSize, audioContext.sampleRate);
+  const output = noiseBuffer.getChannelData(0);
+  for (let i = 0; i < bufferSize; i++) {
+    output[i] = Math.random() * 2 - 1;
+  }
+
+  nodes.noiseSource = audioContext.createBufferSource();
+  nodes.noiseSource.buffer = noiseBuffer;
+  nodes.noiseSource.loop = true;
+
+  // Noise gain (for tape hiss level)
+  nodes.noiseGain = audioContext.createGain();
+  nodes.noiseGain.gain.value = 0.02; // Very low - background hiss
+
+  // High-pass filter for noise (to make it more like tape hiss)
+  nodes.noiseHighpass = audioContext.createBiquadFilter();
+  nodes.noiseHighpass.type = 'highpass';
+  nodes.noiseHighpass.frequency.value = 2000;
+
+  // Connect noise chain
+  nodes.noiseSource.connect(nodes.noiseHighpass);
+  nodes.noiseHighpass.connect(nodes.noiseGain);
+
+  // Low-pass filter (tape frequency limitation - around 12-15kHz)
+  nodes.lowpass = audioContext.createBiquadFilter();
+  nodes.lowpass.type = 'lowpass';
+  nodes.lowpass.frequency.value = 12000;
+  nodes.lowpass.Q.value = 0.7;
+
+  // High-pass filter (remove very low frequencies)
+  nodes.highpass = audioContext.createBiquadFilter();
+  nodes.highpass.type = 'highpass';
+  nodes.highpass.frequency.value = 80;
+  nodes.highpass.Q.value = 0.7;
+
+  // Mid-range boost (tape warmth)
+  nodes.midBoost = audioContext.createBiquadFilter();
+  nodes.midBoost.type = 'peaking';
+  nodes.midBoost.frequency.value = 1000;
+  nodes.midBoost.Q.value = 0.8;
+  nodes.midBoost.gain.value = 2; // Slight boost
+
+  // Wow and Flutter (pitch modulation) using delay with modulated time
+  nodes.wowFlutterDelay = audioContext.createDelay(0.1);
+  nodes.wowFlutterDelay.delayTime.value = 0.005;
+
+  // LFO for wow effect (slow pitch variation)
+  nodes.wowLFO = audioContext.createOscillator();
+  nodes.wowLFO.type = 'sine';
+  nodes.wowLFO.frequency.value = 0.5; // 0.5 Hz - slow wow
+
+  nodes.wowLFOGain = audioContext.createGain();
+  nodes.wowLFOGain.gain.value = 0.001; // Small delay modulation
+
+  // LFO for flutter effect (faster pitch variation)
+  nodes.flutterLFO = audioContext.createOscillator();
+  nodes.flutterLFO.type = 'sine';
+  nodes.flutterLFO.frequency.value = 6; // 6 Hz - faster flutter
+
+  nodes.flutterLFOGain = audioContext.createGain();
+  nodes.flutterLFOGain.gain.value = 0.0005; // Smaller modulation
+
+  // Connect LFOs to delay time
+  nodes.wowLFO.connect(nodes.wowLFOGain);
+  nodes.wowLFOGain.connect(nodes.wowFlutterDelay.delayTime);
+
+  nodes.flutterLFO.connect(nodes.flutterLFOGain);
+  nodes.flutterLFOGain.connect(nodes.wowFlutterDelay.delayTime);
+
+  // Soft saturation using waveshaper (tape saturation)
+  nodes.saturation = audioContext.createWaveShaper();
+  nodes.saturation.curve = createSaturationCurve(0.4);
+  nodes.saturation.oversample = '2x';
+
+  // Main gain
+  nodes.mainGain = audioContext.createGain();
+  nodes.mainGain.gain.value = 0.7;
+
+  // Output merger (to combine music with noise)
+  nodes.merger = audioContext.createGain();
+
+  return nodes;
+}
+
+// Create saturation curve for waveshaper
+function createSaturationCurve(amount) {
+  const samples = 44100;
+  const curve = new Float32Array(samples);
+  const deg = Math.PI / 180;
+
+  for (let i = 0; i < samples; i++) {
+    const x = (i * 2) / samples - 1;
+    // Soft clipping formula
+    curve[i] = ((3 + amount) * x * 20 * deg) / (Math.PI + amount * Math.abs(x));
+  }
+
+  return curve;
+}
+
+// Play audio with cassette effects
+async function playCassetteTrack(object, trackIndex) {
+  if (!object.userData.audioFiles || object.userData.audioFiles.length === 0) {
+    console.log('No audio files to play');
+    return;
+  }
+
+  // Clamp track index
+  trackIndex = Math.max(0, Math.min(trackIndex, object.userData.audioFiles.length - 1));
+  object.userData.currentTrackIndex = trackIndex;
+
+  const track = object.userData.audioFiles[trackIndex];
+  console.log('Playing cassette track:', track.name);
+
+  // Update screen display
+  updateCassetteScreen(object, track.name, true);
+
+  try {
+    // Stop any currently playing audio
+    stopCassettePlayback();
+
+    // Read audio file
+    const result = await window.electronAPI.readAudioFile(track.path);
+    if (!result.success) {
+      console.error('Failed to read audio file:', result.error);
+      updateCassetteScreen(object, 'READ ERROR');
+      return;
+    }
+
+    // Create audio context if needed
+    if (!cassettePlayerState.audioContext) {
+      cassettePlayerState.audioContext = new (window.AudioContext || window.webkitAudioContext)();
+    }
+
+    const audioCtx = cassettePlayerState.audioContext;
+
+    // Resume context if suspended
+    if (audioCtx.state === 'suspended') {
+      await audioCtx.resume();
+    }
+
+    // Create HTML5 Audio element for playback
+    const audio = new Audio(result.dataUrl);
+    audio.volume = 1.0; // Volume controlled through gain nodes
+
+    cassettePlayerState.audioElement = audio;
+    cassettePlayerState.currentPlayerId = object.userData.id;
+
+    // Create media element source
+    const sourceNode = audioCtx.createMediaElementSource(audio);
+    cassettePlayerState.sourceNode = sourceNode;
+
+    // Create effect nodes
+    const nodes = createCassetteAudioNodes(audioCtx);
+
+    // Apply user settings
+    const hissLevel = object.userData.tapeHissLevel || 0.3;
+    const wowFlutterLevel = object.userData.wowFlutterLevel || 0.5;
+    const saturationLevel = object.userData.saturationLevel || 0.4;
+    const volume = object.userData.volume || 0.7;
+
+    // Adjust effect levels
+    nodes.noiseGain.gain.value = 0.015 * hissLevel;
+    nodes.wowLFOGain.gain.value = 0.001 * wowFlutterLevel;
+    nodes.flutterLFOGain.gain.value = 0.0005 * wowFlutterLevel;
+    nodes.saturation.curve = createSaturationCurve(saturationLevel);
+    nodes.mainGain.gain.value = volume;
+
+    // Set frequency limits
+    nodes.lowpass.frequency.value = object.userData.highCutoff || 12000;
+    nodes.highpass.frequency.value = object.userData.lowCutoff || 80;
+
+    // Connect the audio chain:
+    // source -> highpass -> lowpass -> midBoost -> wowFlutter -> saturation -> mainGain -> destination
+    sourceNode.connect(nodes.highpass);
+    nodes.highpass.connect(nodes.lowpass);
+    nodes.lowpass.connect(nodes.midBoost);
+    nodes.midBoost.connect(nodes.wowFlutterDelay);
+    nodes.wowFlutterDelay.connect(nodes.saturation);
+    nodes.saturation.connect(nodes.mainGain);
+    nodes.mainGain.connect(nodes.merger);
+
+    // Connect noise (tape hiss) to merger
+    nodes.noiseGain.connect(nodes.merger);
+
+    // Connect to output
+    nodes.merger.connect(audioCtx.destination);
+
+    // Store nodes for cleanup
+    cassettePlayerState.effectNodes = nodes;
+
+    // Start LFOs
+    nodes.wowLFO.start();
+    nodes.flutterLFO.start();
+    nodes.noiseSource.start();
+
+    // Handle track end
+    audio.onended = () => {
+      if (object.userData.isPlaying) {
+        // Auto-play next track
+        const nextIndex = object.userData.currentTrackIndex + 1;
+        if (nextIndex < object.userData.audioFiles.length) {
+          playCassetteTrack(object, nextIndex);
+        } else {
+          // End of playlist
+          stopCassettePlayback();
+          object.userData.isPlaying = false;
+          object.userData.currentTrackIndex = 0;
+          updateCassetteScreen(object, 'END');
+          saveState();
+        }
+      }
+    };
+
+    // Start playback
+    await audio.play();
+    object.userData.isPlaying = true;
+    cassettePlayerState.isPlaying = true;
+
+    saveState();
+  } catch (error) {
+    console.error('Error playing cassette track:', error);
+    updateCassetteScreen(object, 'PLAY ERROR');
+    object.userData.isPlaying = false;
+    cassettePlayerState.isPlaying = false;
+  }
+}
+
+// Stop cassette playback
+function stopCassettePlayback() {
+  if (cassettePlayerState.audioElement) {
+    cassettePlayerState.audioElement.pause();
+    cassettePlayerState.audioElement.src = '';
+    cassettePlayerState.audioElement = null;
+  }
+
+  if (cassettePlayerState.sourceNode) {
+    try {
+      cassettePlayerState.sourceNode.disconnect();
+    } catch (e) {}
+    cassettePlayerState.sourceNode = null;
+  }
+
+  if (cassettePlayerState.effectNodes) {
+    const nodes = cassettePlayerState.effectNodes;
+    try {
+      if (nodes.wowLFO) nodes.wowLFO.stop();
+      if (nodes.flutterLFO) nodes.flutterLFO.stop();
+      if (nodes.noiseSource) nodes.noiseSource.stop();
+    } catch (e) {}
+    cassettePlayerState.effectNodes = null;
+  }
+
+  cassettePlayerState.isPlaying = false;
+}
+
+// Pause/resume cassette playback
+function toggleCassettePlayback(object) {
+  if (!cassettePlayerState.audioElement) {
+    // Not playing - start from current track
+    if (object.userData.audioFiles && object.userData.audioFiles.length > 0) {
+      playCassetteTrack(object, object.userData.currentTrackIndex);
+    } else {
+      updateCassetteScreen(object, 'NO MUSIC');
+    }
+    return;
+  }
+
+  if (cassettePlayerState.audioElement.paused) {
+    cassettePlayerState.audioElement.play();
+    object.userData.isPlaying = true;
+    cassettePlayerState.isPlaying = true;
+  } else {
+    cassettePlayerState.audioElement.pause();
+    object.userData.isPlaying = false;
+    cassettePlayerState.isPlaying = false;
+  }
+
+  saveState();
+}
+
+// Previous track
+function cassettePrevTrack(object) {
+  if (!object.userData.audioFiles || object.userData.audioFiles.length === 0) return;
+
+  const newIndex = Math.max(0, object.userData.currentTrackIndex - 1);
+  if (object.userData.isPlaying || cassettePlayerState.isPlaying) {
+    playCassetteTrack(object, newIndex);
+  } else {
+    object.userData.currentTrackIndex = newIndex;
+    updateCassetteScreen(object, object.userData.audioFiles[newIndex].name);
+    saveState();
+  }
+}
+
+// Next track
+function cassetteNextTrack(object) {
+  if (!object.userData.audioFiles || object.userData.audioFiles.length === 0) return;
+
+  const newIndex = Math.min(object.userData.audioFiles.length - 1, object.userData.currentTrackIndex + 1);
+  if (object.userData.isPlaying || cassettePlayerState.isPlaying) {
+    playCassetteTrack(object, newIndex);
+  } else {
+    object.userData.currentTrackIndex = newIndex;
+    updateCassetteScreen(object, object.userData.audioFiles[newIndex].name);
+    saveState();
+  }
+}
+
+// Stop cassette player
+function cassetteStop(object) {
+  stopCassettePlayback();
+  object.userData.isPlaying = false;
+  object.userData.currentTrackIndex = 0;
+
+  if (object.userData.audioFiles && object.userData.audioFiles.length > 0) {
+    updateCassetteScreen(object, 'STOPPED');
+  } else {
+    updateCassetteScreen(object, 'NO FOLDER');
+  }
+
+  saveState();
+}
+
+// Handle button click on cassette player
+function handleCassetteButtonClick(object, buttonType) {
+  switch (buttonType) {
+    case 'prev':
+      cassettePrevTrack(object);
+      break;
+    case 'play':
+      toggleCassettePlayback(object);
+      break;
+    case 'stop':
+      cassetteStop(object);
+      break;
+    case 'next':
+      cassetteNextTrack(object);
+      break;
+  }
 }
 
 // ============================================================================
@@ -7033,6 +7775,99 @@ function updateCustomizationPanel(object) {
       `;
       setupLaptopCustomizationHandlers(object);
       break;
+
+    case 'cassette-player':
+      const volumePercentCassette = Math.round((object.userData.volume || 0.7) * 100);
+      const hissLevel = Math.round((object.userData.tapeHissLevel || 0.3) * 100);
+      const wowFlutterLevel = Math.round((object.userData.wowFlutterLevel || 0.5) * 100);
+      const saturationLevel = Math.round((object.userData.saturationLevel || 0.4) * 100);
+      const lowCutoff = object.userData.lowCutoff || 80;
+      const highCutoff = object.userData.highCutoff || 12000;
+      const trackCount = object.userData.audioFiles ? object.userData.audioFiles.length : 0;
+      const currentTrack = object.userData.currentTrackIndex || 0;
+      const folderDisplay = object.userData.musicFolderPath
+        ? object.userData.musicFolderPath.split('/').pop() || object.userData.musicFolderPath.split('\\').pop()
+        : 'No folder selected';
+      dynamicOptions.innerHTML = `
+        <div class="customization-group" style="margin-top: 20px; padding-top: 15px; border-top: 1px solid rgba(255,255,255,0.1);">
+          <label>Music Folder</label>
+          <div style="display: flex; flex-direction: column; gap: 10px; margin-top: 8px;">
+            <div style="color: rgba(255,255,255,0.5); font-size: 12px; word-break: break-all;">
+              ${folderDisplay}
+            </div>
+            <div style="color: rgba(255,255,255,0.4); font-size: 11px;">
+              ${trackCount} tracks found
+            </div>
+            <button id="cassette-select-folder" style="padding: 10px 15px; background: rgba(79, 70, 229, 0.3); border: 1px solid rgba(79, 70, 229, 0.5); border-radius: 8px; color: #fff; cursor: pointer;">
+              ${object.userData.musicFolderPath ? 'Change Folder' : 'Select Music Folder'}
+            </button>
+            ${object.userData.musicFolderPath ? `
+              <button id="cassette-refresh-folder" style="padding: 10px 15px; background: rgba(34, 197, 94, 0.2); border: 1px solid rgba(34, 197, 94, 0.4); border-radius: 8px; color: #22c55e; cursor: pointer;">
+                Refresh Folder
+              </button>
+              <button id="cassette-clear-folder" style="padding: 10px 15px; background: rgba(239, 68, 68, 0.2); border: 1px solid rgba(239, 68, 68, 0.4); border-radius: 8px; color: #ef4444; cursor: pointer;">
+                Clear Folder
+              </button>
+            ` : ''}
+          </div>
+        </div>
+
+        <div class="customization-group" style="margin-top: 15px;">
+          <label>Volume: <span id="cassette-volume-display">${volumePercentCassette}%</span></label>
+          <input type="range" id="cassette-volume" min="0" max="100" value="${volumePercentCassette}"
+                 style="width: 100%; margin-top: 8px; accent-color: #4f46e5;">
+        </div>
+
+        <!-- Tape Effects Accordion -->
+        <div class="customization-group" style="margin-top: 15px;">
+          <div id="tape-effects-toggle" style="display: flex; align-items: center; justify-content: space-between; padding: 10px 12px; background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.1); border-radius: 8px; cursor: pointer;">
+            <span style="color: rgba(255,255,255,0.8); font-size: 12px;">Tape Effects</span>
+            <span id="tape-effects-arrow" style="color: rgba(255,255,255,0.5); font-size: 12px;">▼</span>
+          </div>
+          <div id="tape-effects-content" style="display: none; padding: 12px; background: rgba(0,0,0,0.2); border: 1px solid rgba(255,255,255,0.1); border-top: none; border-radius: 0 0 8px 8px;">
+            <div style="margin-bottom: 12px;">
+              <label style="display: block; color: rgba(255,255,255,0.7); font-size: 11px; margin-bottom: 6px;">Tape Hiss: <span id="cassette-hiss-display">${hissLevel}%</span></label>
+              <input type="range" id="cassette-hiss" min="0" max="100" value="${hissLevel}" style="width: 100%; accent-color: #4f46e5;">
+            </div>
+            <div style="margin-bottom: 12px;">
+              <label style="display: block; color: rgba(255,255,255,0.7); font-size: 11px; margin-bottom: 6px;">Wow & Flutter: <span id="cassette-flutter-display">${wowFlutterLevel}%</span></label>
+              <input type="range" id="cassette-flutter" min="0" max="100" value="${wowFlutterLevel}" style="width: 100%; accent-color: #4f46e5;">
+            </div>
+            <div style="margin-bottom: 12px;">
+              <label style="display: block; color: rgba(255,255,255,0.7); font-size: 11px; margin-bottom: 6px;">Saturation: <span id="cassette-saturation-display">${saturationLevel}%</span></label>
+              <input type="range" id="cassette-saturation" min="0" max="100" value="${saturationLevel}" style="width: 100%; accent-color: #4f46e5;">
+            </div>
+            <div style="margin-bottom: 12px;">
+              <label style="display: block; color: rgba(255,255,255,0.7); font-size: 11px; margin-bottom: 6px;">Low Cut: <span id="cassette-lowcut-display">${lowCutoff}Hz</span></label>
+              <input type="range" id="cassette-lowcut" min="20" max="200" value="${lowCutoff}" style="width: 100%; accent-color: #4f46e5;">
+            </div>
+            <div>
+              <label style="display: block; color: rgba(255,255,255,0.7); font-size: 11px; margin-bottom: 6px;">High Cut: <span id="cassette-highcut-display">${highCutoff}Hz</span></label>
+              <input type="range" id="cassette-highcut" min="4000" max="20000" step="500" value="${highCutoff}" style="width: 100%; accent-color: #4f46e5;">
+            </div>
+          </div>
+        </div>
+
+        ${trackCount > 0 ? `
+        <div class="customization-group" style="margin-top: 15px;">
+          <label>Tracks (${trackCount})</label>
+          <div id="cassette-track-list" style="max-height: 150px; overflow-y: auto; margin-top: 8px; background: rgba(0,0,0,0.2); border-radius: 8px; padding: 8px;">
+            ${object.userData.audioFiles.map((file, i) => `
+              <div class="cassette-track-item" data-index="${i}"
+                   style="padding: 8px 12px; margin-bottom: 4px; background: ${i === currentTrack ? 'rgba(79, 70, 229, 0.3)' : 'rgba(255,255,255,0.05)'}; border: 1px solid ${i === currentTrack ? 'rgba(79, 70, 229, 0.5)' : 'rgba(255,255,255,0.1)'}; border-radius: 6px; color: #fff; cursor: pointer; font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">
+                ${i + 1}. ${file.name}
+              </div>
+            `).join('')}
+          </div>
+        </div>
+        ` : ''}
+
+        <div style="margin-top: 15px; color: rgba(255,255,255,0.4); font-size: 11px;">
+          Click the player buttons to control playback.
+        </div>
+      `;
+      setupCassetteCustomizationHandlers(object);
+      break;
   }
 }
 
@@ -7672,6 +8507,218 @@ function setupLaptopCustomizationHandlers(object) {
         updateCustomizationPanel(object);
       });
     }
+  }, 0);
+}
+
+function setupCassetteCustomizationHandlers(object) {
+  setTimeout(() => {
+    // Music folder selection
+    const selectFolderBtn = document.getElementById('cassette-select-folder');
+    const refreshFolderBtn = document.getElementById('cassette-refresh-folder');
+    const clearFolderBtn = document.getElementById('cassette-clear-folder');
+
+    if (selectFolderBtn) {
+      selectFolderBtn.addEventListener('click', async () => {
+        try {
+          const result = await window.electronAPI.selectMusicFolder();
+          if (result.success && !result.canceled) {
+            object.userData.musicFolderPath = result.folderPath;
+            object.userData.audioFiles = result.audioFiles;
+            object.userData.currentTrackIndex = 0;
+
+            if (result.audioFiles.length > 0) {
+              updateCassetteScreen(object, result.audioFiles[0].name);
+            } else {
+              updateCassetteScreen(object, 'NO TRACKS');
+            }
+
+            saveState();
+            updateCustomizationPanel(object);
+          }
+        } catch (error) {
+          console.error('Error selecting music folder:', error);
+        }
+      });
+    }
+
+    if (refreshFolderBtn) {
+      refreshFolderBtn.addEventListener('click', async () => {
+        if (!object.userData.musicFolderPath) return;
+
+        try {
+          const result = await window.electronAPI.refreshMusicFolder(object.userData.musicFolderPath);
+          if (result.success) {
+            object.userData.audioFiles = result.audioFiles;
+            // Keep current track index if still valid
+            if (object.userData.currentTrackIndex >= result.audioFiles.length) {
+              object.userData.currentTrackIndex = 0;
+            }
+            saveState();
+            updateCustomizationPanel(object);
+          }
+        } catch (error) {
+          console.error('Error refreshing music folder:', error);
+        }
+      });
+    }
+
+    if (clearFolderBtn) {
+      clearFolderBtn.addEventListener('click', () => {
+        // Stop playback first
+        if (cassettePlayerState.currentPlayerId === object.userData.id) {
+          stopCassettePlayback();
+        }
+
+        object.userData.musicFolderPath = null;
+        object.userData.audioFiles = [];
+        object.userData.currentTrackIndex = 0;
+        object.userData.isPlaying = false;
+        updateCassetteScreen(object, 'NO FOLDER');
+        saveState();
+        updateCustomizationPanel(object);
+      });
+    }
+
+    // Volume slider
+    const volumeSlider = document.getElementById('cassette-volume');
+    const volumeDisplay = document.getElementById('cassette-volume-display');
+    if (volumeSlider) {
+      volumeSlider.addEventListener('input', (e) => {
+        object.userData.volume = parseInt(e.target.value) / 100;
+        volumeDisplay.textContent = e.target.value + '%';
+
+        // Update live playback volume if this player is active
+        if (cassettePlayerState.currentPlayerId === object.userData.id && cassettePlayerState.effectNodes) {
+          cassettePlayerState.effectNodes.mainGain.gain.value = object.userData.volume;
+        }
+        saveState();
+      });
+      addScrollToSlider(volumeSlider);
+    }
+
+    // Tape effects accordion toggle
+    const tapeEffectsToggle = document.getElementById('tape-effects-toggle');
+    const tapeEffectsContent = document.getElementById('tape-effects-content');
+    const tapeEffectsArrow = document.getElementById('tape-effects-arrow');
+    if (tapeEffectsToggle && tapeEffectsContent) {
+      tapeEffectsToggle.addEventListener('click', () => {
+        const isOpen = tapeEffectsContent.style.display !== 'none';
+        tapeEffectsContent.style.display = isOpen ? 'none' : 'block';
+        tapeEffectsArrow.textContent = isOpen ? '▼' : '▲';
+        tapeEffectsToggle.style.borderRadius = isOpen ? '8px' : '8px 8px 0 0';
+      });
+    }
+
+    // Tape hiss slider
+    const hissSlider = document.getElementById('cassette-hiss');
+    const hissDisplay = document.getElementById('cassette-hiss-display');
+    if (hissSlider) {
+      hissSlider.addEventListener('input', (e) => {
+        object.userData.tapeHissLevel = parseInt(e.target.value) / 100;
+        hissDisplay.textContent = e.target.value + '%';
+
+        // Update live playback if active
+        if (cassettePlayerState.currentPlayerId === object.userData.id && cassettePlayerState.effectNodes) {
+          cassettePlayerState.effectNodes.noiseGain.gain.value = 0.015 * object.userData.tapeHissLevel;
+        }
+        saveState();
+      });
+      addScrollToSlider(hissSlider);
+    }
+
+    // Wow & Flutter slider
+    const flutterSlider = document.getElementById('cassette-flutter');
+    const flutterDisplay = document.getElementById('cassette-flutter-display');
+    if (flutterSlider) {
+      flutterSlider.addEventListener('input', (e) => {
+        object.userData.wowFlutterLevel = parseInt(e.target.value) / 100;
+        flutterDisplay.textContent = e.target.value + '%';
+
+        // Update live playback if active
+        if (cassettePlayerState.currentPlayerId === object.userData.id && cassettePlayerState.effectNodes) {
+          cassettePlayerState.effectNodes.wowLFOGain.gain.value = 0.001 * object.userData.wowFlutterLevel;
+          cassettePlayerState.effectNodes.flutterLFOGain.gain.value = 0.0005 * object.userData.wowFlutterLevel;
+        }
+        saveState();
+      });
+      addScrollToSlider(flutterSlider);
+    }
+
+    // Saturation slider
+    const saturationSlider = document.getElementById('cassette-saturation');
+    const saturationDisplay = document.getElementById('cassette-saturation-display');
+    if (saturationSlider) {
+      saturationSlider.addEventListener('input', (e) => {
+        object.userData.saturationLevel = parseInt(e.target.value) / 100;
+        saturationDisplay.textContent = e.target.value + '%';
+
+        // Update live playback if active
+        if (cassettePlayerState.currentPlayerId === object.userData.id && cassettePlayerState.effectNodes) {
+          cassettePlayerState.effectNodes.saturation.curve = createSaturationCurve(object.userData.saturationLevel);
+        }
+        saveState();
+      });
+      addScrollToSlider(saturationSlider);
+    }
+
+    // Low cut slider
+    const lowcutSlider = document.getElementById('cassette-lowcut');
+    const lowcutDisplay = document.getElementById('cassette-lowcut-display');
+    if (lowcutSlider) {
+      lowcutSlider.addEventListener('input', (e) => {
+        object.userData.lowCutoff = parseInt(e.target.value);
+        lowcutDisplay.textContent = e.target.value + 'Hz';
+
+        // Update live playback if active
+        if (cassettePlayerState.currentPlayerId === object.userData.id && cassettePlayerState.effectNodes) {
+          cassettePlayerState.effectNodes.highpass.frequency.value = object.userData.lowCutoff;
+        }
+        saveState();
+      });
+      addScrollToSlider(lowcutSlider);
+    }
+
+    // High cut slider
+    const highcutSlider = document.getElementById('cassette-highcut');
+    const highcutDisplay = document.getElementById('cassette-highcut-display');
+    if (highcutSlider) {
+      highcutSlider.addEventListener('input', (e) => {
+        object.userData.highCutoff = parseInt(e.target.value);
+        highcutDisplay.textContent = e.target.value + 'Hz';
+
+        // Update live playback if active
+        if (cassettePlayerState.currentPlayerId === object.userData.id && cassettePlayerState.effectNodes) {
+          cassettePlayerState.effectNodes.lowpass.frequency.value = object.userData.highCutoff;
+        }
+        saveState();
+      });
+      addScrollToSlider(highcutSlider);
+    }
+
+    // Track list click handlers
+    const trackItems = document.querySelectorAll('.cassette-track-item');
+    trackItems.forEach(item => {
+      item.addEventListener('click', () => {
+        const index = parseInt(item.dataset.index);
+        object.userData.currentTrackIndex = index;
+
+        // Update visual selection
+        trackItems.forEach(t => {
+          const isSelected = parseInt(t.dataset.index) === index;
+          t.style.background = isSelected ? 'rgba(79, 70, 229, 0.3)' : 'rgba(255,255,255,0.05)';
+          t.style.borderColor = isSelected ? 'rgba(79, 70, 229, 0.5)' : 'rgba(255,255,255,0.1)';
+        });
+
+        // If playing, switch to the selected track
+        if (object.userData.isPlaying) {
+          playCassetteTrack(object, index);
+        } else {
+          updateCassetteScreen(object, object.userData.audioFiles[index].name);
+        }
+
+        saveState();
+      });
+    });
   }, 0);
 }
 
@@ -10887,6 +11934,38 @@ function performQuickInteraction(object, clickedMesh = null) {
       }
       break;
 
+    case 'cassette-player':
+      // Handle button clicks on the cassette player
+      if (clickedMesh && clickedMesh.userData && clickedMesh.userData.buttonType) {
+        handleCassetteButtonClick(object, clickedMesh.userData.buttonType);
+      } else {
+        // Check if clicking near the buttons group
+        let buttonType = null;
+        if (clickedMesh && clickedMesh.parent) {
+          // Walk up to find if we're inside a button or buttons group
+          let parent = clickedMesh;
+          while (parent && parent !== object) {
+            if (parent.userData && parent.userData.buttonType) {
+              buttonType = parent.userData.buttonType;
+              break;
+            }
+            if (parent.name === 'prevButton') buttonType = 'prev';
+            else if (parent.name === 'playButton') buttonType = 'play';
+            else if (parent.name === 'stopButton') buttonType = 'stop';
+            else if (parent.name === 'nextButton') buttonType = 'next';
+            if (buttonType) break;
+            parent = parent.parent;
+          }
+        }
+        if (buttonType) {
+          handleCassetteButtonClick(object, buttonType);
+        } else {
+          // No button clicked - toggle play/pause as default action
+          toggleCassettePlayback(object);
+        }
+      }
+      break;
+
     case 'pen-holder':
       // Pen holder is now just a container, no interaction
       break;
@@ -13687,6 +14766,22 @@ async function saveStateImmediate() {
             }
           }
           break;
+        case 'cassette-player':
+          // Save music folder and track info
+          if (obj.userData.musicFolderPath) {
+            data.musicFolderPath = obj.userData.musicFolderPath;
+            data.audioFiles = obj.userData.audioFiles;
+            data.currentTrackIndex = obj.userData.currentTrackIndex || 0;
+          }
+          // Save effect settings
+          data.volume = obj.userData.volume;
+          data.tapeHissLevel = obj.userData.tapeHissLevel;
+          data.wowFlutterLevel = obj.userData.wowFlutterLevel;
+          data.saturationLevel = obj.userData.saturationLevel;
+          data.lowCutoff = obj.userData.lowCutoff;
+          data.highCutoff = obj.userData.highCutoff;
+          // Don't save isPlaying - we don't auto-play on load
+          break;
       }
 
       return data;
@@ -14114,6 +15209,25 @@ async function loadState() {
                   });
                 }
                 break;
+              case 'cassette-player':
+                // Restore music folder and track info
+                if (objData.musicFolderPath) {
+                  obj.userData.musicFolderPath = objData.musicFolderPath;
+                  obj.userData.audioFiles = objData.audioFiles || [];
+                  obj.userData.currentTrackIndex = objData.currentTrackIndex || 0;
+                  // Update screen to show first track
+                  if (obj.userData.audioFiles.length > 0) {
+                    updateCassetteScreen(obj, obj.userData.audioFiles[obj.userData.currentTrackIndex].name);
+                  }
+                }
+                // Restore effect settings
+                if (objData.volume !== undefined) obj.userData.volume = objData.volume;
+                if (objData.tapeHissLevel !== undefined) obj.userData.tapeHissLevel = objData.tapeHissLevel;
+                if (objData.wowFlutterLevel !== undefined) obj.userData.wowFlutterLevel = objData.wowFlutterLevel;
+                if (objData.saturationLevel !== undefined) obj.userData.saturationLevel = objData.saturationLevel;
+                if (objData.lowCutoff !== undefined) obj.userData.lowCutoff = objData.lowCutoff;
+                if (objData.highCutoff !== undefined) obj.userData.highCutoff = objData.highCutoff;
+                break;
             }
 
             // Restore per-object collision settings (applies to all object types)
@@ -14405,6 +15519,32 @@ function animate() {
 
         pendulum.rotation.z = swingAngle;
         obj.userData.pendulumAngle = swingAngle;
+      }
+    }
+
+    // Animate cassette player reels when playing
+    if (obj.userData.type === 'cassette-player') {
+      const reels = obj.getObjectByName('reels');
+      if (reels) {
+        // Only spin reels when this player is actively playing
+        if (cassettePlayerState.isPlaying && cassettePlayerState.currentPlayerId === obj.userData.id) {
+          // Rotate both reels (visible through the window)
+          obj.userData.reelRotation = (obj.userData.reelRotation || 0) + 0.05;
+
+          const leftReel = reels.getObjectByName('leftReel');
+          const rightReel = reels.getObjectByName('rightReel');
+
+          if (leftReel) leftReel.rotation.z = obj.userData.reelRotation;
+          if (rightReel) rightReel.rotation.z = obj.userData.reelRotation * 1.1; // Slightly different speed
+
+          // Update scrolling text on screen
+          if (obj.userData.audioFiles && obj.userData.audioFiles.length > 0) {
+            const track = obj.userData.audioFiles[obj.userData.currentTrackIndex];
+            if (track) {
+              updateCassetteScreen(obj, track.name, true);
+            }
+          }
+        }
       }
     }
 

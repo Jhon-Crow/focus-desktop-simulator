@@ -2738,26 +2738,44 @@ function updateObjectColor(object, colorType, colorValue) {
 // PHYSICS SYSTEM
 // ============================================================================
 
-// Custom collision radii for objects where the bounding box is inaccurate
-// (e.g., laptop screen extends the bbox but shouldn't collide at that distance)
+// Collision radii for all object types
+// Using predefined values avoids expensive recursive bounding box calculations
+// that can cause stack overflow with complex objects (e.g., PDFs with many pages)
 const OBJECT_COLLISION_RADII = {
-  'laptop': 0.45,  // Base is 0.8 x 0.5, radius should be ~half diagonal but tight
-  'lamp': 0.35     // Base is small, don't use tall shade for collision
+  'clock': 0.4,       // CylinderGeometry radius 0.4
+  'lamp': 0.35,       // Base radius 0.25-0.28, don't use tall shade for collision
+  'plant': 0.2,       // Pot radius 0.18
+  'coffee': 0.15,     // Mug radius 0.12
+  'laptop': 0.45,     // Base is 0.8 x 0.5, radius should be ~half diagonal but tight
+  'notebook': 0.35,   // BoxGeometry 0.4 x 0.55
+  'pen-holder': 0.15, // CylinderGeometry radius 0.12
+  'pen': 0.2,         // Small, lying flat, length oriented
+  'books': 0.25,      // BoxGeometry 0.28 x 0.38
+  'magazine': 0.2,    // BoxGeometry 0.22 x 0.30
+  'photo-frame': 0.3, // BoxGeometry 0.35 x 0.45
+  'globe': 0.2,       // Base radius 0.18, sphere 0.2
+  'trophy': 0.15,     // BoxGeometry 0.2 x 0.2
+  'hourglass': 0.15,  // CylinderGeometry radius 0.12
+  'paper': 0.25,      // BoxGeometry 0.28 x 0.4
+  'metronome': 0.15   // Base radius 0.15
 };
 
+// Default collision radius for unknown object types
+const DEFAULT_COLLISION_RADIUS = 0.3;
+
 function getObjectBounds(object) {
-  // Use custom collision radius if defined for this object type
   const type = object.userData.type;
+  const scale = object.scale?.x || 1;
+
+  // Use predefined collision radius if available
   if (OBJECT_COLLISION_RADII[type] !== undefined) {
-    return OBJECT_COLLISION_RADII[type] * (object.scale?.x || 1);
+    return OBJECT_COLLISION_RADII[type] * scale;
   }
 
-  // Calculate approximate bounding radius for collision detection
-  const box = new THREE.Box3().setFromObject(object);
-  const size = new THREE.Vector3();
-  box.getSize(size);
-  // Use the largest horizontal dimension as the collision radius
-  return Math.max(size.x, size.z) / 2;
+  // For unknown types, use default radius
+  // This avoids expensive recursive setFromObject() calls that can cause
+  // stack overflow with complex objects like PDFs with many pages
+  return DEFAULT_COLLISION_RADIUS * scale;
 }
 
 function initPhysicsForObject(object) {

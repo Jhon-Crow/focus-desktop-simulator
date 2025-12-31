@@ -647,6 +647,17 @@ let drawingState = {
   points: [] // Points in current line
 };
 
+// Pen drawing mode state (new feature - drawing directly with pen object)
+let penDrawingMode = {
+  active: false,          // Whether drawing mode is active
+  heldPen: null,          // The pen object currently being held/dragged
+  targetObject: null,     // The notebook/paper being drawn on
+  drawingPath: [],        // Current stroke path [{x, y}, ...]
+  isStrokeActive: false,  // Whether user is currently drawing a stroke (LMB down)
+  saveFolder: null,       // Custom folder for saving drawings
+  lineWidth: 2            // Width of the drawing line
+};
+
 // Laptop control state
 let laptopControlState = {
   active: false,
@@ -5252,6 +5263,12 @@ function removeObject(object) {
     physicsState.tiltState.delete(object.userData.id);
     physicsState.tiltVelocities.delete(object.userData.id);
 
+    // Delete drawing file if this is a notebook or paper with drawings
+    if ((object.userData.type === 'notebook' || object.userData.type === 'paper') &&
+        object.userData.drawingLines && object.userData.drawingLines.length > 0) {
+      deleteDrawingFile(object);
+    }
+
     // Update debug visualization if active
     if (debugState.showCollisionRadii) {
       updateCollisionDebugHelpers();
@@ -5272,6 +5289,12 @@ function clearAllObjects() {
     physicsState.angularVelocities.delete(obj.userData.id);
     physicsState.tiltState.delete(obj.userData.id);
     physicsState.tiltVelocities.delete(obj.userData.id);
+
+    // Delete drawing file if this is a notebook or paper with drawings
+    if ((obj.userData.type === 'notebook' || obj.userData.type === 'paper') &&
+        obj.userData.drawingLines && obj.userData.drawingLines.length > 0) {
+      deleteDrawingFile(obj);
+    }
   }
 
   // Clear debug visualization helpers
@@ -5318,6 +5341,495 @@ function resetFallenObject(object) {
   physicsState.tiltState.set(object.userData.id, { x: 0, z: 0 });
   physicsState.tiltVelocities.set(object.userData.id, { x: 0, z: 0 });
   object.userData.baseTiltX = undefined;
+}
+
+// ============================================================================
+// PEN ORIENTATION FUNCTIONS (for drawing mode)
+// ============================================================================
+
+// Make pen stand vertical when picked up by user (tip pointing down)
+function makePenVertical(pen) {
+  if (pen.userData.type !== 'pen') return;
+
+  // Reset the group rotation to stand upright
+  pen.rotation.x = 0;
+  pen.rotation.z = 0;
+  // Keep Y rotation (user's preferred facing direction)
+
+  // Reset penBody sub-group
+  const penBody = pen.getObjectByName('penBody');
+  if (penBody) {
+    penBody.rotation.x = 0;
+    penBody.rotation.z = 0;
+  }
+
+  pen.userData.isHeldByUser = true;
+}
+
+// Make pen lie flat on desk (default resting orientation)
+function makePenFlat(pen) {
+  if (pen.userData.type !== 'pen') return;
+
+  // Rotate pen to lie flat on the desk (along X axis)
+  pen.rotation.z = -Math.PI / 2;
+  pen.rotation.x = 0;
+
+  // Reset penBody sub-group
+  const penBody = pen.getObjectByName('penBody');
+  if (penBody) {
+    penBody.rotation.x = 0;
+    penBody.rotation.z = 0;
+  }
+
+  pen.userData.isHeldByUser = false;
+}
+
+// Tilt pen for drawing mode (angled as if writing)
+function makePenDrawingAngle(pen) {
+  if (pen.userData.type !== 'pen') return;
+
+  // Tilt pen at a comfortable writing angle (~60 degrees from vertical)
+  // The pen should lean toward where user would be writing
+  pen.rotation.x = Math.PI / 6;  // Tilt forward
+  pen.rotation.z = -Math.PI / 6; // Slight side angle for natural grip
+
+  const penBody = pen.getObjectByName('penBody');
+  if (penBody) {
+    penBody.rotation.x = 0;
+    penBody.rotation.z = 0;
+  }
+}
+
+// ============================================================================
+// PEN DRAWING MODE FUNCTIONS
+// ============================================================================
+
+// Toggle drawing mode on/off
+function togglePenDrawingMode() {
+  if (penDrawingMode.active) {
+    exitPenDrawingMode();
+  } else {
+    enterPenDrawingMode();
+  }
+}
+
+// Enter drawing mode with the held pen
+function enterPenDrawingMode() {
+  if (!penDrawingMode.heldPen) return;
+
+  penDrawingMode.active = true;
+  makePenDrawingAngle(penDrawingMode.heldPen);
+
+  // Use the pen's line width setting
+  penDrawingMode.lineWidth = penDrawingMode.heldPen.userData.lineWidth || 2;
+
+  // Show drawing mode indicator
+  showDrawingModeIndicator(true);
+
+  console.log('Drawing mode: ON - Use LMB on notebook/paper to draw');
+}
+
+// Exit drawing mode and save any drawings
+function exitPenDrawingMode() {
+  penDrawingMode.active = false;
+
+  // Reset pen to vertical if still held
+  if (penDrawingMode.heldPen) {
+    makePenVertical(penDrawingMode.heldPen);
+  }
+
+  // Save any drawing on the current target object
+  if (penDrawingMode.targetObject) {
+    saveDrawingToFile(penDrawingMode.targetObject);
+    penDrawingMode.targetObject = null;
+  }
+
+  // Clear drawing path
+  penDrawingMode.drawingPath = [];
+  penDrawingMode.isStrokeActive = false;
+
+  // Hide drawing mode indicator
+  showDrawingModeIndicator(false);
+
+  console.log('Drawing mode: OFF');
+}
+
+// Show/hide drawing mode indicator
+function showDrawingModeIndicator(show) {
+  let indicator = document.getElementById('drawing-mode-indicator');
+
+  if (show) {
+    if (!indicator) {
+      indicator = document.createElement('div');
+      indicator.id = 'drawing-mode-indicator';
+      indicator.style.cssText = `
+        position: fixed;
+        top: 70px;
+        right: 20px;
+        background: rgba(79, 70, 229, 0.9);
+        color: white;
+        padding: 10px 20px;
+        border-radius: 8px;
+        font-size: 14px;
+        z-index: 1000;
+        pointer-events: none;
+        box-shadow: 0 4px 15px rgba(79, 70, 229, 0.3);
+      `;
+      indicator.textContent = '🖊️ Drawing Mode - LMB to draw on paper/notebook';
+      document.body.appendChild(indicator);
+    }
+    indicator.style.display = 'block';
+  } else {
+    if (indicator) {
+      indicator.style.display = 'none';
+    }
+  }
+}
+
+// Find notebook or paper under the pen position
+function findDrawableObjectUnderPen() {
+  if (!penDrawingMode.heldPen) return null;
+
+  // Get pen tip position in world coordinates
+  const penPos = new THREE.Vector3();
+  penDrawingMode.heldPen.getWorldPosition(penPos);
+
+  // Check all drawable objects (notebooks and papers)
+  for (const obj of deskObjects) {
+    if (obj.userData.type !== 'notebook' && obj.userData.type !== 'paper') continue;
+
+    // Get object bounds
+    const objPos = new THREE.Vector3();
+    obj.getWorldPosition(objPos);
+
+    // Get object dimensions (approximate based on type)
+    const width = obj.userData.type === 'notebook' ? 0.4 : 0.28;
+    const depth = obj.userData.type === 'notebook' ? 0.55 : 0.4;
+
+    // Check if pen is over this object (with some tolerance)
+    const dx = Math.abs(penPos.x - objPos.x);
+    const dz = Math.abs(penPos.z - objPos.z);
+
+    if (dx < width / 2 + 0.05 && dz < depth / 2 + 0.05) {
+      return obj;
+    }
+  }
+
+  return null;
+}
+
+// Convert world position to local drawing coordinates on a drawable object
+function worldToDrawingCoords(worldPos, drawableObject) {
+  if (!drawableObject) return null;
+
+  // Get object's world position and rotation
+  const objPos = new THREE.Vector3();
+  drawableObject.getWorldPosition(objPos);
+
+  // Calculate local offset
+  const localX = worldPos.x - objPos.x;
+  const localZ = worldPos.z - objPos.z;
+
+  // Get object dimensions
+  const width = drawableObject.userData.type === 'notebook' ? 0.4 : 0.28;
+  const depth = drawableObject.userData.type === 'notebook' ? 0.55 : 0.4;
+
+  // Convert to normalized coordinates (0-1)
+  const normalizedX = (localX / width) + 0.5;
+  const normalizedY = (localZ / depth) + 0.5;
+
+  // Apply object rotation (simplified - just Y rotation)
+  const cos = Math.cos(-drawableObject.rotation.y);
+  const sin = Math.sin(-drawableObject.rotation.y);
+  const centeredX = normalizedX - 0.5;
+  const centeredY = normalizedY - 0.5;
+  const rotatedX = centeredX * cos - centeredY * sin + 0.5;
+  const rotatedY = centeredX * sin + centeredY * cos + 0.5;
+
+  // Convert to canvas coordinates (512x512 for drawing)
+  const canvasSize = 512;
+  return {
+    x: Math.floor(rotatedX * canvasSize),
+    y: Math.floor(rotatedY * canvasSize)
+  };
+}
+
+// Create or get the drawing canvas for a drawable object
+function getDrawingCanvas(drawableObject) {
+  if (!drawableObject) return null;
+
+  // Check if canvas already exists
+  if (drawableObject.userData.drawingCanvas) {
+    return drawableObject.userData.drawingCanvas;
+  }
+
+  // Create new canvas
+  const canvas = document.createElement('canvas');
+  canvas.width = 512;
+  canvas.height = 512;
+
+  const ctx = canvas.getContext('2d');
+  // Fill with transparent background
+  ctx.clearRect(0, 0, 512, 512);
+
+  // Store in userData
+  drawableObject.userData.drawingCanvas = canvas;
+  drawableObject.userData.drawingCtx = ctx;
+
+  // Create texture for 3D rendering
+  updateDrawingTexture(drawableObject);
+
+  return canvas;
+}
+
+// Update the 3D texture from the drawing canvas
+function updateDrawingTexture(drawableObject) {
+  if (!drawableObject || !drawableObject.userData.drawingCanvas) return;
+
+  const canvas = drawableObject.userData.drawingCanvas;
+
+  // Create or update texture
+  if (!drawableObject.userData.drawingTexture) {
+    const texture = new THREE.CanvasTexture(canvas);
+    texture.needsUpdate = true;
+    drawableObject.userData.drawingTexture = texture;
+
+    // Find the page surface and apply texture
+    applyDrawingTextureToObject(drawableObject);
+  } else {
+    drawableObject.userData.drawingTexture.needsUpdate = true;
+  }
+}
+
+// Apply the drawing texture to the object's surface
+function applyDrawingTextureToObject(drawableObject) {
+  if (!drawableObject || !drawableObject.userData.drawingTexture) return;
+
+  const texture = drawableObject.userData.drawingTexture;
+
+  // Find the appropriate mesh to apply the texture
+  drawableObject.traverse((child) => {
+    if (child.isMesh) {
+      // For notebook and paper, apply to top surface
+      if (child.material && child.material.color) {
+        // Create a new material with the drawing texture overlay
+        const originalColor = child.material.color.clone();
+
+        // Create custom material that blends drawing with base color
+        const drawingMaterial = new THREE.MeshStandardMaterial({
+          color: originalColor,
+          map: texture,
+          transparent: true,
+          roughness: child.material.roughness || 0.9,
+          metalness: child.material.metalness || 0
+        });
+
+        // Store original material for restoration
+        if (!child.userData.originalMaterial) {
+          child.userData.originalMaterial = child.material;
+        }
+
+        // Only apply to the "pages" part
+        if (child.material.color.getHexString() === 'ffffff' ||
+            child.material.color.getHexString() === 'fffff5' ||
+            child.material.color.getHexString() === 'f5f5f0') {
+          child.material = drawingMaterial;
+        }
+      }
+    }
+  });
+}
+
+// Add a point to the current stroke
+function addDrawingPoint(worldPos) {
+  if (!penDrawingMode.active || !penDrawingMode.heldPen) return;
+
+  // Find drawable object under pen
+  const target = findDrawableObjectUnderPen();
+  if (!target) return;
+
+  // Set as current target if not set
+  if (penDrawingMode.targetObject !== target) {
+    // Save previous target's drawing if different
+    if (penDrawingMode.targetObject) {
+      saveDrawingToFile(penDrawingMode.targetObject);
+    }
+    penDrawingMode.targetObject = target;
+  }
+
+  // Get or create drawing canvas
+  const canvas = getDrawingCanvas(target);
+  if (!canvas) return;
+
+  const ctx = target.userData.drawingCtx;
+
+  // Convert world position to canvas coordinates
+  const coords = worldToDrawingCoords(worldPos, target);
+  if (!coords || coords.x < 0 || coords.x > 512 || coords.y < 0 || coords.y > 512) return;
+
+  // Get pen ink color
+  const pen = penDrawingMode.heldPen;
+  const inkColor = pen.userData.inkColor || pen.userData.mainColor || '#000000';
+
+  // Add point to path
+  penDrawingMode.drawingPath.push(coords);
+
+  // Draw line from previous point if available
+  if (penDrawingMode.drawingPath.length >= 2) {
+    const prevPoint = penDrawingMode.drawingPath[penDrawingMode.drawingPath.length - 2];
+
+    ctx.beginPath();
+    ctx.strokeStyle = inkColor;
+    ctx.lineWidth = penDrawingMode.lineWidth;
+    ctx.lineCap = 'round';
+    ctx.lineJoin = 'round';
+    ctx.moveTo(prevPoint.x, prevPoint.y);
+    ctx.lineTo(coords.x, coords.y);
+    ctx.stroke();
+
+    // Update texture
+    updateDrawingTexture(target);
+  }
+
+  // Add to object's drawing lines for persistence
+  if (!target.userData.drawingLines) {
+    target.userData.drawingLines = [];
+  }
+}
+
+// End the current stroke
+function endDrawingStroke() {
+  if (penDrawingMode.drawingPath.length > 0 && penDrawingMode.targetObject) {
+    // Save the completed stroke to the object's data
+    const strokeData = {
+      points: [...penDrawingMode.drawingPath],
+      color: penDrawingMode.heldPen?.userData.inkColor || '#000000',
+      width: penDrawingMode.lineWidth,
+      timestamp: Date.now()
+    };
+
+    if (!penDrawingMode.targetObject.userData.drawingLines) {
+      penDrawingMode.targetObject.userData.drawingLines = [];
+    }
+    penDrawingMode.targetObject.userData.drawingLines.push(strokeData);
+  }
+
+  penDrawingMode.drawingPath = [];
+  penDrawingMode.isStrokeActive = false;
+}
+
+// Generate a filename for the drawing
+function generateDrawingFilename(drawableObject) {
+  const type = drawableObject.userData.type;
+  const id = drawableObject.userData.id;
+  const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+  return `${type}-${id}-${timestamp}.png`;
+}
+
+// Save drawing to file
+async function saveDrawingToFile(drawableObject) {
+  if (!drawableObject || !drawableObject.userData.drawingCanvas) return;
+
+  // Only save if there are actual drawings
+  if (!drawableObject.userData.drawingLines || drawableObject.userData.drawingLines.length === 0) return;
+
+  const canvas = drawableObject.userData.drawingCanvas;
+  const dataUrl = canvas.toDataURL('image/png');
+
+  // Generate filename if not set
+  if (!drawableObject.userData.drawingFileName) {
+    drawableObject.userData.drawingFileName = generateDrawingFilename(drawableObject);
+  }
+
+  // Save using the object data storage (like PDFs)
+  const objectId = drawableObject.userData.id;
+  try {
+    if (window.electronAPI && window.electronAPI.saveObjectData) {
+      await window.electronAPI.saveObjectData(objectId, 'drawing', dataUrl);
+      console.log('Drawing saved:', drawableObject.userData.drawingFileName);
+    }
+  } catch (err) {
+    console.error('Error saving drawing:', err);
+  }
+
+  // Also update the state save
+  saveState();
+}
+
+// Load drawing from file
+async function loadDrawingFromFile(drawableObject) {
+  if (!drawableObject) return;
+
+  const objectId = drawableObject.userData.id;
+  try {
+    if (window.electronAPI && window.electronAPI.loadObjectData) {
+      const result = await window.electronAPI.loadObjectData(objectId, 'drawing');
+      if (result.success && result.data) {
+        // Create canvas and load image
+        const canvas = getDrawingCanvas(drawableObject);
+        const ctx = drawableObject.userData.drawingCtx;
+
+        const img = new Image();
+        img.onload = () => {
+          ctx.drawImage(img, 0, 0);
+          updateDrawingTexture(drawableObject);
+        };
+        img.src = result.data;
+
+        console.log('Drawing loaded for object:', objectId);
+      }
+    }
+  } catch (err) {
+    console.error('Error loading drawing:', err);
+  }
+}
+
+// Redraw all strokes from saved data (for restoring from state)
+function redrawAllStrokes(drawableObject) {
+  if (!drawableObject || !drawableObject.userData.drawingLines) return;
+
+  const canvas = getDrawingCanvas(drawableObject);
+  if (!canvas) return;
+
+  const ctx = drawableObject.userData.drawingCtx;
+
+  // Clear canvas first
+  ctx.clearRect(0, 0, 512, 512);
+
+  // Redraw all strokes
+  for (const stroke of drawableObject.userData.drawingLines) {
+    if (stroke.points.length < 2) continue;
+
+    ctx.beginPath();
+    ctx.strokeStyle = stroke.color || '#000000';
+    ctx.lineWidth = stroke.width || 2;
+    ctx.lineCap = 'round';
+    ctx.lineJoin = 'round';
+
+    ctx.moveTo(stroke.points[0].x, stroke.points[0].y);
+    for (let i = 1; i < stroke.points.length; i++) {
+      ctx.lineTo(stroke.points[i].x, stroke.points[i].y);
+    }
+    ctx.stroke();
+  }
+
+  updateDrawingTexture(drawableObject);
+}
+
+// Delete drawing file when object is deleted
+async function deleteDrawingFile(drawableObject) {
+  if (!drawableObject) return;
+
+  const objectId = drawableObject.userData.id;
+  try {
+    if (window.electronAPI && window.electronAPI.saveObjectData) {
+      // Pass null to delete the file
+      await window.electronAPI.saveObjectData(objectId, 'drawing', null);
+      console.log('Drawing deleted for object:', objectId);
+    }
+  } catch (err) {
+    console.error('Error deleting drawing:', err);
+  }
 }
 
 function updateObjectColor(object, colorType, colorValue) {
@@ -7687,6 +8199,12 @@ function onMouseDown(event) {
   if (event.button === 1) {
     event.preventDefault();
 
+    // If user is holding a pen and pressing MMB, toggle drawing mode
+    if (penDrawingMode.heldPen && isDragging && selectedObject === penDrawingMode.heldPen) {
+      togglePenDrawingMode();
+      return;
+    }
+
     // In reading mode, MMB does nothing (use LMB click to exit reading mode)
     if (bookReadingState.active) {
       return;
@@ -7756,6 +8274,17 @@ function onMouseDown(event) {
   }
 
   if (event.button !== 0) return; // Left click only
+
+  // If in drawing mode and already dragging a pen, start a stroke
+  if (penDrawingMode.active && isDragging && selectedObject === penDrawingMode.heldPen) {
+    penDrawingMode.isStrokeActive = true;
+    penDrawingMode.drawingPath = [];
+    // Add first point
+    const penWorldPos = new THREE.Vector3();
+    penDrawingMode.heldPen.getWorldPosition(penWorldPos);
+    addDrawingPoint(penWorldPos);
+    // Don't return - allow normal processing to continue
+  }
 
   // If in book reading mode, LMB click exits reading mode
   if (bookReadingState.active) {
@@ -7977,6 +8506,12 @@ function onMouseDown(event) {
         resetFallenObject(object);
       }
 
+      // If picking up a pen, make it vertical and track as held pen
+      if (object.userData.type === 'pen') {
+        makePenVertical(object);
+        penDrawingMode.heldPen = object;
+      }
+
       // Check if there are objects stacked on top of this one
       const objectsOnTop = findObjectsOnTop(object);
       const hasObjectsOnTop = objectsOnTop.length > 0;
@@ -8185,6 +8720,15 @@ function onMouseMove(event) {
     selectedObject.position.x = newX;
     selectedObject.position.z = newZ;
 
+    // Handle drawing in pen drawing mode
+    if (penDrawingMode.active && penDrawingMode.isStrokeActive &&
+        selectedObject.userData.type === 'pen') {
+      // Get the pen's world position for drawing
+      const penWorldPos = new THREE.Vector3();
+      selectedObject.getWorldPosition(penWorldPos);
+      addDrawingPoint(penWorldPos);
+    }
+
     // Move objects stacked on top using friction physics
     // They get pulled along due to friction, but may slip at high speeds
     // Only move stacked objects if we're lifting (not pulling out from under)
@@ -8316,6 +8860,11 @@ function onMouseUp(event) {
     return;
   }
 
+  // End drawing stroke if in drawing mode (LMB release)
+  if (event.button === 0 && penDrawingMode.active && penDrawingMode.isStrokeActive) {
+    endDrawingStroke();
+  }
+
   if (isDragging && selectedObject) {
     // Check for pen holder insertion
     const insertionResult = checkPenHolderInsertion(selectedObject);
@@ -8357,6 +8906,16 @@ function onMouseUp(event) {
         selectedObject.userData.inHolder = null;
         selectedObject.userData.holderSlot = null;
       }
+
+      // If dropping a pen, make it lie flat unless in drawing mode
+      if (selectedObject.userData.type === 'pen' && !penDrawingMode.active) {
+        makePenFlat(selectedObject);
+      }
+    }
+
+    // Clear held pen reference if we're not in drawing mode
+    if (selectedObject.userData.type === 'pen' && !penDrawingMode.active) {
+      penDrawingMode.heldPen = null;
     }
 
     isDragging = false;
@@ -9322,6 +9881,7 @@ function updateCustomizationPanel(object) {
     case 'pen':
       const penBodyColor = object.userData.mainColor || '#3b82f6';
       const penInkColor = object.userData.inkColor || object.userData.mainColor || '#3b82f6';
+      const penLineWidth = object.userData.lineWidth || 2;
       dynamicOptions.innerHTML = `
         <div class="customization-group" style="margin-top: 20px; padding-top: 15px; border-top: 1px solid rgba(255,255,255,0.1);">
           <label>Body Color</label>
@@ -9347,6 +9907,25 @@ function updateCustomizationPanel(object) {
             <div class="color-swatch${penInkColor === '#f97316' ? ' selected' : ''}" style="background: #f97316; width: 32px; height: 32px; border-radius: 8px; cursor: pointer; border: 2px solid ${penInkColor === '#f97316' ? '#fff' : 'transparent'};" data-color="#f97316"></div>
             <div class="color-swatch${penInkColor === '#ec4899' ? ' selected' : ''}" style="background: #ec4899; width: 32px; height: 32px; border-radius: 8px; cursor: pointer; border: 2px solid ${penInkColor === '#ec4899' ? '#fff' : 'transparent'};" data-color="#ec4899"></div>
             <div class="color-swatch${penInkColor === '#06b6d4' ? ' selected' : ''}" style="background: #06b6d4; width: 32px; height: 32px; border-radius: 8px; cursor: pointer; border: 2px solid ${penInkColor === '#06b6d4' ? '#fff' : 'transparent'};" data-color="#06b6d4"></div>
+          </div>
+        </div>
+        <div class="customization-group" style="margin-top: 15px;">
+          <label>Line Width</label>
+          <div style="display: flex; align-items: center; gap: 10px; margin-top: 8px;">
+            <input type="range" id="pen-line-width" min="1" max="10" value="${penLineWidth}"
+                   style="flex: 1; cursor: pointer;">
+            <span id="pen-line-width-val" style="color: rgba(255,255,255,0.7); font-size: 12px; min-width: 30px;">${penLineWidth}px</span>
+          </div>
+        </div>
+        <div class="customization-group" style="margin-top: 15px;">
+          <div style="padding: 12px; background: rgba(79, 70, 229, 0.2); border-radius: 8px; border: 1px solid rgba(79, 70, 229, 0.3);">
+            <div style="font-size: 13px; color: rgba(255,255,255,0.9); margin-bottom: 8px;">🖊️ Drawing Mode</div>
+            <div style="font-size: 11px; color: rgba(255,255,255,0.6); line-height: 1.5;">
+              1. Pick up the pen (LMB)<br>
+              2. Press MMB to enter drawing mode<br>
+              3. Move pen over notebook/paper and hold LMB to draw<br>
+              4. Press MMB again to exit and save
+            </div>
           </div>
         </div>
       `;
@@ -10345,6 +10924,20 @@ function setupPenCustomizationHandlers(object) {
 
           saveState();
         });
+      });
+    }
+
+    // Line width slider
+    const lineWidthSlider = document.getElementById('pen-line-width');
+    const lineWidthVal = document.getElementById('pen-line-width-val');
+    if (lineWidthSlider && lineWidthVal) {
+      lineWidthSlider.addEventListener('input', (e) => {
+        const width = parseInt(e.target.value);
+        object.userData.lineWidth = width;
+        lineWidthVal.textContent = width + 'px';
+        // Also update the global penDrawingMode line width
+        penDrawingMode.lineWidth = width;
+        saveState();
       });
     }
   }, 0);
@@ -16680,6 +17273,7 @@ async function saveStateImmediate() {
         case 'pen':
           data.penColor = obj.userData.penColor;
           data.inkColor = obj.userData.inkColor;
+          data.lineWidth = obj.userData.lineWidth || 2;
           // Save holder info if pen is in a holder
           if (obj.userData.inHolder) {
             const holderIndex = deskObjects.indexOf(obj.userData.inHolder);
@@ -16712,6 +17306,17 @@ async function saveStateImmediate() {
           } else {
             data.currentTime = obj.userData.currentTime || 0;
             data.wasPlaying = obj.userData.isPlaying || false;
+          }
+          break;
+        case 'notebook':
+        case 'paper':
+          // Save drawing data
+          if (obj.userData.drawingLines && obj.userData.drawingLines.length > 0) {
+            data.drawingLines = obj.userData.drawingLines;
+            data.hasDrawingData = true;
+          }
+          if (obj.userData.drawingFileName) {
+            data.drawingFileName = obj.userData.drawingFileName;
           }
           break;
       }
@@ -17139,6 +17744,9 @@ async function loadState() {
                 if (objData.inkColor) {
                   obj.userData.inkColor = objData.inkColor;
                 }
+                if (objData.lineWidth) {
+                  obj.userData.lineWidth = objData.lineWidth;
+                }
                 // Update pen body color from mainColor
                 if (objData.mainColor) {
                   obj.children.forEach(child => {
@@ -17176,6 +17784,24 @@ async function loadState() {
                 if (objData.saturationLevel !== undefined) obj.userData.saturationLevel = objData.saturationLevel;
                 if (objData.lowCutoff !== undefined) obj.userData.lowCutoff = objData.lowCutoff;
                 if (objData.highCutoff !== undefined) obj.userData.highCutoff = objData.highCutoff;
+                break;
+              case 'notebook':
+              case 'paper':
+                // Restore drawing data
+                if (objData.drawingLines && objData.drawingLines.length > 0) {
+                  obj.userData.drawingLines = objData.drawingLines;
+                  // Redraw all strokes after state is loaded
+                  setTimeout(() => {
+                    redrawAllStrokes(obj);
+                  }, 100);
+                }
+                if (objData.drawingFileName) {
+                  obj.userData.drawingFileName = objData.drawingFileName;
+                }
+                // Load drawing from file storage if flagged
+                if (objData.hasDrawingData) {
+                  loadDrawingFromFile(obj);
+                }
                 break;
             }
 

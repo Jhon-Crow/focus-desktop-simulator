@@ -2738,7 +2738,7 @@ function updateObjectColor(object, colorType, colorValue) {
 // PHYSICS SYSTEM
 // ============================================================================
 
-// Collision radii for all object types
+// Collision radii for all object types (used for push-away physics)
 // Using predefined values avoids expensive recursive bounding box calculations
 // that can cause stack overflow with complex objects (e.g., PDFs with many pages)
 // Values are smaller than visual geometry to allow objects to touch before colliding
@@ -2761,8 +2761,33 @@ const OBJECT_COLLISION_RADII = {
   'metronome': 0.1     // Base radius 0.15
 };
 
+// Stacking radii for all object types (used for stacking detection)
+// These values match the actual footprint of objects for proper overlap detection
+// Larger values allow objects to be placed on top of each other more easily
+const OBJECT_STACKING_RADII = {
+  'clock': 0.2,        // Clock base
+  'lamp': 0.25,        // Lamp base radius
+  'plant': 0.18,       // Pot radius
+  'coffee': 0.12,      // Mug radius
+  'laptop': 0.5,       // Base is 0.8 x 0.5, use half diagonal
+  'notebook': 0.34,    // BoxGeometry 0.4 x 0.55, half diagonal
+  'pen-holder': 0.12,  // CylinderGeometry radius
+  'pen': 0.18,         // Pen length when lying flat
+  'books': 0.24,       // BoxGeometry 0.28 x 0.38, half diagonal
+  'magazine': 0.19,    // BoxGeometry 0.22 x 0.30, half diagonal
+  'photo-frame': 0.2,  // Photo frame footprint
+  'globe': 0.18,       // Globe base
+  'trophy': 0.14,      // Trophy base
+  'hourglass': 0.12,   // Hourglass base
+  'paper': 0.24,       // BoxGeometry 0.28 x 0.4, half diagonal
+  'metronome': 0.15    // Metronome base
+};
+
 // Default collision radius for unknown object types
 const DEFAULT_COLLISION_RADIUS = 0.15;
+
+// Default stacking radius for unknown object types
+const DEFAULT_STACKING_RADIUS = 0.25;
 
 function getObjectBounds(object) {
   const type = object.userData.type;
@@ -2777,6 +2802,21 @@ function getObjectBounds(object) {
   // This avoids expensive recursive setFromObject() calls that can cause
   // stack overflow with complex objects like PDFs with many pages
   return DEFAULT_COLLISION_RADIUS * scale;
+}
+
+// Get stacking radius for an object (used for overlap detection when stacking)
+// Returns larger values than getObjectBounds to allow proper stacking detection
+function getStackingRadius(object) {
+  const type = object.userData.type;
+  const scale = object.scale?.x || 1;
+
+  // Use predefined stacking radius if available
+  if (OBJECT_STACKING_RADII[type] !== undefined) {
+    return OBJECT_STACKING_RADII[type] * scale;
+  }
+
+  // For unknown types, use default stacking radius
+  return DEFAULT_STACKING_RADIUS * scale;
 }
 
 function initPhysicsForObject(object) {
@@ -2803,7 +2843,8 @@ function findObjectsOnTop(baseObject) {
   if (!baseObject || baseObject.userData.isFallen) return [];
 
   const basePhysics = getObjectPhysics(baseObject);
-  const baseRadius = getObjectBounds(baseObject);
+  // Use stacking radius (actual object footprint) for overlap detection
+  const baseRadius = getStackingRadius(baseObject);
   const baseTop = baseObject.position.y + basePhysics.height;
   const result = [];
 
@@ -2814,21 +2855,24 @@ function findObjectsOnTop(baseObject) {
     if (obj.userData.isExamining || obj.userData.isReturning) return;
 
     const objPhysics = getObjectPhysics(obj);
-    const objRadius = getObjectBounds(obj);
+    // Use stacking radius for the top object too
+    const objRadius = getStackingRadius(obj);
     const objBottom = obj.position.y;
 
     // Check if object is resting on top of baseObject (vertically)
     // Object's bottom should be at approximately baseObject's top (with small tolerance)
-    const verticalTolerance = 0.05;
+    // Increased tolerance to account for slight positioning variations
+    const verticalTolerance = 0.1;
     const isOnTop = Math.abs(objBottom - baseTop) < verticalTolerance;
 
     if (!isOnTop) return;
 
     // Check horizontal overlap - objects must overlap significantly to be considered stacked
+    // Use larger threshold (0.9) to detect stacking when objects are mostly aligned
     const dx = obj.position.x - baseObject.position.x;
     const dz = obj.position.z - baseObject.position.z;
     const horizontalDist = Math.sqrt(dx * dx + dz * dz);
-    const overlapThreshold = (baseRadius + objRadius) * 0.7;
+    const overlapThreshold = (baseRadius + objRadius) * 0.9;
 
     if (horizontalDist < overlapThreshold) {
       result.push(obj);
@@ -4690,7 +4734,8 @@ function findAvailableHolderSlot(holder, excludePen) {
 // Calculate Y position for dragging - allows object to ride on top of ANY object (no weight check)
 // Uses dragLayerOffset to allow user-controlled stacking via scroll
 function calculateDragStackingY(draggedObject, posX, posZ) {
-  const draggedRadius = getObjectBounds(draggedObject);
+  // Use stacking radius for overlap detection (larger, based on actual object footprint)
+  const draggedRadius = getStackingRadius(draggedObject);
   const baseY = getDeskSurfaceY();
   const draggedBaseOffset = OBJECT_PHYSICS[draggedObject.userData.type]?.baseOffset || 0;
   // Account for scale when calculating base offset
@@ -4707,7 +4752,8 @@ function calculateDragStackingY(draggedObject, posX, posZ) {
     if (obj === draggedObject) return;
     if (obj.userData.isFallen) return;
 
-    const otherRadius = getObjectBounds(obj);
+    // Use stacking radius for the other object too
+    const otherRadius = getStackingRadius(obj);
     const otherPhysics = getObjectPhysics(obj);
 
     // Calculate horizontal distance
@@ -4715,10 +4761,8 @@ function calculateDragStackingY(draggedObject, posX, posZ) {
     const dz = posZ - obj.position.z;
     const horizontalDist = Math.sqrt(dx * dx + dz * dz);
 
-    // Check if objects overlap horizontally (use smaller threshold for thin objects like paper)
-    const collisionHeight = otherPhysics.height || 0.1;
-    const overlapFactor = collisionHeight < 0.05 ? 0.9 : 0.7;  // More lenient for thin objects
-    const overlapThreshold = (draggedRadius + otherRadius) * overlapFactor;
+    // Check if objects overlap horizontally (with generous tolerance for stacking)
+    const overlapThreshold = (draggedRadius + otherRadius) * 0.8;
 
     if (horizontalDist < overlapThreshold) {
       // Calculate the top surface of the object below
@@ -4748,7 +4792,8 @@ function calculateDragStackingY(draggedObject, posX, posZ) {
 // Calculate Y position for stacking - checks if the object is above another and returns appropriate Y
 // Now stacks automatically when dropped on top of another object, or manually with scroll up
 function calculateStackingY(droppedObject) {
-  const droppedRadius = getObjectBounds(droppedObject);
+  // Use stacking radius for overlap detection (larger, based on actual object footprint)
+  const droppedRadius = getStackingRadius(droppedObject);
   const droppedPhysics = getObjectPhysics(droppedObject);
   const baseY = getDeskSurfaceY();
   const droppedBaseOffset = OBJECT_PHYSICS[droppedObject.userData.type]?.baseOffset || 0;
@@ -4769,7 +4814,8 @@ function calculateStackingY(droppedObject) {
     if (obj === droppedObject) return;
     if (obj.userData.isFallen) return;
 
-    const otherRadius = getObjectBounds(obj);
+    // Use stacking radius for the other object too
+    const otherRadius = getStackingRadius(obj);
     const otherPhysics = getObjectPhysics(obj);
 
     // Calculate horizontal distance
@@ -4777,8 +4823,9 @@ function calculateStackingY(droppedObject) {
     const dz = droppedObject.position.z - obj.position.z;
     const horizontalDist = Math.sqrt(dx * dx + dz * dz);
 
-    // Check if objects overlap horizontally (with some tolerance for stacking)
-    const overlapThreshold = (droppedRadius + otherRadius) * 0.6;
+    // Check if objects overlap horizontally (with generous tolerance for stacking)
+    // Use 0.8 multiplier to make stacking easier - objects stack when significantly overlapping
+    const overlapThreshold = (droppedRadius + otherRadius) * 0.8;
 
     if (horizontalDist < overlapThreshold) {
       // Calculate the top surface of the object below
@@ -4809,7 +4856,8 @@ function calculateStackingY(droppedObject) {
 // Calculate resistance when pulling an object from under other objects
 // Returns a value from 0 (no resistance) to 1 (maximum resistance)
 function calculatePullResistance(draggedObject, currentX, currentZ, targetX, targetZ) {
-  const draggedRadius = getObjectBounds(draggedObject);
+  // Use stacking radius for overlap detection
+  const draggedRadius = getStackingRadius(draggedObject);
   const draggedPhysics = getObjectPhysics(draggedObject);
   let totalResistance = 0;
 
@@ -4819,7 +4867,8 @@ function calculatePullResistance(draggedObject, currentX, currentZ, targetX, tar
     if (obj.userData.isFallen) return;
     if (obj.userData.isLifted) return; // Don't apply resistance from lifted objects
 
-    const otherRadius = getObjectBounds(obj);
+    // Use stacking radius for the other object too
+    const otherRadius = getStackingRadius(obj);
     const otherPhysics = getObjectPhysics(obj);
 
     // Calculate horizontal distance at current position

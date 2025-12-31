@@ -2788,6 +2788,35 @@ const OBJECT_COLLISION_RADII_BASE = {
 // Global collision radius multiplier (adjustable in settings, 0.5 to 2.0)
 let collisionRadiusMultiplier = 1.0;
 
+// Collision heights for all object types (used for vertical overlap check in collisions)
+// Objects only collide horizontally when their vertical ranges overlap
+// These values match the actual visual heights of objects
+// Collision heights can be adjusted using collisionHeightMultiplier setting
+const OBJECT_COLLISION_HEIGHTS_BASE = {
+  'clock': 0.6,        // Tall clock
+  'lamp': 0.9,         // Tall lamp
+  'plant': 0.5,        // Medium plant
+  'coffee': 0.25,      // Short mug
+  'laptop': 0.25,      // When closed, quite flat
+  'notebook': 0.05,    // Very flat
+  'pen-holder': 0.35,  // Medium height cylinder
+  'pen': 0.02,         // Very flat when lying down
+  'books': 0.06,       // Single book is quite flat
+  'magazine': 0.01,    // Very flat magazine
+  'photo-frame': 0.5,  // Tall when standing
+  'globe': 0.4,        // Medium globe
+  'trophy': 0.35,      // Medium trophy
+  'hourglass': 0.3,    // Medium hourglass
+  'paper': 0.005,      // Paper sheet is very flat
+  'metronome': 0.4     // Medium metronome
+};
+
+// Default collision height for unknown object types
+const DEFAULT_COLLISION_HEIGHT_BASE = 0.3;
+
+// Global collision height multiplier (adjustable in settings, 0.2 to 2.0)
+let collisionHeightMultiplier = 1.0;
+
 // Get the adjusted collision radii
 function getObjectCollisionRadii() {
   const adjusted = {};
@@ -2856,6 +2885,46 @@ function getStackingRadius(object) {
   return DEFAULT_STACKING_RADIUS * scale;
 }
 
+// Get collision height for an object (used for vertical overlap check)
+// Objects only collide horizontally when their vertical ranges overlap
+function getCollisionHeight(object) {
+  const type = object.userData.type;
+  const scale = object.scale?.y || object.scale?.x || 1;
+
+  // Use predefined collision height if available (with multiplier applied)
+  const baseHeight = OBJECT_COLLISION_HEIGHTS_BASE[type];
+  if (baseHeight !== undefined) {
+    return baseHeight * collisionHeightMultiplier * scale;
+  }
+
+  // For unknown types, use default collision height
+  return DEFAULT_COLLISION_HEIGHT_BASE * collisionHeightMultiplier * scale;
+}
+
+// Check if two objects overlap vertically (their vertical ranges intersect)
+// Returns true if objects should collide horizontally, false if one is above the other
+function objectsOverlapVertically(obj1, physics1, obj2, physics2) {
+  // Get collision heights for both objects
+  const height1 = getCollisionHeight(obj1);
+  const height2 = getCollisionHeight(obj2);
+
+  // Get base offsets (distance from object origin to bottom)
+  const baseOffset1 = physics1.baseOffset || 0;
+  const baseOffset2 = physics2.baseOffset || 0;
+
+  // Calculate vertical ranges (bottom to top) for each object
+  // Object position.y is typically at the center or base, baseOffset corrects this
+  const bottom1 = obj1.position.y - baseOffset1;
+  const top1 = bottom1 + height1;
+  const bottom2 = obj2.position.y - baseOffset2;
+  const top2 = bottom2 + height2;
+
+  // Check if ranges overlap: ranges overlap if one doesn't start after the other ends
+  // Using a small tolerance (0.01) to prevent floating point issues
+  const tolerance = 0.01;
+  return !(top1 < bottom2 + tolerance || top2 < bottom1 + tolerance);
+}
+
 function initPhysicsForObject(object) {
   if (!physicsState.velocities.has(object.userData.id)) {
     physicsState.velocities.set(object.userData.id, { x: 0, z: 0 });
@@ -2878,6 +2947,7 @@ function getObjectPhysics(object) {
 function createCollisionHelper(object) {
   const collisionRadius = getObjectBounds(object);
   const stackingRadius = getStackingRadius(object);
+  const collisionHeight = getCollisionHeight(object);
   const physics = getObjectPhysics(object);
 
   // Create a group to hold both collision and stacking helpers
@@ -2886,7 +2956,8 @@ function createCollisionHelper(object) {
   helperGroup.userData.targetObjectId = object.userData.id;
 
   // Collision radius visualization (red/orange - used for push physics)
-  const collisionGeometry = new THREE.CylinderGeometry(collisionRadius, collisionRadius, physics.height, 16, 1, true);
+  // Now uses collisionHeight which is adjustable via settings
+  const collisionGeometry = new THREE.CylinderGeometry(collisionRadius, collisionRadius, collisionHeight, 16, 1, true);
   const collisionMaterial = new THREE.MeshBasicMaterial({
     color: 0xff6600,
     transparent: true,
@@ -2895,7 +2966,7 @@ function createCollisionHelper(object) {
     depthWrite: false
   });
   const collisionHelper = new THREE.Mesh(collisionGeometry, collisionMaterial);
-  collisionHelper.position.y = physics.height / 2;
+  collisionHelper.position.y = collisionHeight / 2;
   helperGroup.add(collisionHelper);
 
   // Add collision radius ring at the base
@@ -2913,6 +2984,7 @@ function createCollisionHelper(object) {
   helperGroup.add(collisionRingMesh);
 
   // Stacking radius visualization (blue/cyan - used for stacking detection)
+  // Uses physics.height as stacking considers the visual height
   const stackingGeometry = new THREE.CylinderGeometry(stackingRadius, stackingRadius, physics.height, 16, 1, true);
   const stackingMaterial = new THREE.MeshBasicMaterial({
     color: 0x00aaff,
@@ -3472,6 +3544,12 @@ function updatePhysics() {
 
       const otherRadius = getObjectBounds(obj);
       const otherPhysics = getObjectPhysics(obj);
+
+      // Skip collision if objects don't overlap vertically (one is above the other)
+      if (!objectsOverlapVertically(selectedObject, draggedPhysics, obj, otherPhysics)) {
+        return;
+      }
+
       const minDist = (draggedRadius + otherRadius) * 0.7;
 
       const dx = obj.position.x - selectedObject.position.x;
@@ -3545,6 +3623,12 @@ function updatePhysics() {
 
       const otherRadius = getObjectBounds(obj);
       const otherPhysics = getObjectPhysics(obj);
+
+      // Skip collision if objects don't overlap vertically (one is above the other)
+      if (!objectsOverlapVertically(rotatingObj, rotPhysics, obj, otherPhysics)) {
+        return;
+      }
+
       const minDist = (rotRadius + otherRadius) * 0.8;
 
       const dx = obj.position.x - rotatingObj.position.x;
@@ -3598,6 +3682,11 @@ function updatePhysics() {
       const physicsB = getObjectPhysics(objB);
       const velB = physicsState.velocities.get(objB.userData.id);
       if (!velB) continue;
+
+      // Skip collision if objects don't overlap vertically (one is above the other)
+      if (!objectsOverlapVertically(objA, physicsA, objB, physicsB)) {
+        continue;
+      }
 
       const minDist = (radiusA + radiusB) * 0.7;
 
@@ -4210,6 +4299,33 @@ function setupEventListeners() {
 
       // Save to localStorage
       localStorage.setItem('collisionRadiusMultiplier', collisionRadiusMultiplier.toString());
+
+      // Update collision debug visualization if enabled
+      if (debugState.showCollisionRadii) {
+        updateCollisionDebugHelpers();
+      }
+    });
+  }
+
+  // Collision height slider
+  const collisionHeightSlider = document.getElementById('collision-height-slider');
+  const collisionHeightValue = document.getElementById('collision-height-value');
+  if (collisionHeightSlider && collisionHeightValue) {
+    // Load saved value from localStorage
+    const savedMultiplier = localStorage.getItem('collisionHeightMultiplier');
+    if (savedMultiplier !== null) {
+      collisionHeightMultiplier = parseFloat(savedMultiplier);
+      collisionHeightSlider.value = collisionHeightMultiplier * 100;
+      collisionHeightValue.textContent = Math.round(collisionHeightMultiplier * 100) + '%';
+    }
+
+    collisionHeightSlider.addEventListener('input', (e) => {
+      const percentage = parseInt(e.target.value);
+      collisionHeightMultiplier = percentage / 100;
+      collisionHeightValue.textContent = percentage + '%';
+
+      // Save to localStorage
+      localStorage.setItem('collisionHeightMultiplier', collisionHeightMultiplier.toString());
 
       // Update collision debug visualization if enabled
       if (debugState.showCollisionRadii) {

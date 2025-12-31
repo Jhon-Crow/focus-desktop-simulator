@@ -5868,18 +5868,15 @@ function setupEventListeners() {
         playerModeState.panOffsetX = Math.max(-0.5, Math.min(0.5, playerModeState.panOffsetX));
         playerModeState.panOffsetZ = Math.max(-0.5, Math.min(0.5, playerModeState.panOffsetZ));
 
-        // Update camera position
+        // Update camera position - at same Y level as player
         camera.position.set(
           playerWorldPos.x + playerModeState.panOffsetX,
-          playerWorldPos.y + viewDistance * 0.8,
-          playerWorldPos.z + viewDistance * 0.6 + playerModeState.panOffsetZ
+          playerWorldPos.y, // At the same level as the player
+          playerWorldPos.z + viewDistance + playerModeState.panOffsetZ
         );
 
-        // Update camera pitch to look at player
-        const lookAtY = playerWorldPos.y + 0.02;
-        const verticalDist = camera.position.y - lookAtY;
-        const horizontalDist = Math.abs(camera.position.z - playerWorldPos.z);
-        cameraLookState.pitch = -Math.atan2(verticalDist, horizontalDist);
+        // Update camera pitch to look straight at the player (level view)
+        cameraLookState.pitch = 0; // Level with the player
         updateCameraLook();
 
         return;
@@ -6336,10 +6333,46 @@ function onMouseDown(event) {
     return;
   }
 
-  // If in player mode, LMB click exits player mode
-  if (playerModeState.active) {
-    exitPlayerMode();
-    return;
+  // If in player mode, check if clicking on player buttons
+  // If clicking on player, handle the interaction; otherwise exit player mode
+  if (playerModeState.active && playerModeState.player) {
+    updateMousePosition(event);
+    raycaster.setFromCamera(mouse, camera);
+    const intersects = raycaster.intersectObjects([playerModeState.player], true);
+
+    if (intersects.length > 0) {
+      // Clicked on the player - handle button interaction
+      const clickedMesh = intersects[0].object;
+      let object = playerModeState.player;
+
+      // Check if clicking on a button
+      let buttonType = null;
+      let parent = clickedMesh;
+      while (parent && parent !== object) {
+        if (parent.userData && parent.userData.buttonType) {
+          buttonType = parent.userData.buttonType;
+          break;
+        }
+        if (parent.name === 'prevButton') buttonType = 'prev';
+        else if (parent.name === 'playButton') buttonType = 'play';
+        else if (parent.name === 'stopButton') buttonType = 'stop';
+        else if (parent.name === 'nextButton') buttonType = 'next';
+        if (buttonType) break;
+        parent = parent.parent;
+      }
+
+      if (buttonType) {
+        handleCassetteButtonClick(object, buttonType);
+      } else {
+        // Clicked on player body (not a button) - toggle play/pause
+        toggleCassettePlayback(object);
+      }
+      return;
+    } else {
+      // Clicked outside the player - exit player mode
+      exitPlayerMode();
+      return;
+    }
   }
 
   // If in examine mode with LMB click:
@@ -7264,15 +7297,12 @@ function onMouseWheel(event) {
 
     camera.position.set(
       playerWorldPos.x + playerModeState.panOffsetX,
-      playerWorldPos.y + viewDistance * 0.8,
-      playerWorldPos.z + viewDistance * 0.6 + playerModeState.panOffsetZ
+      playerWorldPos.y, // At the same level as the player
+      playerWorldPos.z + viewDistance + playerModeState.panOffsetZ
     );
 
-    // Update camera pitch to look at player
-    const lookAtY = playerWorldPos.y + 0.02;
-    const verticalDist = camera.position.y - lookAtY;
-    const horizontalDist = Math.abs(camera.position.z - playerWorldPos.z);
-    cameraLookState.pitch = -Math.atan2(verticalDist, horizontalDist);
+    // Update camera pitch to look straight at the player (level view)
+    cameraLookState.pitch = 0; // Level with the player
     updateCameraLook();
 
     return;
@@ -13715,13 +13745,13 @@ function enterPlayerMode(player) {
   // Get the player's scale to adjust viewing distance
   const playerScale = player.scale.x || 1;
 
-  // Calculate target camera position - closer to the player for button interaction
-  // Position camera at an angle to see both buttons on top and the screen
+  // Calculate target camera position - at the same level as the player
+  // Position camera at the same Y level for comfortable viewing
   const viewDistance = playerModeState.zoomDistance * playerScale;
   const targetCameraPos = new THREE.Vector3(
     playerWorldPos.x,
-    playerWorldPos.y + viewDistance * 0.8, // Above the player
-    playerWorldPos.z + viewDistance * 0.6  // Slightly in front for angled view
+    playerWorldPos.y, // At the same level as the player (not above)
+    playerWorldPos.z + viewDistance  // In front of the player
   );
 
   // Animate camera to player viewing position
@@ -13736,11 +13766,8 @@ function enterPlayerMode(player) {
 
     camera.position.lerpVectors(startPos, targetCameraPos, eased);
 
-    // Point camera down at player (similar to book reading mode)
-    const lookAtY = playerWorldPos.y + 0.02; // Look at center of player
-    const verticalDist = camera.position.y - lookAtY;
-    const horizontalDist = Math.abs(camera.position.z - playerWorldPos.z);
-    const targetPitch = -Math.atan2(verticalDist, horizontalDist);
+    // Look straight at the player (level view, not looking down)
+    const targetPitch = 0; // Level view
     cameraLookState.pitch = playerModeState.originalCameraPitch + (targetPitch - playerModeState.originalCameraPitch) * eased;
     updateCameraLook();
 

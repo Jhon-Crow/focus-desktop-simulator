@@ -8648,6 +8648,16 @@ function setupLaptopCustomizationHandlers(object) {
     // Notes folder selection handlers
     const notesFolderSelect = document.getElementById('laptop-notes-folder-select');
     const notesFolderClear = document.getElementById('laptop-notes-folder-clear');
+    const notesFolderDisplay = document.getElementById('laptop-notes-folder-display');
+
+    // If no custom folder is set, show the actual default folder path
+    if (notesFolderDisplay && !object.userData.notesFolderPath) {
+      window.electronAPI.getDefaultNotesFolder().then(result => {
+        if (result.success && notesFolderDisplay) {
+          notesFolderDisplay.textContent = result.folderPath;
+        }
+      }).catch(err => console.error('Error getting default notes folder:', err));
+    }
 
     if (notesFolderSelect) {
       notesFolderSelect.addEventListener('click', async () => {
@@ -10627,6 +10637,28 @@ function setupLaptopHandlers(object) {
 }
 
 // Markdown Editor Functions
+// Helper function to generate filename with timestamp for saving notes
+function getTimestampedFilename(baseName) {
+  // Remove .md extension if present
+  let name = baseName;
+  if (name.endsWith('.md')) {
+    name = name.slice(0, -3);
+  }
+
+  // Create timestamp in format: YYYY-MM-DD HH-MM-SS
+  const now = new Date();
+  const year = now.getFullYear();
+  const month = String(now.getMonth() + 1).padStart(2, '0');
+  const day = String(now.getDate()).padStart(2, '0');
+  const hours = String(now.getHours()).padStart(2, '0');
+  const minutes = String(now.getMinutes()).padStart(2, '0');
+  const seconds = String(now.getSeconds()).padStart(2, '0');
+  const timestamp = `${year}-${month}-${day} ${hours}-${minutes}-${seconds}`;
+
+  // Return filename with timestamp (space separated) and .md extension
+  return `${name} ${timestamp}.md`;
+}
+
 function openMarkdownEditor(laptop) {
   // Close the interaction modal
   closeInteractionModal();
@@ -10918,9 +10950,11 @@ function openMarkdownEditor(laptop) {
         }
 
         if (folderPath) {
+          // Add timestamp to filename when saving
+          const timestampedFilename = getTimestampedFilename(laptop.userData.editorFileName);
           const result = await window.electronAPI.saveMarkdownFile(
             folderPath,
-            laptop.userData.editorFileName,
+            timestampedFilename,
             sourceTextarea.value
           );
           if (result.success) {
@@ -10977,9 +11011,11 @@ function openMarkdownEditor(laptop) {
         }
 
         if (folderPath) {
+          // Add timestamp to filename when saving
+          const timestampedFilename = getTimestampedFilename(laptop.userData.editorFileName);
           const result = await window.electronAPI.saveMarkdownFile(
             folderPath,
-            laptop.userData.editorFileName,
+            timestampedFilename,
             sourceTextarea.value
           );
           if (result.success) {

@@ -1,0 +1,133 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Audio Loading Test</title>
+  <style>
+    body { font-family: monospace; padding: 20px; }
+    .log { background: #f0f0f0; padding: 10px; margin: 10px 0; white-space: pre-wrap; }
+    .error { color: red; }
+    .success { color: green; }
+    button { margin: 5px; padding: 10px; }
+  </style>
+</head>
+<body>
+  <h1>Audio Loading Test</h1>
+  <input type="file" id="audio-file" accept="audio/*">
+  <div id="logs"></div>
+
+  <script>
+    const logsDiv = document.getElementById('logs');
+
+    function log(msg, isError = false) {
+      const div = document.createElement('div');
+      div.className = 'log ' + (isError ? 'error' : 'success');
+      div.textContent = new Date().toISOString() + ': ' + msg;
+      logsDiv.appendChild(div);
+      console.log(msg);
+    }
+
+    document.getElementById('audio-file').addEventListener('change', async (e) => {
+      const file = e.target.files[0];
+      if (!file) {
+        log('No file selected', true);
+        return;
+      }
+
+      log('File selected: ' + file.name);
+      log('File type: ' + file.type);
+      log('File size: ' + file.size + ' bytes');
+      log('File type starts with audio/: ' + file.type.startsWith('audio/'));
+
+      // Test 1: Check if file.type detection works for common audio files
+      const extension = file.name.split('.').pop().toLowerCase();
+      log('File extension: ' + extension);
+
+      // Method 1: Using File.arrayBuffer() directly
+      try {
+        log('Method 1: Using File.arrayBuffer() directly...');
+        const arrayBuffer = await file.arrayBuffer();
+        log('ArrayBuffer size: ' + arrayBuffer.byteLength);
+
+        const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        log('AudioContext state: ' + audioCtx.state);
+
+        if (audioCtx.state === 'suspended') {
+          await audioCtx.resume();
+          log('AudioContext resumed');
+        }
+
+        // Make a copy since decodeAudioData detaches the buffer
+        const bufferCopy = arrayBuffer.slice(0);
+        log('Buffer copy created, size: ' + bufferCopy.byteLength);
+
+        const decodedBuffer = await audioCtx.decodeAudioData(bufferCopy);
+        log('Decoded buffer duration: ' + decodedBuffer.duration + ' seconds');
+        log('Decoded buffer channels: ' + decodedBuffer.numberOfChannels);
+        log('Method 1 SUCCESS!');
+      } catch (err) {
+        log('Method 1 FAILED: ' + err.message, true);
+        log('Error stack: ' + err.stack, true);
+      }
+
+      // Method 2: Using FileReader.readAsArrayBuffer
+      log('');
+      log('Method 2: Using FileReader.readAsArrayBuffer...');
+      const reader = new FileReader();
+      reader.onload = async (event) => {
+        try {
+          const arrayBuffer = event.target.result;
+          log('ArrayBuffer from FileReader size: ' + arrayBuffer.byteLength);
+
+          const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+          if (audioCtx.state === 'suspended') {
+            await audioCtx.resume();
+          }
+
+          const bufferCopy = arrayBuffer.slice(0);
+          const decodedBuffer = await audioCtx.decodeAudioData(bufferCopy);
+          log('Decoded buffer duration: ' + decodedBuffer.duration + ' seconds');
+          log('Method 2 SUCCESS!');
+        } catch (err) {
+          log('Method 2 FAILED: ' + err.message, true);
+        }
+      };
+      reader.onerror = (err) => {
+        log('FileReader error: ' + err, true);
+      };
+      reader.readAsArrayBuffer(file);
+
+      // Method 3: Using DataURL and fetch (the current implementation)
+      log('');
+      log('Method 3: Using DataURL and fetch...');
+      const dataUrlReader = new FileReader();
+      dataUrlReader.onload = async (event) => {
+        try {
+          const dataUrl = event.target.result;
+          log('DataURL length: ' + dataUrl.length);
+          log('DataURL prefix (first 100 chars): ' + dataUrl.substring(0, 100));
+
+          const response = await fetch(dataUrl);
+          const arrayBuffer = await response.arrayBuffer();
+          log('ArrayBuffer from fetch size: ' + arrayBuffer.byteLength);
+
+          const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+          if (audioCtx.state === 'suspended') {
+            await audioCtx.resume();
+          }
+
+          const bufferCopy = arrayBuffer.slice(0);
+          const decodedBuffer = await audioCtx.decodeAudioData(bufferCopy);
+          log('Decoded buffer duration: ' + decodedBuffer.duration + ' seconds');
+          log('Method 3 SUCCESS!');
+        } catch (err) {
+          log('Method 3 FAILED: ' + err.message, true);
+        }
+      };
+      dataUrlReader.onerror = (err) => {
+        log('DataURL FileReader error: ' + err, true);
+      };
+      dataUrlReader.readAsDataURL(file);
+    });
+  </script>
+</body>
+</html>

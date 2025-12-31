@@ -235,7 +235,171 @@ async function decodeAudioBuffer(arrayBuffer, fileName = '') {
   return Promise.race([decodePromise, timeoutPromise]);
 }
 
+// ============================================================================
+// AUDIO TRANSCODING TO WAV PCM
+// ============================================================================
+// This converts any decoded audio to a standard 16-bit PCM WAV format
+// which is universally supported by all browsers and Electron versions.
+// This solves issues with various audio formats (especially MP3s with
+// unusual bit rates or WAV files with non-standard encoding).
+
+/**
+ * Encode an AudioBuffer to WAV format (16-bit PCM)
+ * @param {AudioBuffer} audioBuffer - The decoded audio buffer
+ * @returns {ArrayBuffer} - WAV file as ArrayBuffer
+ */
+function encodeAudioBufferToWav(audioBuffer) {
+  const numChannels = Math.min(audioBuffer.numberOfChannels, 2); // Limit to stereo
+  const sampleRate = audioBuffer.sampleRate;
+  const bitsPerSample = 16;
+  const bytesPerSample = bitsPerSample / 8;
+  const blockAlign = numChannels * bytesPerSample;
+  const numSamples = audioBuffer.length;
+  const dataSize = numSamples * blockAlign;
+  const fileSize = 44 + dataSize; // 44 bytes for WAV header
+
+  // Create buffer for the WAV file
+  const buffer = new ArrayBuffer(fileSize);
+  const view = new DataView(buffer);
+
+  // Helper to write a string
+  const writeString = (offset, str) => {
+    for (let i = 0; i < str.length; i++) {
+      view.setUint8(offset + i, str.charCodeAt(i));
+    }
+  };
+
+  // Write WAV header
+  writeString(0, 'RIFF');                         // ChunkID
+  view.setUint32(4, fileSize - 8, true);          // ChunkSize
+  writeString(8, 'WAVE');                         // Format
+  writeString(12, 'fmt ');                        // Subchunk1ID
+  view.setUint32(16, 16, true);                   // Subchunk1Size (16 for PCM)
+  view.setUint16(20, 1, true);                    // AudioFormat (1 = PCM)
+  view.setUint16(22, numChannels, true);          // NumChannels
+  view.setUint32(24, sampleRate, true);           // SampleRate
+  view.setUint32(28, sampleRate * blockAlign, true); // ByteRate
+  view.setUint16(32, blockAlign, true);           // BlockAlign
+  view.setUint16(34, bitsPerSample, true);        // BitsPerSample
+  writeString(36, 'data');                        // Subchunk2ID
+  view.setUint32(40, dataSize, true);             // Subchunk2Size
+
+  // Get channel data
+  const channels = [];
+  for (let c = 0; c < numChannels; c++) {
+    channels.push(audioBuffer.getChannelData(c));
+  }
+
+  // Interleave and write sample data
+  let offset = 44;
+  for (let i = 0; i < numSamples; i++) {
+    for (let c = 0; c < numChannels; c++) {
+      // Convert float (-1 to 1) to 16-bit integer (-32768 to 32767)
+      let sample = channels[c][i];
+      // Clamp to prevent overflow
+      sample = Math.max(-1, Math.min(1, sample));
+      // Convert to 16-bit signed integer
+      const intSample = sample < 0 ? sample * 0x8000 : sample * 0x7FFF;
+      view.setInt16(offset, intSample, true);
+      offset += 2;
+    }
+  }
+
+  return buffer;
+}
+
+/**
+ * Convert ArrayBuffer to data URL
+ * @param {ArrayBuffer} arrayBuffer - The data
+ * @param {string} mimeType - MIME type for the data URL
+ * @returns {string} - Data URL
+ */
+function arrayBufferToDataUrl(arrayBuffer, mimeType = 'audio/wav') {
+  const uint8Array = new Uint8Array(arrayBuffer);
+  let binary = '';
+  for (let i = 0; i < uint8Array.length; i++) {
+    binary += String.fromCharCode(uint8Array[i]);
+  }
+  return `data:${mimeType};base64,${btoa(binary)}`;
+}
+
+/**
+ * Trim an AudioBuffer to a maximum duration
+ * @param {AudioBuffer} audioBuffer - The original audio buffer
+ * @param {number} maxDuration - Maximum duration in seconds
+ * @returns {AudioBuffer} - Trimmed audio buffer (or original if shorter)
+ */
+function trimAudioBuffer(audioBuffer, maxDuration) {
+  if (audioBuffer.duration <= maxDuration) {
+    return audioBuffer;
+  }
+
+  console.log('trimAudioBuffer: Trimming audio from', audioBuffer.duration, 'to', maxDuration, 'seconds');
+
+  const audioCtx = getSharedAudioContext();
+  const numChannels = audioBuffer.numberOfChannels;
+  const sampleRate = audioBuffer.sampleRate;
+  const maxSamples = Math.floor(maxDuration * sampleRate);
+
+  // Create a new, shorter buffer
+  const trimmedBuffer = audioCtx.createBuffer(numChannels, maxSamples, sampleRate);
+
+  // Copy the data
+  for (let c = 0; c < numChannels; c++) {
+    const sourceData = audioBuffer.getChannelData(c);
+    const destData = trimmedBuffer.getChannelData(c);
+    destData.set(sourceData.subarray(0, maxSamples));
+  }
+
+  return trimmedBuffer;
+}
+
+/**
+ * Transcode audio file to WAV PCM format
+ * This decodes the audio and re-encodes it as WAV PCM,
+ * ensuring universal compatibility.
+ * For metronome/timer sounds, we limit to 10 seconds to keep file size reasonable.
+ * @param {ArrayBuffer} inputBuffer - The input audio file
+ * @param {string} fileName - File name for logging/error messages
+ * @param {number} maxDuration - Maximum duration in seconds (default: 10)
+ * @returns {Promise<{audioBuffer: AudioBuffer, wavDataUrl: string}>}
+ */
+async function transcodeToWav(inputBuffer, fileName = '', maxDuration = 10) {
+  console.log('transcodeToWav: Starting transcode for', fileName || 'audio file');
+
+  // First, decode the original audio
+  let audioBuffer = await decodeAudioBuffer(inputBuffer, fileName);
+
+  console.log('transcodeToWav: Audio decoded, duration:', audioBuffer.duration,
+              'channels:', audioBuffer.numberOfChannels,
+              'sampleRate:', audioBuffer.sampleRate);
+
+  // Trim to max duration if needed (to keep file size reasonable)
+  if (audioBuffer.duration > maxDuration) {
+    console.log('transcodeToWav: Audio is longer than', maxDuration, 'seconds, trimming...');
+    audioBuffer = trimAudioBuffer(audioBuffer, maxDuration);
+  }
+
+  // Encode to WAV PCM
+  const wavBuffer = encodeAudioBufferToWav(audioBuffer);
+  console.log('transcodeToWav: WAV encoded, size:', (wavBuffer.byteLength / 1024).toFixed(1), 'KB');
+
+  // Warn if resulting file is very large
+  const MAX_REASONABLE_SIZE = 2 * 1024 * 1024; // 2MB
+  if (wavBuffer.byteLength > MAX_REASONABLE_SIZE) {
+    console.warn('transcodeToWav: Warning - transcoded file is large:',
+                 (wavBuffer.byteLength / (1024 * 1024)).toFixed(2), 'MB');
+  }
+
+  // Convert to data URL
+  const wavDataUrl = arrayBufferToDataUrl(wavBuffer);
+  console.log('transcodeToWav: Data URL created, length:', wavDataUrl.length);
+
+  return { audioBuffer, wavDataUrl };
+}
+
 // Safe wrapper for loading audio files from File objects
+// This now transcodes the audio to WAV PCM format for universal compatibility
 async function loadAudioFromFile(file) {
   console.log('loadAudioFromFile:', file.name, 'type:', file.type, 'size:', file.size);
 
@@ -255,18 +419,15 @@ async function loadAudioFromFile(file) {
 
   console.log('File read complete, buffer size:', arrayBuffer.byteLength);
 
-  // Decode the audio (pass filename for additional format checks)
-  const audioBuffer = await decodeAudioBuffer(arrayBuffer, file.name);
+  // Transcode to WAV PCM format for universal compatibility
+  // This decodes the original audio and re-encodes it as 16-bit PCM WAV,
+  // which is universally supported by all browsers and Electron versions.
+  // This solves issues with various audio codecs (MP3 bitrates, WAV encodings, etc.)
+  const { audioBuffer, wavDataUrl } = await transcodeToWav(arrayBuffer, file.name);
 
-  // Also create data URL for persistence
-  const dataUrl = await new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => resolve(reader.result);
-    reader.onerror = () => reject(new Error('Failed to create data URL'));
-    reader.readAsDataURL(file);
-  });
-
-  return { audioBuffer, dataUrl };
+  // Return the audio buffer and the transcoded WAV data URL
+  // The WAV format ensures the sound will always work on reload
+  return { audioBuffer, dataUrl: wavDataUrl };
 }
 
 // Safe wrapper for loading audio from data URL (for preloading saved sounds)

@@ -5,5 +5,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   loadState: () => ipcRenderer.invoke('load-state'),
   // Separate handlers for large data (PDF, cover images) to avoid lag
   saveObjectData: (objectId, dataType, dataUrl) => ipcRenderer.invoke('save-object-data', objectId, dataType, dataUrl),
-  loadObjectData: (objectId, dataType) => ipcRenderer.invoke('load-object-data', objectId, dataType)
+  loadObjectData: (objectId, dataType) => ipcRenderer.invoke('load-object-data', objectId, dataType),
+  // Audio transcoding using FFmpeg (for files that browser can't decode)
+  transcodeAudio: (audioDataBase64, fileName) => ipcRenderer.invoke('transcode-audio', audioDataBase64, fileName)
 });

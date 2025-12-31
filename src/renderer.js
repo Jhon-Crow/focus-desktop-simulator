@@ -399,14 +399,17 @@ async function transcodeToWav(inputBuffer, fileName = '', maxDuration = 10) {
 }
 
 // Safe wrapper for loading audio files from File objects
-// This now transcodes the audio to WAV PCM format for universal compatibility
+// This uses a smart approach:
+// 1. For MP3/OGG files, use FFmpeg first (browser decoding can hang on these)
+// 2. For WAV files, try browser first, fall back to FFmpeg
+// 3. FFmpeg handles any format that the browser can't decode
 async function loadAudioFromFile(file) {
   console.log('loadAudioFromFile:', file.name, 'type:', file.type, 'size:', file.size);
 
-  // Early check for unsupported formats
+  // Early check for completely unsupported formats
   const extension = file.name.split('.').pop().toLowerCase();
   if (UNSUPPORTED_AUDIO_FORMATS.includes(extension)) {
-    throw new Error(`The "${extension.toUpperCase()}" format is not supported by the browser. Please convert your audio file to MP3, WAV, or OGG format.`);
+    throw new Error(`The "${extension.toUpperCase()}" format is not supported. Please convert your audio file to MP3, WAV, or OGG format.`);
   }
 
   // Read file as ArrayBuffer
@@ -419,15 +422,106 @@ async function loadAudioFromFile(file) {
 
   console.log('File read complete, buffer size:', arrayBuffer.byteLength);
 
-  // Transcode to WAV PCM format for universal compatibility
-  // This decodes the original audio and re-encodes it as 16-bit PCM WAV,
-  // which is universally supported by all browsers and Electron versions.
-  // This solves issues with various audio codecs (MP3 bitrates, WAV encodings, etc.)
-  const { audioBuffer, wavDataUrl } = await transcodeToWav(arrayBuffer, file.name);
+  // Formats that can cause browser to hang - use FFmpeg first
+  const FFMPEG_FIRST_FORMATS = ['mp3', 'ogg', 'flac', 'm4a', 'aac', 'opus', 'webm'];
+  const useFFmpegFirst = FFMPEG_FIRST_FORMATS.includes(extension);
 
-  // Return the audio buffer and the transcoded WAV data URL
-  // The WAV format ensures the sound will always work on reload
-  return { audioBuffer, dataUrl: wavDataUrl };
+  // Check if FFmpeg is available via IPC
+  const ffmpegAvailable = window.electronAPI && window.electronAPI.transcodeAudio;
+
+  // Helper function to try FFmpeg transcoding
+  async function tryFFmpegTranscode() {
+    if (!ffmpegAvailable) {
+      throw new Error('FFmpeg not available');
+    }
+
+    console.log('Attempting FFmpeg-based transcoding...');
+    const base64Data = arrayBufferToBase64(arrayBuffer);
+    const result = await window.electronAPI.transcodeAudio(base64Data, file.name);
+
+    if (result.success) {
+      console.log('FFmpeg transcoding successful');
+      const wavArrayBuffer = base64ToArrayBuffer(result.wavDataBase64);
+      const audioBuffer = await decodeAudioBuffer(wavArrayBuffer, 'transcoded.wav');
+      const wavDataUrl = 'data:audio/wav;base64,' + result.wavDataBase64;
+      return { audioBuffer, dataUrl: wavDataUrl };
+    } else {
+      if (result.ffmpegMissing) {
+        throw new Error('FFmpeg not installed');
+      } else {
+        throw new Error('FFmpeg transcoding failed: ' + result.error);
+      }
+    }
+  }
+
+  // Helper function to try browser-based transcoding
+  async function tryBrowserTranscode() {
+    console.log('Attempting browser-based audio decoding...');
+    const { audioBuffer, wavDataUrl } = await transcodeToWav(arrayBuffer, file.name);
+    console.log('Browser-based transcoding successful');
+    return { audioBuffer, dataUrl: wavDataUrl };
+  }
+
+  // For formats that can hang the browser, try FFmpeg first if available
+  if (useFFmpegFirst && ffmpegAvailable) {
+    try {
+      return await tryFFmpegTranscode();
+    } catch (ffmpegError) {
+      console.warn('FFmpeg failed, trying browser fallback:', ffmpegError.message);
+      // Fall through to browser attempt
+    }
+  }
+
+  // Try browser-based decoding
+  try {
+    return await tryBrowserTranscode();
+  } catch (browserError) {
+    console.warn('Browser-based decoding failed:', browserError.message);
+
+    // If we haven't tried FFmpeg yet, try it now
+    if (!useFFmpegFirst && ffmpegAvailable) {
+      try {
+        return await tryFFmpegTranscode();
+      } catch (ffmpegError) {
+        console.error('FFmpeg also failed:', ffmpegError.message);
+      }
+    }
+
+    // All methods failed - provide helpful error message
+    if (!ffmpegAvailable) {
+      throw new Error(
+        'Could not decode audio file. The format may not be supported by your browser.\n\n' +
+        'To enable support for all audio formats, please install FFmpeg:\n' +
+        '• Windows: Download from https://ffmpeg.org/download.html and add to PATH\n' +
+        '• Or convert your file to WAV (16-bit PCM) format manually.'
+      );
+    } else {
+      throw new Error(
+        'Could not decode audio file. The file may be corrupted or in an unusual format.\n' +
+        'Please try converting your file to WAV (16-bit PCM) format.'
+      );
+    }
+  }
+}
+
+// Convert ArrayBuffer to base64 string
+function arrayBufferToBase64(buffer) {
+  const bytes = new Uint8Array(buffer);
+  let binary = '';
+  for (let i = 0; i < bytes.byteLength; i++) {
+    binary += String.fromCharCode(bytes[i]);
+  }
+  return btoa(binary);
+}
+
+// Convert base64 string to ArrayBuffer
+function base64ToArrayBuffer(base64) {
+  const binary = atob(base64);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) {
+    bytes[i] = binary.charCodeAt(i);
+  }
+  return bytes.buffer;
 }
 
 // Safe wrapper for loading audio from data URL (for preloading saved sounds)

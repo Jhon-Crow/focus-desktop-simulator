@@ -8772,6 +8772,26 @@ function setupMagazineHandlers(object) {
   }
 }
 
+// Helper function to set the first page of PDF as the magazine cover
+async function setFirstPageAsCoverForMagazine(magazine) {
+  const pdfDoc = magazine.userData.pdfDocument;
+  if (!pdfDoc) return;
+
+  try {
+    const canvas = await renderPDFPageToCanvas(pdfDoc, 1, 512, 700);
+    if (canvas) {
+      const dataUrl = canvas.toDataURL('image/png');
+      magazine.userData.coverImageDataUrl = dataUrl;
+      magazine.userData.coverImageDirty = true;
+      magazine.userData.firstPageAsCover = true;
+      const fitMode = magazine.userData.coverFitMode || 'cover';
+      applyMagazineCoverImageWithFit(magazine, dataUrl, fitMode);
+    }
+  } catch (error) {
+    console.error('Error setting first page as cover:', error);
+  }
+}
+
 async function loadPDFToMagazine(magazine, file) {
   if (magazine.userData.isLoadingPdf) {
     console.log('PDF already loading, skipping duplicate load request');
@@ -8812,6 +8832,9 @@ async function loadPDFToMagazine(magazine, file) {
       magazine.userData.pdfDataDirty = true;
     };
     base64Reader.readAsDataURL(file);
+
+    // Automatically set first page as cover (default behavior after PDF upload)
+    await setFirstPageAsCoverForMagazine(magazine);
 
     // Automatically open the magazine to show the PDF content
     if (!magazine.userData.isOpen) {
@@ -8970,9 +8993,13 @@ async function updateMagazinePagesWithPDF(magazine) {
 
 function updateMagazineThickness(magazine) {
   const totalPages = magazine.userData.totalPages || 10;
-  // Magazines are generally thinner than books
-  const pagesPerMm = 15;
-  const calculatedThickness = Math.min(0.04, Math.max(0.008, totalPages / pagesPerMm / 100));
+  // Magazines should be slightly thinner than books
+  // Magazine paper is typically thinner (0.07mm vs 0.08mm for books)
+  const thicknessPerPage = 0.00007; // Each page adds 0.07mm (thinner than book's 0.08mm)
+  const baseThickness = 0.012; // Thinner base than book's 0.015
+  const minThickness = 0.006; // Minimum thickness for very thin magazines
+  const maxThickness = 0.06; // Max thickness (thinner than book's 0.08)
+  const calculatedThickness = Math.max(minThickness, Math.min(maxThickness, baseThickness + (totalPages * thicknessPerPage)));
 
   const closedGroup = magazine.getObjectByName('closedMagazine');
   if (!closedGroup) return;

@@ -1859,6 +1859,20 @@ function init() {
   renderer.shadowMap.type = THREE.PCFSoftShadowMap;
   document.getElementById('canvas-container').appendChild(renderer.domElement);
 
+  // Handle WebGL context lost and restored events to prevent gray screen
+  renderer.domElement.addEventListener('webglcontextlost', (event) => {
+    event.preventDefault();
+    console.warn('WebGL context lost - attempting recovery');
+  }, false);
+
+  renderer.domElement.addEventListener('webglcontextrestored', () => {
+    console.log('WebGL context restored - reinitializing');
+    // Reinitialize pixel art post-processing if enabled
+    if (CONFIG.pixelation.enabled) {
+      setupPixelArtPostProcessing();
+    }
+  }, false);
+
   // Setup pixel art post-processing if enabled
   if (CONFIG.pixelation.enabled) {
     setupPixelArtPostProcessing();
@@ -18500,29 +18514,48 @@ function animate() {
 // PIXEL ART RENDER PASS
 // ============================================================================
 function renderPixelArt() {
-  const uniforms = pixelatedMaterial.uniforms;
+  try {
+    // Validate required objects exist before rendering
+    if (!pixelatedMaterial || !pixelatedMaterial.uniforms || !pixelRenderTarget || !normalRenderTarget) {
+      // Fall back to regular rendering if pixelation setup is incomplete
+      renderer.render(scene, camera);
+      return;
+    }
 
-  // Pass 1: Render scene to low-resolution texture
-  renderer.setRenderTarget(pixelRenderTarget);
-  renderer.clear();
-  renderer.render(scene, camera);
+    const uniforms = pixelatedMaterial.uniforms;
 
-  // Pass 2: Render normals for edge detection
-  const overrideMaterial = scene.overrideMaterial;
-  renderer.setRenderTarget(normalRenderTarget);
-  scene.overrideMaterial = normalMaterial;
-  renderer.clear();
-  renderer.render(scene, camera);
-  scene.overrideMaterial = overrideMaterial;
+    // Pass 1: Render scene to low-resolution texture
+    renderer.setRenderTarget(pixelRenderTarget);
+    renderer.clear();
+    renderer.render(scene, camera);
 
-  // Pass 3: Apply pixelated shader to screen
-  uniforms.tDiffuse.value = pixelRenderTarget.texture;
-  uniforms.tDepth.value = pixelRenderTarget.depthTexture;
-  uniforms.tNormal.value = normalRenderTarget.texture;
+    // Pass 2: Render normals for edge detection
+    const overrideMaterial = scene.overrideMaterial;
+    renderer.setRenderTarget(normalRenderTarget);
+    scene.overrideMaterial = normalMaterial;
+    renderer.clear();
+    renderer.render(scene, camera);
+    scene.overrideMaterial = overrideMaterial;
 
-  renderer.setRenderTarget(null);
-  renderer.clear();
-  renderer.render(fsQuad, fsCamera);
+    // Pass 3: Apply pixelated shader to screen
+    uniforms.tDiffuse.value = pixelRenderTarget.texture;
+    uniforms.tDepth.value = pixelRenderTarget.depthTexture;
+    uniforms.tNormal.value = normalRenderTarget.texture;
+
+    renderer.setRenderTarget(null);
+    renderer.clear();
+    renderer.render(fsQuad, fsCamera);
+  } catch (error) {
+    console.warn('renderPixelArt error, falling back to standard render:', error);
+    // Reset render target to default and do a simple render to avoid gray screen
+    try {
+      renderer.setRenderTarget(null);
+      renderer.clear();
+      renderer.render(scene, camera);
+    } catch (fallbackError) {
+      console.error('Fallback render also failed:', fallbackError);
+    }
+  }
 }
 
 // ============================================================================

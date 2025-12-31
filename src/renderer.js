@@ -14190,11 +14190,13 @@ function enterPlayerMode(player) {
   const playerRotationY = player.rotation.y;
 
   // Calculate target camera position - different for big vs mini player
-  // Big player: Walkman-style, similar form factor to main branch player
   // Mini player: compact horizontal WM-10 style, needs to be closer
-  const viewDistance = isBigPlayer ? 0.2 * playerScale : 0.15 * playerScale;
-  // Camera height: slightly above center to see buttons and screen
+  // Big player: match play button view distance for consistency
+  const viewDistance = isBigPlayer ? 0.25 * playerScale : 0.08 * playerScale;
+  // Camera height: position to see buttons and screen
   const cameraHeight = isBigPlayer ? 0.06 * playerScale : 0.04 * playerScale;
+  // Tilt angle for initial view (big player uses same as button view for consistency)
+  const initialTilt = isBigPlayer ? -0.295 : 0;
 
   const targetCameraPos = new THREE.Vector3(
     playerWorldPos.x + Math.sin(playerRotationY) * viewDistance,
@@ -14219,9 +14221,8 @@ function enterPlayerMode(player) {
 
     camera.position.lerpVectors(startPos, targetCameraPos, eased);
 
-    // Look straight at the player (level view, not looking down)
-    const targetPitch = 0; // Level view
-    cameraLookState.pitch = playerModeState.originalCameraPitch + (targetPitch - playerModeState.originalCameraPitch) * eased;
+    // Use appropriate tilt for player type (big player needs slight downward angle to match button view)
+    cameraLookState.pitch = playerModeState.originalCameraPitch + (initialTilt - playerModeState.originalCameraPitch) * eased;
     cameraLookState.yaw = startYaw + (targetYaw - startYaw) * eased;
     updateCameraLook();
 
@@ -14304,10 +14305,13 @@ function navigatePlayerButtons(direction) {
 
   if (newIndex === -1) {
     // Front view mode - camera faces the player screen directly
-    // Big player: Walkman-style, similar form factor to main branch player
-    const viewDistance = isBigPlayer ? 0.2 * playerScale : 0.15 * playerScale;
-    // Camera height: slightly above center to see buttons and screen
+    // Mini player: needs to be closer for better visibility
+    // Big player: match play button position for consistency
+    const viewDistance = isBigPlayer ? 0.25 * playerScale : 0.08 * playerScale;
+    // Camera height: position to see buttons and screen
     const cameraHeight = isBigPlayer ? 0.06 * playerScale : 0.04 * playerScale;
+    // Tilt angle for front view (big player uses same as button view for consistency)
+    const frontViewTilt = isBigPlayer ? -0.295 : 0;
 
     // Calculate target position in front of the player (accounting for player rotation)
     const targetCameraPos = new THREE.Vector3(
@@ -14317,7 +14321,7 @@ function navigatePlayerButtons(direction) {
     );
 
     // Animate camera to front view
-    animateCameraToPosition(targetCameraPos, playerWorldPos, 0, 250);
+    animateCameraToPosition(targetCameraPos, playerWorldPos, frontViewTilt, 250);
   } else {
     // Button view mode - camera centers on the selected button
     const buttonName = playerModeState.buttonNames[newIndex];
@@ -14338,9 +14342,9 @@ function navigatePlayerButtons(direction) {
         const viewDistance = isBigPlayer ? 0.25 * playerScale : 0.08 * playerScale;
         const cameraHeight = isBigPlayer ? 0.06 * playerScale : 0.08 * playerScale;
         // Tilt angles for button visibility (different for each player type)
-        // Big player: -0.33 radians (front-facing buttons, raised 4 degrees from -0.4)
-        // Mini player: -0.805 radians (top-edge buttons, raised 2 degrees from -0.84)
-        const buttonTilt = isBigPlayer ? -0.33 : -0.805;
+        // Big player: -0.295 radians (front-facing buttons, raised 2 degrees from -0.33)
+        // Mini player: -0.805 radians (top-edge buttons)
+        const buttonTilt = isBigPlayer ? -0.295 : -0.805;
 
         const targetCameraPos = new THREE.Vector3(
           buttonWorldPos.x + Math.sin(playerRotationY) * viewDistance,

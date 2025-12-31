@@ -3350,6 +3350,13 @@ function updateDragCollisions() {
 
     const otherRadius = getObjectBounds(obj);
     const otherPhysics = getObjectPhysics(obj);
+
+    // Skip collision if objects don't overlap vertically (one is above the other)
+    // This allows stacking objects on top of each other without pushing
+    if (!objectsOverlapVertically(selectedObject, draggedPhysics, obj, otherPhysics)) {
+      return;
+    }
+
     const minDist = (draggedRadius + otherRadius) * 0.7;
 
     const dx = obj.position.x - selectedObject.position.x;

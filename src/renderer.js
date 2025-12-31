@@ -3909,6 +3909,50 @@ function createMetronome(options = {}) {
 }
 
 // ============================================================================
+// SHARED AUDIO SYSTEM
+// ============================================================================
+// Shared audio infrastructure for all audio sources (cassette, dictaphone, etc.)
+// This allows the dictaphone to capture audio from all virtual room sources
+let sharedAudioSystem = {
+  audioContext: null,
+  masterGain: null,        // Master output node - all audio passes through here
+  recordingGain: null,     // Gain node for recording (copies audio for recording)
+  activePlayers: new Set() // Set of active audio sources (cassette players, etc.)
+};
+
+// Get or create the shared audio context
+function getSharedAudioContext() {
+  if (!sharedAudioSystem.audioContext) {
+    sharedAudioSystem.audioContext = new (window.AudioContext || window.webkitAudioContext)();
+
+    // Create master gain node - all audio goes through here
+    sharedAudioSystem.masterGain = sharedAudioSystem.audioContext.createGain();
+    sharedAudioSystem.masterGain.gain.value = 1.0;
+    sharedAudioSystem.masterGain.connect(sharedAudioSystem.audioContext.destination);
+
+    // Create recording tap gain node - this is where dictaphone connects
+    sharedAudioSystem.recordingGain = sharedAudioSystem.audioContext.createGain();
+    sharedAudioSystem.recordingGain.gain.value = 1.0;
+    sharedAudioSystem.masterGain.connect(sharedAudioSystem.recordingGain);
+
+    console.log('Shared audio system initialized');
+  }
+  return sharedAudioSystem.audioContext;
+}
+
+// Register an active audio player (cassette player starts playing)
+function registerActivePlayer(playerId, audioNodes) {
+  sharedAudioSystem.activePlayers.add(playerId);
+  console.log('Registered active player:', playerId, '- total:', sharedAudioSystem.activePlayers.size);
+}
+
+// Unregister an audio player (stops playing)
+function unregisterActivePlayer(playerId) {
+  sharedAudioSystem.activePlayers.delete(playerId);
+  console.log('Unregistered player:', playerId, '- total:', sharedAudioSystem.activePlayers.size);
+}
+
+// ============================================================================
 // CASSETTE PLAYER
 // ============================================================================
 // Cassette player state for audio effects
@@ -4935,12 +4979,10 @@ async function playCassetteTrack(object, trackIndex, startTime = 0) {
       return;
     }
 
-    // Create audio context if needed
-    if (!cassettePlayerState.audioContext) {
-      cassettePlayerState.audioContext = new (window.AudioContext || window.webkitAudioContext)();
-    }
-
-    const audioCtx = cassettePlayerState.audioContext;
+    // Use shared audio context for all audio sources
+    // This allows the dictaphone to capture audio from cassette players
+    const audioCtx = getSharedAudioContext();
+    cassettePlayerState.audioContext = audioCtx;
 
     // Resume context if suspended
     if (audioCtx.state === 'suspended') {
@@ -4992,8 +5034,13 @@ async function playCassetteTrack(object, trackIndex, startTime = 0) {
     // Connect noise (tape hiss) to merger
     nodes.noiseGain.connect(nodes.merger);
 
-    // Connect to output
-    nodes.merger.connect(audioCtx.destination);
+    // Connect to shared master gain (instead of direct to destination)
+    // This allows the dictaphone to capture all audio from the room
+    nodes.merger.connect(sharedAudioSystem.masterGain);
+
+    // Register this player as active for dictaphone to know about
+    registerActivePlayer(object.userData.id, nodes);
+    object.userData.connectedToSharedAudio = true;
 
     // Store nodes for cleanup per-player
     object.userData.effectNodes = nodes;
@@ -5069,6 +5116,12 @@ function stopPlayerAudio(object) {
       if (nodes.noiseSource) nodes.noiseSource.stop();
     } catch (e) {}
     object.userData.effectNodes = null;
+  }
+
+  // Unregister from shared audio system
+  if (object.userData.connectedToSharedAudio) {
+    unregisterActivePlayer(object.userData.id);
+    object.userData.connectedToSharedAudio = false;
   }
 
   object.userData.isPlaying = false;
@@ -5557,12 +5610,10 @@ async function startDictaphoneRecording(object) {
   }
 
   try {
-    // Create audio context if needed
-    if (!dictaphoneState.audioContext) {
-      dictaphoneState.audioContext = new (window.AudioContext || window.webkitAudioContext)();
-    }
-
-    const audioCtx = dictaphoneState.audioContext;
+    // Use the shared audio context - same as cassette player
+    // This is critical for capturing virtual room sounds!
+    const audioCtx = getSharedAudioContext();
+    dictaphoneState.audioContext = audioCtx;
 
     // Resume audio context if suspended
     if (audioCtx.state === 'suspended') {
@@ -5596,16 +5647,20 @@ async function startDictaphoneRecording(object) {
       // Continue without microphone - will record only virtual sounds
     }
 
-    // Connect virtual room sounds if cassette player is playing
-    if (cassettePlayerState.isPlaying && cassettePlayerState.gainNode) {
+    // Connect virtual room sounds from the shared audio system
+    // This captures all audio going through the room (cassette players, etc.)
+    if (sharedAudioSystem.recordingGain) {
       dictaphoneState.virtualAudioGainNode = audioCtx.createGain();
-      dictaphoneState.virtualAudioGainNode.gain.value = 0.5; // Mix at 50%
+      dictaphoneState.virtualAudioGainNode.gain.value = 0.7; // Mix at 70%
 
-      // Connect from cassette's gain node to our destination
-      cassettePlayerState.gainNode.connect(dictaphoneState.virtualAudioGainNode);
+      // Connect from the shared recording tap to our destination
+      sharedAudioSystem.recordingGain.connect(dictaphoneState.virtualAudioGainNode);
       dictaphoneState.virtualAudioGainNode.connect(dictaphoneState.destinationNode);
 
-      console.log('Virtual audio connected for recording');
+      console.log('Virtual room audio connected for recording via shared audio system');
+      console.log('  Active players:', sharedAudioSystem.activePlayers.size);
+    } else {
+      console.log('Shared audio system not initialized - recording microphone only');
     }
 
     // Use MediaRecorder for recording (runs on background thread, won't block rendering)
@@ -5755,32 +5810,63 @@ async function saveDictaphoneRecording(object) {
     const webmBlob = new Blob(dictaphoneState.recordedChunks, { type: 'audio/webm' });
     console.log('WebM blob created, size:', webmBlob.size, 'bytes');
 
-    // Convert blob to base64 for IPC transfer
-    console.log('Converting to base64...');
-    const arrayBuffer = await webmBlob.arrayBuffer();
-    const uint8Array = new Uint8Array(arrayBuffer);
-    let binary = '';
-    for (let i = 0; i < uint8Array.byteLength; i++) {
-      binary += String.fromCharCode(uint8Array[i]);
-    }
-    const base64Data = btoa(binary);
-    console.log('Base64 encoded, length:', base64Data.length, 'characters');
-
-    // Save via IPC - send webm data, main process will convert to wav/mp3
     const format = object.userData.recordingFormat || 'wav';
     const folderPath = object.userData.recordingsFolderPath;
     const recordingNumber = object.userData.recordingNumber || 1;
+
+    let audioDataBase64;
+    let dataFormat = 'webm'; // Track what format we're actually sending
+
+    // Try browser-based conversion for WAV (no FFmpeg needed)
+    if (format === 'wav') {
+      console.log('Attempting browser-based WebM to WAV conversion...');
+      try {
+        const audioCtx = dictaphoneState.audioContext || getSharedAudioContext();
+        const wavBlob = await convertWebmToWav(webmBlob, audioCtx);
+        console.log('Browser WAV conversion successful, size:', wavBlob.size, 'bytes');
+
+        // Convert WAV blob to base64
+        const arrayBuffer = await wavBlob.arrayBuffer();
+        const uint8Array = new Uint8Array(arrayBuffer);
+        let binary = '';
+        for (let i = 0; i < uint8Array.byteLength; i++) {
+          binary += String.fromCharCode(uint8Array[i]);
+        }
+        audioDataBase64 = btoa(binary);
+        dataFormat = 'wav';
+        console.log('WAV converted and encoded, length:', audioDataBase64.length, 'characters');
+      } catch (wavError) {
+        console.warn('Browser WAV conversion failed:', wavError.message);
+        console.log('Falling back to WebM data for FFmpeg conversion...');
+        // Fall through to send WebM data
+      }
+    }
+
+    // If WAV conversion failed or format is MP3, send WebM for FFmpeg processing
+    if (dataFormat === 'webm') {
+      console.log('Converting WebM blob to base64...');
+      const arrayBuffer = await webmBlob.arrayBuffer();
+      const uint8Array = new Uint8Array(arrayBuffer);
+      let binary = '';
+      for (let i = 0; i < uint8Array.byteLength; i++) {
+        binary += String.fromCharCode(uint8Array[i]);
+      }
+      audioDataBase64 = btoa(binary);
+      console.log('WebM base64 encoded, length:', audioDataBase64.length, 'characters');
+    }
 
     console.log('Calling saveRecording IPC:');
     console.log('  folderPath:', folderPath);
     console.log('  recordingNumber:', recordingNumber);
     console.log('  format:', format);
+    console.log('  dataFormat:', dataFormat);
 
     const result = await window.electronAPI.saveRecording(
       folderPath,
       recordingNumber,
-      base64Data,
-      format
+      audioDataBase64,
+      format,
+      dataFormat  // Tell main process what format the data is in
     );
 
     console.log('saveRecording IPC result:', JSON.stringify(result));

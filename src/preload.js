@@ -14,7 +14,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
   refreshMusicFolder: (folderPath) => ipcRenderer.invoke('refresh-music-folder', folderPath),
   // Dictaphone - recording folder selection and saving
   selectRecordingsFolder: (format) => ipcRenderer.invoke('select-recordings-folder', format),
-  saveRecording: (folderPath, recordingNumber, audioDataBase64, format) => ipcRenderer.invoke('save-recording', folderPath, recordingNumber, audioDataBase64, format),
+  // saveRecording: dataFormat indicates what format the audio data is in ('webm' or 'wav')
+  // format indicates what format the user wants to save as ('wav' or 'mp3')
+  saveRecording: (folderPath, recordingNumber, audioDataBase64, format, dataFormat) => ipcRenderer.invoke('save-recording', folderPath, recordingNumber, audioDataBase64, format, dataFormat),
   getNextRecordingNumber: (folderPath) => ipcRenderer.invoke('get-next-recording-number', folderPath),
   // Markdown editor - notes folder selection and saving
   getDefaultNotesFolder: () => ipcRenderer.invoke('get-default-notes-folder'),

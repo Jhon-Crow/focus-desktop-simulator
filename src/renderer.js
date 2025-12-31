@@ -3765,6 +3765,81 @@ let dictaphoneState = {
   virtualAudioGainNode: null
 };
 
+// Pure JavaScript WAV encoder - converts AudioBuffer to WAV format
+function encodeWav(audioBuffer) {
+  const numChannels = audioBuffer.numberOfChannels;
+  const sampleRate = audioBuffer.sampleRate;
+  const bitsPerSample = 16;
+  const bytesPerSample = bitsPerSample / 8;
+  const blockAlign = numChannels * bytesPerSample;
+
+  // Get all channel data
+  const channels = [];
+  for (let i = 0; i < numChannels; i++) {
+    channels.push(audioBuffer.getChannelData(i));
+  }
+  const numSamples = channels[0].length;
+
+  // Calculate buffer size
+  const dataSize = numSamples * blockAlign;
+  const bufferSize = 44 + dataSize;
+  const buffer = new ArrayBuffer(bufferSize);
+  const view = new DataView(buffer);
+
+  // Write WAV header
+  let offset = 0;
+
+  // RIFF chunk descriptor
+  writeString(view, offset, 'RIFF'); offset += 4;
+  view.setUint32(offset, bufferSize - 8, true); offset += 4;
+  writeString(view, offset, 'WAVE'); offset += 4;
+
+  // fmt sub-chunk
+  writeString(view, offset, 'fmt '); offset += 4;
+  view.setUint32(offset, 16, true); offset += 4; // Subchunk1Size (16 for PCM)
+  view.setUint16(offset, 1, true); offset += 2; // AudioFormat (1 = PCM)
+  view.setUint16(offset, numChannels, true); offset += 2;
+  view.setUint32(offset, sampleRate, true); offset += 4;
+  view.setUint32(offset, sampleRate * blockAlign, true); offset += 4; // ByteRate
+  view.setUint16(offset, blockAlign, true); offset += 2;
+  view.setUint16(offset, bitsPerSample, true); offset += 2;
+
+  // data sub-chunk
+  writeString(view, offset, 'data'); offset += 4;
+  view.setUint32(offset, dataSize, true); offset += 4;
+
+  // Write interleaved audio data
+  for (let i = 0; i < numSamples; i++) {
+    for (let ch = 0; ch < numChannels; ch++) {
+      const sample = Math.max(-1, Math.min(1, channels[ch][i]));
+      const intSample = sample < 0 ? sample * 0x8000 : sample * 0x7FFF;
+      view.setInt16(offset, intSample, true);
+      offset += 2;
+    }
+  }
+
+  return buffer;
+
+  function writeString(view, offset, string) {
+    for (let i = 0; i < string.length; i++) {
+      view.setUint8(offset + i, string.charCodeAt(i));
+    }
+  }
+}
+
+// Convert webm blob to WAV using AudioContext
+async function convertWebmToWav(webmBlob, audioContext) {
+  try {
+    const arrayBuffer = await webmBlob.arrayBuffer();
+    const audioBuffer = await audioContext.decodeAudioData(arrayBuffer);
+    const wavBuffer = encodeWav(audioBuffer);
+    return new Blob([wavBuffer], { type: 'audio/wav' });
+  } catch (error) {
+    console.error('Error converting webm to WAV:', error);
+    throw error;
+  }
+}
+
 function createDictaphone(options = {}) {
   const group = new THREE.Group();
   group.userData = {
@@ -4106,11 +4181,16 @@ async function saveDictaphoneRecording(object) {
   }
 
   try {
-    // Create blob from chunks
-    const blob = new Blob(dictaphoneState.recordedChunks, { type: 'audio/webm' });
-    console.log('Recording blob size:', blob.size, 'bytes');
+    // Create webm blob from chunks
+    const webmBlob = new Blob(dictaphoneState.recordedChunks, { type: 'audio/webm' });
+    console.log('Recording webm blob size:', webmBlob.size, 'bytes');
 
-    // Convert to base64
+    // Convert webm to WAV in browser (no FFmpeg required)
+    console.log('Converting webm to WAV in browser...');
+    const wavBlob = await convertWebmToWav(webmBlob, dictaphoneState.audioContext);
+    console.log('WAV blob size:', wavBlob.size, 'bytes');
+
+    // Convert WAV to base64
     const reader = new FileReader();
     const base64Promise = new Promise((resolve, reject) => {
       reader.onloadend = () => {
@@ -4119,11 +4199,11 @@ async function saveDictaphoneRecording(object) {
       };
       reader.onerror = reject;
     });
-    reader.readAsDataURL(blob);
+    reader.readAsDataURL(wavBlob);
 
     const base64Data = await base64Promise;
 
-    // Save via IPC with format
+    // Save via IPC - always WAV format (MP3 conversion requires FFmpeg on server)
     const format = object.userData.recordingFormat || 'wav';
     console.log('Saving recording to:', object.userData.recordingsFolderPath, 'as', format);
     const result = await window.electronAPI.saveRecording(
@@ -4138,11 +4218,6 @@ async function saveDictaphoneRecording(object) {
       // Increment recording number for next recording
       object.userData.recordingNumber++;
       saveState();
-
-      // Notify user if saved as webm due to missing FFmpeg
-      if (result.ffmpegMissing) {
-        console.log('Recording saved as webm (FFmpeg not installed)');
-      }
     } else {
       console.error('Failed to save recording:', result.error);
       alert('Failed to save recording: ' + result.error);
@@ -4241,6 +4316,12 @@ function addObjectToDesk(type, options = {}) {
     object.scale.set(defaultMagazineScale, defaultMagazineScale, defaultMagazineScale);
     object.userData.scale = defaultMagazineScale;
     adjustObjectYForScale(object, 1.0, defaultMagazineScale);
+  } else if (type === 'dictaphone' && options.scale === undefined) {
+    // Dictaphone defaults to 3.0x scale for better visibility
+    const defaultDictaphoneScale = 3.0;
+    object.scale.set(defaultDictaphoneScale, defaultDictaphoneScale, defaultDictaphoneScale);
+    object.userData.scale = defaultDictaphoneScale;
+    adjustObjectYForScale(object, 1.0, defaultDictaphoneScale);
   }
 
   deskObjects.push(object);
@@ -7596,12 +7677,14 @@ function onMouseWheel(event) {
       // Scale object (preserving proportions) with Shift+scroll
       const scaleDelta = event.deltaY > 0 ? 0.95 : 1.05;
       const minScale = 0.3;
-      // Books and magazines can be scaled larger for reading (magazines can go up to 10.0)
+      // Books, magazines, and dictaphone can be scaled larger
       let maxScale = 3.0;
       if (object.userData.type === 'magazine') {
         maxScale = 10.0;
       } else if (object.userData.type === 'books') {
         maxScale = 5.0;
+      } else if (object.userData.type === 'dictaphone') {
+        maxScale = 6.0; // 2x of the default 3.0 scale
       }
 
       const oldScale = object.scale.x;
@@ -7683,12 +7766,14 @@ function onMouseWheel(event) {
         // Scale object (preserving proportions)
         const scaleDelta = event.deltaY > 0 ? 0.95 : 1.05;
         const minScale = 0.3;
-        // Books and magazines can be scaled larger for reading (magazines can go up to 10.0)
+        // Books, magazines, and dictaphone can be scaled larger
         let maxScale = 3.0;
         if (object.userData.type === 'magazine') {
           maxScale = 10.0;
         } else if (object.userData.type === 'books') {
           maxScale = 5.0;
+        } else if (object.userData.type === 'dictaphone') {
+          maxScale = 6.0; // 2x of the default 3.0 scale
         }
 
         const oldScale = object.scale.x;

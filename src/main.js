@@ -441,7 +441,7 @@ async function convertToWav(inputPath, outputPath) {
   });
 }
 
-// Convert webm audio to MP3 format using FFmpeg
+// Convert audio (WAV or webm) to MP3 format using FFmpeg
 async function convertToMp3(inputPath, outputPath) {
   return new Promise((resolve, reject) => {
     const args = [
@@ -480,70 +480,78 @@ async function convertToMp3(inputPath, outputPath) {
 }
 
 // Save recording to file
+// Audio data is already in WAV format from browser-side encoding
 ipcMain.handle('save-recording', async (event, folderPath, recordingNumber, audioDataBase64, format = 'wav') => {
   try {
     if (!fs.existsSync(folderPath)) {
       return { success: false, error: 'Folder not found' };
     }
 
-    // Check if FFmpeg is available
-    const ffmpegAvailable = await checkFfmpegAvailable();
-
-    // Write the audio data to temp file
+    // Audio data is already WAV from browser-side encoding
     const audioBuffer = Buffer.from(audioDataBase64, 'base64');
 
-    // If FFmpeg is not available, save as webm directly (no conversion needed)
-    if (!ffmpegAvailable) {
-      console.log('FFmpeg not available, saving as webm');
-      const fileName = `Запись ${recordingNumber}.webm`;
-      const filePath = path.join(folderPath, fileName);
+    // If MP3 format requested, try FFmpeg conversion
+    if (format === 'mp3') {
+      const ffmpegAvailable = await checkFfmpegAvailable();
 
-      fs.writeFileSync(filePath, audioBuffer);
-      console.log('Recording saved as webm:', filePath);
+      if (ffmpegAvailable) {
+        // Write WAV to temp file for MP3 conversion
+        const tempDir = os.tmpdir();
+        const timestamp = Date.now();
+        const tempInputPath = path.join(tempDir, `recording-input-${timestamp}.wav`);
 
-      return {
-        success: true,
-        filePath: filePath,
-        fileName: fileName,
-        actualFormat: 'webm',
-        ffmpegMissing: true,
-        message: 'Recording saved as webm. Install FFmpeg for WAV/MP3 format.'
-      };
+        fs.writeFileSync(tempInputPath, audioBuffer);
+
+        const fileName = `Запись ${recordingNumber}.mp3`;
+        const filePath = path.join(folderPath, fileName);
+
+        await convertToMp3(tempInputPath, filePath);
+
+        // Clean up temp file
+        try {
+          fs.unlinkSync(tempInputPath);
+        } catch (e) {
+          console.warn('Failed to clean up temp file:', e.message);
+        }
+
+        console.log('Recording saved as MP3:', filePath);
+        return {
+          success: true,
+          filePath: filePath,
+          fileName: fileName,
+          actualFormat: 'mp3'
+        };
+      } else {
+        // FFmpeg not available, fallback to WAV
+        console.log('FFmpeg not available for MP3 conversion, saving as WAV');
+        const fileName = `Запись ${recordingNumber}.wav`;
+        const filePath = path.join(folderPath, fileName);
+
+        fs.writeFileSync(filePath, audioBuffer);
+        console.log('Recording saved as WAV (FFmpeg not installed for MP3):', filePath);
+
+        return {
+          success: true,
+          filePath: filePath,
+          fileName: fileName,
+          actualFormat: 'wav',
+          message: 'Saved as WAV. Install FFmpeg for MP3 format.'
+        };
+      }
     }
 
-    const tempDir = os.tmpdir();
-    const timestamp = Date.now();
-    const tempInputPath = path.join(tempDir, `recording-input-${timestamp}.webm`);
-
-    // Write the webm data to temp file for FFmpeg conversion
-    fs.writeFileSync(tempInputPath, audioBuffer);
-
-    // Determine output format
-    const ext = format === 'mp3' ? 'mp3' : 'wav';
-    const fileName = `Запись ${recordingNumber}.${ext}`;
+    // Default: save as WAV (already in WAV format from browser)
+    const fileName = `Запись ${recordingNumber}.wav`;
     const filePath = path.join(folderPath, fileName);
 
-    // Convert to target format
-    if (format === 'mp3') {
-      await convertToMp3(tempInputPath, filePath);
-    } else {
-      await convertToWav(tempInputPath, filePath);
-    }
-
-    // Clean up temp file
-    try {
-      fs.unlinkSync(tempInputPath);
-    } catch (e) {
-      console.warn('Failed to clean up temp file:', e.message);
-    }
-
-    console.log('Recording saved:', filePath);
+    fs.writeFileSync(filePath, audioBuffer);
+    console.log('Recording saved as WAV:', filePath);
 
     return {
       success: true,
       filePath: filePath,
       fileName: fileName,
-      actualFormat: ext
+      actualFormat: 'wav'
     };
   } catch (error) {
     console.error('Error saving recording:', error);

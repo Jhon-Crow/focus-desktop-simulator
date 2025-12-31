@@ -4138,14 +4138,14 @@ async function saveDictaphoneRecording(object) {
       // Increment recording number for next recording
       object.userData.recordingNumber++;
       saveState();
+
+      // Notify user if saved as webm due to missing FFmpeg
+      if (result.ffmpegMissing) {
+        console.log('Recording saved as webm (FFmpeg not installed)');
+      }
     } else {
       console.error('Failed to save recording:', result.error);
-      // Show error to user
-      if (result.ffmpegMissing) {
-        alert('FFmpeg is not installed. Please install FFmpeg to save recordings.\n\nOn Windows: winget install ffmpeg\nOn macOS: brew install ffmpeg\nOn Linux: sudo apt install ffmpeg');
-      } else {
-        alert('Failed to save recording: ' + result.error);
-      }
+      alert('Failed to save recording: ' + result.error);
     }
 
     // Clear chunks

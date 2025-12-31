@@ -380,9 +380,9 @@ ipcMain.handle('select-recordings-folder', async (event, format = 'wav') => {
     const folderPath = result.filePaths[0];
 
     // Count existing recordings to determine next number
-    // Check for both .wav and .mp3 files
+    // Check for .wav, .mp3, and .webm files
     const files = fs.readdirSync(folderPath);
-    const recordingPattern = /^Запись (\d+)\.(wav|mp3)$/;
+    const recordingPattern = /^Запись (\d+)\.(wav|mp3|webm)$/;
     let maxNumber = 0;
 
     files.forEach(file => {
@@ -489,11 +489,25 @@ ipcMain.handle('save-recording', async (event, folderPath, recordingNumber, audi
     // Check if FFmpeg is available
     const ffmpegAvailable = await checkFfmpegAvailable();
 
+    // Write the audio data to temp file
+    const audioBuffer = Buffer.from(audioDataBase64, 'base64');
+
+    // If FFmpeg is not available, save as webm directly (no conversion needed)
     if (!ffmpegAvailable) {
+      console.log('FFmpeg not available, saving as webm');
+      const fileName = `Запись ${recordingNumber}.webm`;
+      const filePath = path.join(folderPath, fileName);
+
+      fs.writeFileSync(filePath, audioBuffer);
+      console.log('Recording saved as webm:', filePath);
+
       return {
-        success: false,
-        error: 'FFmpeg not found. Please install FFmpeg to save recordings in WAV or MP3 format.',
-        ffmpegMissing: true
+        success: true,
+        filePath: filePath,
+        fileName: fileName,
+        actualFormat: 'webm',
+        ffmpegMissing: true,
+        message: 'Recording saved as webm. Install FFmpeg for WAV/MP3 format.'
       };
     }
 
@@ -501,8 +515,7 @@ ipcMain.handle('save-recording', async (event, folderPath, recordingNumber, audi
     const timestamp = Date.now();
     const tempInputPath = path.join(tempDir, `recording-input-${timestamp}.webm`);
 
-    // Write the webm data to temp file
-    const audioBuffer = Buffer.from(audioDataBase64, 'base64');
+    // Write the webm data to temp file for FFmpeg conversion
     fs.writeFileSync(tempInputPath, audioBuffer);
 
     // Determine output format
@@ -529,7 +542,8 @@ ipcMain.handle('save-recording', async (event, folderPath, recordingNumber, audi
     return {
       success: true,
       filePath: filePath,
-      fileName: fileName
+      fileName: fileName,
+      actualFormat: ext
     };
   } catch (error) {
     console.error('Error saving recording:', error);
@@ -545,8 +559,8 @@ ipcMain.handle('get-next-recording-number', async (event, folderPath) => {
     }
 
     const files = fs.readdirSync(folderPath);
-    // Check for both .wav and .mp3 files
-    const recordingPattern = /^Запись (\d+)\.(wav|mp3)$/;
+    // Check for .wav, .mp3, and .webm files
+    const recordingPattern = /^Запись (\d+)\.(wav|mp3|webm)$/;
     let maxNumber = 0;
 
     files.forEach(file => {

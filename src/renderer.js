@@ -2741,27 +2741,28 @@ function updateObjectColor(object, colorType, colorValue) {
 // Collision radii for all object types
 // Using predefined values avoids expensive recursive bounding box calculations
 // that can cause stack overflow with complex objects (e.g., PDFs with many pages)
+// Values are smaller than visual geometry to allow objects to touch before colliding
 const OBJECT_COLLISION_RADII = {
-  'clock': 0.4,       // CylinderGeometry radius 0.4
-  'lamp': 0.35,       // Base radius 0.25-0.28, don't use tall shade for collision
-  'plant': 0.2,       // Pot radius 0.18
-  'coffee': 0.15,     // Mug radius 0.12
-  'laptop': 0.45,     // Base is 0.8 x 0.5, radius should be ~half diagonal but tight
-  'notebook': 0.35,   // BoxGeometry 0.4 x 0.55
-  'pen-holder': 0.15, // CylinderGeometry radius 0.12
-  'pen': 0.2,         // Small, lying flat, length oriented
-  'books': 0.25,      // BoxGeometry 0.28 x 0.38
-  'magazine': 0.2,    // BoxGeometry 0.22 x 0.30
-  'photo-frame': 0.3, // BoxGeometry 0.35 x 0.45
-  'globe': 0.2,       // Base radius 0.18, sphere 0.2
-  'trophy': 0.15,     // BoxGeometry 0.2 x 0.2
-  'hourglass': 0.15,  // CylinderGeometry radius 0.12
-  'paper': 0.25,      // BoxGeometry 0.28 x 0.4
-  'metronome': 0.15   // Base radius 0.15
+  'clock': 0.15,       // Clock stand is thin, body is tall not wide
+  'lamp': 0.12,        // Base radius ~0.25, but use smaller collision
+  'plant': 0.1,        // Pot radius 0.18, use half
+  'coffee': 0.08,      // Mug radius 0.12, use smaller
+  'laptop': 0.2,       // Base is 0.8 x 0.5, use ~quarter for stacking detection
+  'notebook': 0.15,    // BoxGeometry 0.4 x 0.55, use small radius
+  'pen-holder': 0.08,  // CylinderGeometry radius 0.12
+  'pen': 0.05,         // Small, lying flat
+  'books': 0.12,       // BoxGeometry 0.28 x 0.38
+  'magazine': 0.1,     // BoxGeometry 0.22 x 0.30
+  'photo-frame': 0.1,  // Photo frame is thin
+  'globe': 0.12,       // Base radius 0.18
+  'trophy': 0.08,      // BoxGeometry 0.2 x 0.2
+  'hourglass': 0.08,   // CylinderGeometry radius 0.12
+  'paper': 0.12,       // BoxGeometry 0.28 x 0.4
+  'metronome': 0.1     // Base radius 0.15
 };
 
 // Default collision radius for unknown object types
-const DEFAULT_COLLISION_RADIUS = 0.3;
+const DEFAULT_COLLISION_RADIUS = 0.15;
 
 function getObjectBounds(object) {
   const type = object.userData.type;
@@ -2818,7 +2819,7 @@ function findObjectsOnTop(baseObject) {
 
     // Check if object is resting on top of baseObject (vertically)
     // Object's bottom should be at approximately baseObject's top (with small tolerance)
-    const verticalTolerance = 0.15;
+    const verticalTolerance = 0.05;
     const isOnTop = Math.abs(objBottom - baseTop) < verticalTolerance;
 
     if (!isOnTop) return;

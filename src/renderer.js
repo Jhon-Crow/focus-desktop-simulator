@@ -716,6 +716,975 @@ function getParentDeskObject(obj) {
 }
 
 // ============================================================================
+// FL STUDIO-STYLE AUTOMATION CURVE EDITOR
+// ============================================================================
+// Canvas-based curve editor for pitch/tempo curves similar to FL Studio's Automation Clip
+
+/**
+ * AutomationCurveEditor - A class for creating FL Studio-style automation curve editors
+ *
+ * Features:
+ * - Add, move, delete control points by clicking/dragging on the canvas
+ * - Multiple curve types between points (linear, smooth, step, sine, pulse)
+ * - Tension control for smooth curves
+ * - Real-time playback position indicator
+ * - Grid background with value/time labels
+ */
+class AutomationCurveEditor {
+  constructor(options = {}) {
+    this.containerId = options.containerId;
+    this.type = options.type || 'pitch'; // 'pitch' or 'tempo'
+    this.object = options.object; // The metronome object
+    this.onUpdate = options.onUpdate || (() => {});
+
+    // Canvas dimensions
+    this.width = options.width || 220;
+    this.height = options.height || 120;
+
+    // Value range
+    this.minValue = options.minValue || (this.type === 'pitch' ? 50 : 10);
+    this.maxValue = options.maxValue || (this.type === 'pitch' ? 200 : 220);
+    this.valueUnit = options.valueUnit || (this.type === 'pitch' ? '%' : ' BPM');
+
+    // Get control points from object or initialize defaults
+    const pointsKey = this.type === 'pitch' ? 'pitchCurvePoints' : 'tempoCurvePoints';
+    if (this.object.userData[pointsKey] && this.object.userData[pointsKey].length >= 2) {
+      this.points = [...this.object.userData[pointsKey]];
+    } else {
+      // Default: start and end points based on current settings
+      const startValue = this.type === 'pitch'
+        ? (this.object.userData.pitchCurveStart || 100)
+        : (this.object.userData.tempoCurveStart || 60);
+      const endValue = this.type === 'pitch'
+        ? (this.object.userData.pitchCurveEnd || 100)
+        : (this.object.userData.tempoCurveEnd || 120);
+
+      this.points = [
+        { x: 0, y: startValue, curveType: 'smooth', tension: 0.5 },
+        { x: 1, y: endValue, curveType: 'smooth', tension: 0.5 }
+      ];
+    }
+
+    // Interaction state
+    this.selectedPointIndex = -1;
+    this.isDragging = false;
+    this.isHovering = false;
+    this.hoverPointIndex = -1;
+
+    // Animation state
+    this.playbackPosition = 0;
+    this.animationFrameId = null;
+
+    // Canvas and context
+    this.canvas = null;
+    this.ctx = null;
+    this.container = null;
+
+    // Initialize
+    this.render();
+  }
+
+  /**
+   * Create the HTML structure for the editor
+   */
+  render() {
+    const container = document.getElementById(this.containerId);
+    if (!container) return;
+
+    this.container = container;
+
+    // Get duration from object settings
+    const durationKey = this.type === 'pitch' ? 'pitchCurveDuration' : 'tempoCurveDuration';
+    const duration = this.object.userData[durationKey] || 60;
+    const loopKey = this.type === 'pitch' ? 'pitchCurveLoop' : 'tempoCurveLoop';
+    const isLooping = this.object.userData[loopKey] || false;
+    const enabledKey = this.type === 'pitch' ? 'pitchCurveEnabled' : 'tempoCurveEnabled';
+    const isEnabled = this.object.userData[enabledKey] || false;
+
+    container.innerHTML = `
+      <div class="automation-curve-editor" data-type="${this.type}">
+        <div class="editor-header">
+          <div class="editor-title">${this.type === 'pitch' ? '🎵 Pitch' : '⏱️ Tempo'} Curve</div>
+          <div class="editor-controls">
+            <button class="editor-btn ${isEnabled ? 'active' : ''}" data-action="toggle-enabled">
+              ${isEnabled ? 'ON' : 'OFF'}
+            </button>
+            <button class="editor-btn danger" data-action="reset">Reset</button>
+          </div>
+        </div>
+
+        <div class="time-labels">
+          <span>0s</span>
+          <span>${Math.round(duration / 2)}s</span>
+          <span>${duration}s</span>
+        </div>
+
+        <div class="automation-curve-canvas-container">
+          <canvas class="automation-curve-canvas" width="${this.width}" height="${this.height}"></canvas>
+          <div class="playback-indicator" style="left: 0; display: none;"></div>
+        </div>
+
+        <div class="value-labels">
+          <span>${this.minValue}${this.valueUnit}</span>
+          <span>${Math.round((this.minValue + this.maxValue) / 2)}${this.valueUnit}</span>
+          <span>${this.maxValue}${this.valueUnit}</span>
+        </div>
+
+        <div class="current-value-display">
+          <span class="label">Current:</span>
+          <span class="value" data-current-value>${this.getValueAtProgress(0).toFixed(0)}${this.valueUnit}</span>
+        </div>
+
+        <div class="settings-row">
+          <div class="setting-group">
+            <label>Duration (s)</label>
+            <input type="number" data-setting="duration" value="${duration}" min="5" max="600" step="5">
+          </div>
+          <div class="setting-group">
+            <label>
+              <input type="checkbox" data-setting="loop" ${isLooping ? 'checked' : ''} style="margin-right: 4px;">
+              Loop
+            </label>
+          </div>
+        </div>
+
+        <div class="settings-row" style="margin-top: 8px;">
+          <div class="setting-group" style="flex: 2;">
+            <label>Curve Type (for new points)</label>
+            <div class="curve-type-selector">
+              <button class="curve-type-btn active" data-curve-type="smooth">Smooth</button>
+              <button class="curve-type-btn" data-curve-type="linear">Linear</button>
+              <button class="curve-type-btn" data-curve-type="step">Step</button>
+              <button class="curve-type-btn" data-curve-type="sine">Sine</button>
+            </div>
+          </div>
+        </div>
+
+        <div class="tension-slider-container">
+          <label>Curve Tension: <span data-tension-display>50%</span></label>
+          <input type="range" data-setting="tension" value="50" min="0" max="100" step="5">
+        </div>
+
+        <div class="help-text">
+          Click on canvas to add points. Drag points to move. Right-click to delete.
+        </div>
+      </div>
+    `;
+
+    // Get canvas and context
+    this.canvas = container.querySelector('.automation-curve-canvas');
+    this.ctx = this.canvas.getContext('2d');
+
+    // Attach event listeners
+    this.attachEventListeners();
+
+    // Initial draw
+    this.draw();
+
+    // Start animation loop if enabled and running
+    if (isEnabled && this.object.userData.isRunning) {
+      this.startAnimation();
+    }
+  }
+
+  /**
+   * Attach mouse and keyboard event listeners
+   */
+  attachEventListeners() {
+    if (!this.canvas || !this.container) return;
+
+    // Canvas mouse events
+    this.canvas.addEventListener('mousedown', this.handleMouseDown.bind(this));
+    this.canvas.addEventListener('mousemove', this.handleMouseMove.bind(this));
+    this.canvas.addEventListener('mouseup', this.handleMouseUp.bind(this));
+    this.canvas.addEventListener('mouseleave', this.handleMouseLeave.bind(this));
+    this.canvas.addEventListener('contextmenu', this.handleContextMenu.bind(this));
+
+    // Button events
+    const toggleBtn = this.container.querySelector('[data-action="toggle-enabled"]');
+    if (toggleBtn) {
+      toggleBtn.addEventListener('click', () => this.toggleEnabled());
+    }
+
+    const resetBtn = this.container.querySelector('[data-action="reset"]');
+    if (resetBtn) {
+      resetBtn.addEventListener('click', () => this.resetCurve());
+    }
+
+    // Curve type buttons
+    const curveTypeBtns = this.container.querySelectorAll('[data-curve-type]');
+    curveTypeBtns.forEach(btn => {
+      btn.addEventListener('click', (e) => {
+        curveTypeBtns.forEach(b => b.classList.remove('active'));
+        btn.classList.add('active');
+      });
+    });
+
+    // Settings inputs
+    const durationInput = this.container.querySelector('[data-setting="duration"]');
+    if (durationInput) {
+      durationInput.addEventListener('change', (e) => {
+        const durationKey = this.type === 'pitch' ? 'pitchCurveDuration' : 'tempoCurveDuration';
+        this.object.userData[durationKey] = parseInt(e.target.value) || 60;
+        this.updateTimeLabels();
+        this.savePoints();
+      });
+    }
+
+    const loopInput = this.container.querySelector('[data-setting="loop"]');
+    if (loopInput) {
+      loopInput.addEventListener('change', (e) => {
+        const loopKey = this.type === 'pitch' ? 'pitchCurveLoop' : 'tempoCurveLoop';
+        this.object.userData[loopKey] = e.target.checked;
+        this.savePoints();
+      });
+    }
+
+    const tensionInput = this.container.querySelector('[data-setting="tension"]');
+    if (tensionInput) {
+      tensionInput.addEventListener('input', (e) => {
+        const tension = parseInt(e.target.value) / 100;
+        const display = this.container.querySelector('[data-tension-display]');
+        if (display) display.textContent = e.target.value + '%';
+
+        // Update tension of selected point or all points
+        if (this.selectedPointIndex >= 0 && this.selectedPointIndex < this.points.length) {
+          this.points[this.selectedPointIndex].tension = tension;
+        } else {
+          // Update all points
+          this.points.forEach(p => p.tension = tension);
+        }
+        this.draw();
+        this.savePoints();
+      });
+    }
+  }
+
+  /**
+   * Handle mouse down on canvas
+   */
+  handleMouseDown(e) {
+    e.preventDefault();
+    const rect = this.canvas.getBoundingClientRect();
+    const x = (e.clientX - rect.left) / this.width;
+    const y = 1 - (e.clientY - rect.top) / this.height;
+
+    // Left click
+    if (e.button === 0) {
+      // Check if clicking near an existing point
+      const clickedPointIndex = this.findPointNear(x, y);
+
+      if (clickedPointIndex >= 0) {
+        // Start dragging existing point
+        this.selectedPointIndex = clickedPointIndex;
+        this.isDragging = true;
+        this.canvas.classList.add('dragging');
+      } else {
+        // Add new point
+        this.addPoint(x, y);
+        // Select the newly added point
+        this.selectedPointIndex = this.findPointNear(x, y);
+        this.isDragging = true;
+        this.canvas.classList.add('dragging');
+      }
+
+      this.draw();
+    }
+  }
+
+  /**
+   * Handle mouse move on canvas
+   */
+  handleMouseMove(e) {
+    const rect = this.canvas.getBoundingClientRect();
+    const x = (e.clientX - rect.left) / this.width;
+    const y = 1 - (e.clientY - rect.top) / this.height;
+
+    if (this.isDragging && this.selectedPointIndex >= 0) {
+      // Move the selected point
+      const point = this.points[this.selectedPointIndex];
+
+      // Clamp x to canvas bounds, but don't allow moving past adjacent points
+      const minX = this.selectedPointIndex > 0 ? this.points[this.selectedPointIndex - 1].x + 0.01 : 0;
+      const maxX = this.selectedPointIndex < this.points.length - 1 ? this.points[this.selectedPointIndex + 1].x - 0.01 : 1;
+
+      // First and last points are locked horizontally
+      if (this.selectedPointIndex === 0) {
+        point.x = 0;
+      } else if (this.selectedPointIndex === this.points.length - 1) {
+        point.x = 1;
+      } else {
+        point.x = Math.max(minX, Math.min(maxX, x));
+      }
+
+      // Clamp y to value range
+      const clampedY = Math.max(0, Math.min(1, y));
+      point.y = this.minValue + clampedY * (this.maxValue - this.minValue);
+
+      this.draw();
+      this.updateCurrentValueDisplay(x);
+    } else {
+      // Hover detection
+      const hoverIndex = this.findPointNear(x, y);
+      if (hoverIndex !== this.hoverPointIndex) {
+        this.hoverPointIndex = hoverIndex;
+        this.canvas.style.cursor = hoverIndex >= 0 ? 'grab' : 'crosshair';
+        this.draw();
+      }
+    }
+  }
+
+  /**
+   * Handle mouse up on canvas
+   */
+  handleMouseUp(e) {
+    if (this.isDragging) {
+      this.isDragging = false;
+      this.canvas.classList.remove('dragging');
+      this.canvas.style.cursor = 'crosshair';
+      this.savePoints();
+    }
+  }
+
+  /**
+   * Handle mouse leave
+   */
+  handleMouseLeave(e) {
+    this.hoverPointIndex = -1;
+    if (this.isDragging) {
+      this.isDragging = false;
+      this.canvas.classList.remove('dragging');
+      this.savePoints();
+    }
+    this.draw();
+  }
+
+  /**
+   * Handle right-click context menu (delete point)
+   */
+  handleContextMenu(e) {
+    e.preventDefault();
+    const rect = this.canvas.getBoundingClientRect();
+    const x = (e.clientX - rect.left) / this.width;
+    const y = 1 - (e.clientY - rect.top) / this.height;
+
+    const clickedPointIndex = this.findPointNear(x, y);
+
+    // Can't delete first or last point
+    if (clickedPointIndex > 0 && clickedPointIndex < this.points.length - 1) {
+      this.points.splice(clickedPointIndex, 1);
+      this.selectedPointIndex = -1;
+      this.draw();
+      this.savePoints();
+    }
+  }
+
+  /**
+   * Find a control point near the given coordinates
+   * @param {number} x - X coordinate (0-1)
+   * @param {number} y - Y coordinate (0-1)
+   * @returns {number} Index of the point, or -1 if not found
+   */
+  findPointNear(x, y) {
+    const threshold = 15 / this.width; // 15px threshold in normalized coords
+
+    for (let i = 0; i < this.points.length; i++) {
+      const point = this.points[i];
+      const pointY = (point.y - this.minValue) / (this.maxValue - this.minValue);
+      const dx = point.x - x;
+      const dy = pointY - y;
+      const dist = Math.sqrt(dx * dx + dy * dy);
+
+      if (dist < threshold) {
+        return i;
+      }
+    }
+
+    return -1;
+  }
+
+  /**
+   * Add a new control point
+   * @param {number} x - X coordinate (0-1)
+   * @param {number} y - Y coordinate (0-1)
+   */
+  addPoint(x, y) {
+    // Get current curve type from UI
+    const activeBtn = this.container.querySelector('.curve-type-btn.active');
+    const curveType = activeBtn ? activeBtn.dataset.curveType : 'smooth';
+
+    // Get current tension from UI
+    const tensionInput = this.container.querySelector('[data-setting="tension"]');
+    const tension = tensionInput ? parseInt(tensionInput.value) / 100 : 0.5;
+
+    // Convert y from normalized to value range
+    const value = this.minValue + Math.max(0, Math.min(1, y)) * (this.maxValue - this.minValue);
+
+    // Find insertion point (keep sorted by x)
+    let insertIndex = this.points.length;
+    for (let i = 0; i < this.points.length; i++) {
+      if (x < this.points[i].x) {
+        insertIndex = i;
+        break;
+      }
+    }
+
+    // Insert new point
+    this.points.splice(insertIndex, 0, {
+      x: Math.max(0, Math.min(1, x)),
+      y: value,
+      curveType: curveType,
+      tension: tension
+    });
+
+    this.savePoints();
+  }
+
+  /**
+   * Toggle the curve enabled state
+   */
+  toggleEnabled() {
+    const enabledKey = this.type === 'pitch' ? 'pitchCurveEnabled' : 'tempoCurveEnabled';
+    this.object.userData[enabledKey] = !this.object.userData[enabledKey];
+
+    // Update button text
+    const btn = this.container.querySelector('[data-action="toggle-enabled"]');
+    if (btn) {
+      btn.textContent = this.object.userData[enabledKey] ? 'ON' : 'OFF';
+      btn.classList.toggle('active', this.object.userData[enabledKey]);
+    }
+
+    // Reset curve start time when enabling
+    if (this.object.userData[enabledKey]) {
+      const startTimeKey = this.type === 'pitch' ? 'pitchCurveStartTime' : 'tempoCurveStartTime';
+      this.object.userData[startTimeKey] = Date.now();
+      this.startAnimation();
+    } else {
+      this.stopAnimation();
+    }
+
+    this.savePoints();
+  }
+
+  /**
+   * Reset the curve to default (linear from current start to end)
+   */
+  resetCurve() {
+    const startValue = this.type === 'pitch'
+      ? (this.object.userData.tickPitch || 100)
+      : (this.object.userData.bpm || 120);
+
+    this.points = [
+      { x: 0, y: startValue, curveType: 'smooth', tension: 0.5 },
+      { x: 1, y: startValue, curveType: 'smooth', tension: 0.5 }
+    ];
+
+    this.selectedPointIndex = -1;
+    this.draw();
+    this.savePoints();
+  }
+
+  /**
+   * Update the time labels based on current duration
+   */
+  updateTimeLabels() {
+    const durationKey = this.type === 'pitch' ? 'pitchCurveDuration' : 'tempoCurveDuration';
+    const duration = this.object.userData[durationKey] || 60;
+
+    const labels = this.container.querySelector('.time-labels');
+    if (labels) {
+      labels.innerHTML = `
+        <span>0s</span>
+        <span>${Math.round(duration / 2)}s</span>
+        <span>${duration}s</span>
+      `;
+    }
+  }
+
+  /**
+   * Update the current value display
+   */
+  updateCurrentValueDisplay(progress) {
+    const valueDisplay = this.container.querySelector('[data-current-value]');
+    if (valueDisplay) {
+      const value = this.getValueAtProgress(progress);
+      valueDisplay.textContent = value.toFixed(0) + this.valueUnit;
+    }
+  }
+
+  /**
+   * Save points to the object's userData
+   */
+  savePoints() {
+    const pointsKey = this.type === 'pitch' ? 'pitchCurvePoints' : 'tempoCurvePoints';
+    this.object.userData[pointsKey] = [...this.points];
+
+    // Also update legacy start/end values for backwards compatibility
+    if (this.points.length >= 2) {
+      const startKey = this.type === 'pitch' ? 'pitchCurveStart' : 'tempoCurveStart';
+      const endKey = this.type === 'pitch' ? 'pitchCurveEnd' : 'tempoCurveEnd';
+      this.object.userData[startKey] = this.points[0].y;
+      this.object.userData[endKey] = this.points[this.points.length - 1].y;
+    }
+
+    // Call update callback
+    this.onUpdate();
+
+    // Trigger global save
+    if (typeof saveState === 'function') {
+      saveState();
+    }
+  }
+
+  /**
+   * Get the value at a specific progress point (0-1)
+   * @param {number} progress - Progress through the curve (0-1)
+   * @returns {number} The interpolated value
+   */
+  getValueAtProgress(progress) {
+    if (this.points.length === 0) return this.minValue;
+    if (this.points.length === 1) return this.points[0].y;
+
+    // Find the two points that bracket this progress
+    let p1Index = 0;
+    let p2Index = 1;
+
+    for (let i = 0; i < this.points.length - 1; i++) {
+      if (progress >= this.points[i].x && progress <= this.points[i + 1].x) {
+        p1Index = i;
+        p2Index = i + 1;
+        break;
+      }
+    }
+
+    // Handle edge cases
+    if (progress <= this.points[0].x) return this.points[0].y;
+    if (progress >= this.points[this.points.length - 1].x) return this.points[this.points.length - 1].y;
+
+    const p1 = this.points[p1Index];
+    const p2 = this.points[p2Index];
+
+    // Calculate local progress between the two points
+    const localProgress = (progress - p1.x) / (p2.x - p1.x);
+
+    // Apply curve interpolation based on curve type
+    return this.interpolate(p1.y, p2.y, localProgress, p1.curveType, p1.tension);
+  }
+
+  /**
+   * Interpolate between two values based on curve type
+   */
+  interpolate(v1, v2, t, curveType, tension = 0.5) {
+    switch (curveType) {
+      case 'linear':
+        return v1 + (v2 - v1) * t;
+
+      case 'step':
+        return t < 0.5 ? v1 : v2;
+
+      case 'smooth':
+        // Smooth S-curve with tension control
+        const smoothT = this.smoothstep(t, tension);
+        return v1 + (v2 - v1) * smoothT;
+
+      case 'sine':
+        // Sine wave interpolation
+        const sineT = (1 - Math.cos(t * Math.PI)) / 2;
+        return v1 + (v2 - v1) * sineT;
+
+      default:
+        return v1 + (v2 - v1) * t;
+    }
+  }
+
+  /**
+   * Smoothstep function with tension control
+   */
+  smoothstep(t, tension) {
+    // Tension 0 = linear, tension 1 = very smooth S-curve
+    const power = 1 + tension * 3; // Range from 1 to 4
+
+    if (t < 0.5) {
+      return Math.pow(2 * t, power) / 2;
+    } else {
+      return 1 - Math.pow(2 * (1 - t), power) / 2;
+    }
+  }
+
+  /**
+   * Draw the curve on the canvas
+   */
+  draw() {
+    if (!this.ctx) return;
+
+    const ctx = this.ctx;
+    const w = this.width;
+    const h = this.height;
+
+    // Clear canvas
+    ctx.clearRect(0, 0, w, h);
+
+    // Draw grid
+    this.drawGrid();
+
+    // Draw curve
+    this.drawCurve();
+
+    // Draw control points
+    this.drawPoints();
+  }
+
+  /**
+   * Draw the background grid
+   */
+  drawGrid() {
+    const ctx = this.ctx;
+    const w = this.width;
+    const h = this.height;
+
+    ctx.strokeStyle = 'rgba(255, 255, 255, 0.1)';
+    ctx.lineWidth = 1;
+
+    // Vertical lines (time divisions)
+    const vDivisions = 8;
+    for (let i = 1; i < vDivisions; i++) {
+      const x = (w * i) / vDivisions;
+      ctx.beginPath();
+      ctx.moveTo(x, 0);
+      ctx.lineTo(x, h);
+      ctx.stroke();
+    }
+
+    // Horizontal lines (value divisions)
+    const hDivisions = 4;
+    for (let i = 1; i < hDivisions; i++) {
+      const y = (h * i) / hDivisions;
+      ctx.beginPath();
+      ctx.moveTo(0, y);
+      ctx.lineTo(w, y);
+      ctx.stroke();
+    }
+
+    // Draw center line more prominently
+    ctx.strokeStyle = 'rgba(255, 255, 255, 0.2)';
+    ctx.beginPath();
+    ctx.moveTo(0, h / 2);
+    ctx.lineTo(w, h / 2);
+    ctx.stroke();
+  }
+
+  /**
+   * Draw the automation curve
+   */
+  drawCurve() {
+    const ctx = this.ctx;
+    const w = this.width;
+    const h = this.height;
+
+    if (this.points.length < 2) return;
+
+    // Draw filled area under curve
+    ctx.beginPath();
+    ctx.moveTo(0, h);
+
+    // Draw curve path
+    const steps = 100;
+    for (let i = 0; i <= steps; i++) {
+      const progress = i / steps;
+      const value = this.getValueAtProgress(progress);
+      const x = progress * w;
+      const y = h - ((value - this.minValue) / (this.maxValue - this.minValue)) * h;
+
+      if (i === 0) {
+        ctx.lineTo(x, y);
+      } else {
+        ctx.lineTo(x, y);
+      }
+    }
+
+    ctx.lineTo(w, h);
+    ctx.closePath();
+
+    // Fill with gradient
+    const gradient = ctx.createLinearGradient(0, 0, 0, h);
+    gradient.addColorStop(0, 'rgba(79, 70, 229, 0.4)');
+    gradient.addColorStop(1, 'rgba(79, 70, 229, 0.1)');
+    ctx.fillStyle = gradient;
+    ctx.fill();
+
+    // Draw curve line
+    ctx.beginPath();
+    for (let i = 0; i <= steps; i++) {
+      const progress = i / steps;
+      const value = this.getValueAtProgress(progress);
+      const x = progress * w;
+      const y = h - ((value - this.minValue) / (this.maxValue - this.minValue)) * h;
+
+      if (i === 0) {
+        ctx.moveTo(x, y);
+      } else {
+        ctx.lineTo(x, y);
+      }
+    }
+
+    ctx.strokeStyle = 'rgba(129, 140, 248, 0.9)';
+    ctx.lineWidth = 2;
+    ctx.stroke();
+  }
+
+  /**
+   * Draw control points
+   */
+  drawPoints() {
+    const ctx = this.ctx;
+    const w = this.width;
+    const h = this.height;
+
+    for (let i = 0; i < this.points.length; i++) {
+      const point = this.points[i];
+      const x = point.x * w;
+      const y = h - ((point.y - this.minValue) / (this.maxValue - this.minValue)) * h;
+
+      const isSelected = i === this.selectedPointIndex;
+      const isHovered = i === this.hoverPointIndex;
+      const isEndpoint = i === 0 || i === this.points.length - 1;
+
+      // Draw outer ring for selected/hovered
+      if (isSelected || isHovered) {
+        ctx.beginPath();
+        ctx.arc(x, y, 10, 0, Math.PI * 2);
+        ctx.fillStyle = 'rgba(129, 140, 248, 0.3)';
+        ctx.fill();
+      }
+
+      // Draw point
+      ctx.beginPath();
+      ctx.arc(x, y, isEndpoint ? 7 : 6, 0, Math.PI * 2);
+
+      if (isEndpoint) {
+        ctx.fillStyle = isSelected ? '#22c55e' : '#818cf8';
+      } else {
+        ctx.fillStyle = isSelected ? '#22c55e' : (isHovered ? '#a5b4fc' : '#4f46e5');
+      }
+      ctx.fill();
+
+      // Draw border
+      ctx.strokeStyle = '#fff';
+      ctx.lineWidth = 2;
+      ctx.stroke();
+    }
+  }
+
+  /**
+   * Start the playback position animation
+   */
+  startAnimation() {
+    if (this.animationFrameId) return;
+
+    const animate = () => {
+      this.updatePlaybackPosition();
+      this.animationFrameId = requestAnimationFrame(animate);
+    };
+
+    animate();
+  }
+
+  /**
+   * Stop the playback position animation
+   */
+  stopAnimation() {
+    if (this.animationFrameId) {
+      cancelAnimationFrame(this.animationFrameId);
+      this.animationFrameId = null;
+    }
+
+    // Hide playback indicator
+    const indicator = this.container.querySelector('.playback-indicator');
+    if (indicator) {
+      indicator.style.display = 'none';
+    }
+  }
+
+  /**
+   * Update the playback position indicator
+   */
+  updatePlaybackPosition() {
+    const enabledKey = this.type === 'pitch' ? 'pitchCurveEnabled' : 'tempoCurveEnabled';
+    const startTimeKey = this.type === 'pitch' ? 'pitchCurveStartTime' : 'tempoCurveStartTime';
+    const durationKey = this.type === 'pitch' ? 'pitchCurveDuration' : 'tempoCurveDuration';
+    const loopKey = this.type === 'pitch' ? 'pitchCurveLoop' : 'tempoCurveLoop';
+
+    if (!this.object.userData[enabledKey] || !this.object.userData.isRunning) {
+      this.stopAnimation();
+      return;
+    }
+
+    const startTime = this.object.userData[startTimeKey] || Date.now();
+    const duration = this.object.userData[durationKey] || 60;
+    const isLooping = this.object.userData[loopKey] || false;
+
+    const elapsed = (Date.now() - startTime) / 1000;
+    let progress = elapsed / duration;
+
+    if (isLooping) {
+      progress = progress % 1;
+    } else {
+      progress = Math.min(progress, 1);
+    }
+
+    // Update indicator position
+    const indicator = this.container.querySelector('.playback-indicator');
+    if (indicator) {
+      indicator.style.display = 'block';
+      indicator.style.left = (progress * this.width) + 'px';
+    }
+
+    // Update current value display
+    this.updateCurrentValueDisplay(progress);
+  }
+
+  /**
+   * Clean up resources
+   */
+  destroy() {
+    this.stopAnimation();
+    if (this.container) {
+      this.container.innerHTML = '';
+    }
+  }
+}
+
+// Store active curve editors for reference
+const activeCurveEditors = new Map();
+
+/**
+ * Create an automation curve editor for a metronome object
+ * @param {Object} object - The metronome object
+ * @param {string} type - 'pitch' or 'tempo'
+ * @param {string} containerId - The container element ID
+ * @returns {AutomationCurveEditor} The editor instance
+ */
+function createAutomationCurveEditor(object, type, containerId) {
+  // Clean up existing editor if any
+  const existingKey = `${object.uuid}-${type}`;
+  if (activeCurveEditors.has(existingKey)) {
+    activeCurveEditors.get(existingKey).destroy();
+  }
+
+  const editor = new AutomationCurveEditor({
+    containerId: containerId,
+    type: type,
+    object: object,
+    onUpdate: () => {
+      // Editor updated callback
+    }
+  });
+
+  activeCurveEditors.set(existingKey, editor);
+  return editor;
+}
+
+/**
+ * Get the curve value at a given progress for an object
+ * This is used by the metronome animation code to get the current pitch/tempo
+ * @param {Object} object - The metronome object
+ * @param {string} type - 'pitch' or 'tempo'
+ * @param {number} progress - Progress through the curve (0-1)
+ * @returns {number} The interpolated value
+ */
+function getCurveValueAtProgress(object, type, progress) {
+  const pointsKey = type === 'pitch' ? 'pitchCurvePoints' : 'tempoCurvePoints';
+  const points = object.userData[pointsKey];
+
+  // If no custom points, fall back to legacy linear interpolation
+  if (!points || points.length < 2) {
+    const startKey = type === 'pitch' ? 'pitchCurveStart' : 'tempoCurveStart';
+    const endKey = type === 'pitch' ? 'pitchCurveEnd' : 'tempoCurveEnd';
+    const typeKey = type === 'pitch' ? 'pitchCurveType' : 'tempoCurveType';
+
+    const startValue = object.userData[startKey] || (type === 'pitch' ? 100 : 60);
+    const endValue = object.userData[endKey] || (type === 'pitch' ? 100 : 120);
+    const curveType = object.userData[typeKey] || 'linear';
+
+    // Apply legacy curve type
+    let easedProgress = progress;
+    switch (curveType) {
+      case 'ease-in':
+        easedProgress = progress * progress;
+        break;
+      case 'ease-out':
+        easedProgress = 1 - (1 - progress) * (1 - progress);
+        break;
+      case 'sine':
+        easedProgress = (Math.sin(progress * Math.PI * 2 - Math.PI / 2) + 1) / 2;
+        break;
+    }
+
+    return startValue + (endValue - startValue) * easedProgress;
+  }
+
+  // Use custom points
+  if (points.length === 1) return points[0].y;
+
+  // Find the two points that bracket this progress
+  let p1Index = 0;
+  let p2Index = 1;
+
+  for (let i = 0; i < points.length - 1; i++) {
+    if (progress >= points[i].x && progress <= points[i + 1].x) {
+      p1Index = i;
+      p2Index = i + 1;
+      break;
+    }
+  }
+
+  // Handle edge cases
+  if (progress <= points[0].x) return points[0].y;
+  if (progress >= points[points.length - 1].x) return points[points.length - 1].y;
+
+  const p1 = points[p1Index];
+  const p2 = points[p2Index];
+
+  // Calculate local progress between the two points
+  const localProgress = (progress - p1.x) / (p2.x - p1.x);
+
+  // Apply curve interpolation based on curve type
+  return interpolateCurveValue(p1.y, p2.y, localProgress, p1.curveType, p1.tension);
+}
+
+/**
+ * Interpolate between two values based on curve type (standalone function)
+ */
+function interpolateCurveValue(v1, v2, t, curveType, tension = 0.5) {
+  switch (curveType) {
+    case 'linear':
+      return v1 + (v2 - v1) * t;
+
+    case 'step':
+      return t < 0.5 ? v1 : v2;
+
+    case 'smooth':
+      // Smooth S-curve with tension control
+      const power = 1 + tension * 3;
+      let smoothT;
+      if (t < 0.5) {
+        smoothT = Math.pow(2 * t, power) / 2;
+      } else {
+        smoothT = 1 - Math.pow(2 * (1 - t), power) / 2;
+      }
+      return v1 + (v2 - v1) * smoothT;
+
+    case 'sine':
+      // Sine wave interpolation
+      const sineT = (1 - Math.cos(t * Math.PI)) / 2;
+      return v1 + (v2 - v1) * sineT;
+
+    default:
+      return v1 + (v2 - v1) * t;
+  }
+}
+
+// ============================================================================
 // CAMERA CONTROL POINTS (Starting position and direction)
 // ============================================================================
 // These control points define the default camera state at startup.
@@ -3959,6 +4928,25 @@ function updateObjectColor(object, colorType, colorValue) {
       typeSpecificData.tickSound = object.userData.tickSound;
       typeSpecificData.tickSoundType = object.userData.tickSoundType;
       typeSpecificData.isRunning = object.userData.isRunning;
+      typeSpecificData.volume = object.userData.volume;
+      typeSpecificData.tickPitch = object.userData.tickPitch;
+      typeSpecificData.customSoundDataUrl = object.userData.customSoundDataUrl;
+      // Preserve pitch curve settings
+      typeSpecificData.pitchCurveEnabled = object.userData.pitchCurveEnabled;
+      typeSpecificData.pitchCurveType = object.userData.pitchCurveType;
+      typeSpecificData.pitchCurveStart = object.userData.pitchCurveStart;
+      typeSpecificData.pitchCurveEnd = object.userData.pitchCurveEnd;
+      typeSpecificData.pitchCurveDuration = object.userData.pitchCurveDuration;
+      typeSpecificData.pitchCurveLoop = object.userData.pitchCurveLoop;
+      typeSpecificData.pitchCurvePoints = object.userData.pitchCurvePoints;
+      // Preserve tempo curve settings
+      typeSpecificData.tempoCurveEnabled = object.userData.tempoCurveEnabled;
+      typeSpecificData.tempoCurveType = object.userData.tempoCurveType;
+      typeSpecificData.tempoCurveStart = object.userData.tempoCurveStart;
+      typeSpecificData.tempoCurveEnd = object.userData.tempoCurveEnd;
+      typeSpecificData.tempoCurveDuration = object.userData.tempoCurveDuration;
+      typeSpecificData.tempoCurveLoop = object.userData.tempoCurveLoop;
+      typeSpecificData.tempoCurvePoints = object.userData.tempoCurvePoints;
       break;
     case 'photo-frame':
       typeSpecificData.photoDataUrl = object.userData.photoDataUrl;
@@ -7444,19 +8432,6 @@ function updateCustomizationPanel(object) {
     case 'metronome':
       const volumePercent = Math.round((object.userData.volume || 0.5) * 100);
       const pitchPercent = object.userData.tickPitch || 100;
-      const pitchCurveEnabled = object.userData.pitchCurveEnabled || false;
-      const pitchCurveType = object.userData.pitchCurveType || 'linear';
-      const pitchCurveStart = object.userData.pitchCurveStart || 100;
-      const pitchCurveEnd = object.userData.pitchCurveEnd || 100;
-      const pitchCurveDuration = object.userData.pitchCurveDuration || 60;
-      const pitchCurveLoop = object.userData.pitchCurveLoop || false;
-      // Tempo curve settings
-      const tempoCurveEnabled = object.userData.tempoCurveEnabled || false;
-      const tempoCurveType = object.userData.tempoCurveType || 'linear';
-      const tempoCurveStart = object.userData.tempoCurveStart || 60;
-      const tempoCurveEnd = object.userData.tempoCurveEnd || 120;
-      const tempoCurveDuration = object.userData.tempoCurveDuration || 60;
-      const tempoCurveLoop = object.userData.tempoCurveLoop || false;
       dynamicOptions.innerHTML = `
         <div class="customization-group" style="margin-top: 20px; padding-top: 15px; border-top: 1px solid rgba(255,255,255,0.1);">
           <label>BPM: <span id="bpm-display">${object.userData.bpm}</span></label>
@@ -7474,89 +8449,25 @@ function updateCustomizationPanel(object) {
                  style="width: 100%; margin-top: 8px; accent-color: #4f46e5;">
         </div>
 
-        <!-- Pitch Curve Accordion -->
+        <!-- FL Studio-style Pitch Curve Editor -->
         <div class="customization-group" style="margin-top: 15px;">
           <div id="pitch-curve-toggle" style="display: flex; align-items: center; justify-content: space-between; padding: 10px 12px; background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.1); border-radius: 8px; cursor: pointer;">
-            <span style="color: rgba(255,255,255,0.8); font-size: 12px;">Pitch Curve Over Time</span>
+            <span style="color: rgba(255,255,255,0.8); font-size: 12px;">🎵 Pitch Automation Curve</span>
             <span id="pitch-curve-arrow" style="color: rgba(255,255,255,0.5); font-size: 12px;">▼</span>
           </div>
-          <div id="pitch-curve-content" style="display: none; padding: 12px; background: rgba(0,0,0,0.2); border: 1px solid rgba(255,255,255,0.1); border-top: none; border-radius: 0 0 8px 8px;">
-            <div style="margin-bottom: 12px;">
-              <label style="display: flex; align-items: center; gap: 10px; cursor: pointer;">
-                <input type="checkbox" id="pitch-curve-enabled" ${pitchCurveEnabled ? 'checked' : ''} style="width: 16px; height: 16px; accent-color: #4f46e5;">
-                Enable Pitch Curve
-              </label>
-            </div>
-            <div style="margin-bottom: 12px;">
-              <label style="display: block; color: rgba(255,255,255,0.7); font-size: 11px; margin-bottom: 6px;">Curve Type</label>
-              <select id="pitch-curve-type" style="width: 100%; padding: 8px; background: rgba(255,255,255,0.1); border: 1px solid rgba(255,255,255,0.2); border-radius: 6px; color: #fff;">
-                <option value="linear" ${pitchCurveType === 'linear' ? 'selected' : ''}>Linear</option>
-                <option value="ease-in" ${pitchCurveType === 'ease-in' ? 'selected' : ''}>Ease In (Slow Start)</option>
-                <option value="ease-out" ${pitchCurveType === 'ease-out' ? 'selected' : ''}>Ease Out (Slow End)</option>
-                <option value="sine" ${pitchCurveType === 'sine' ? 'selected' : ''}>Sine Wave</option>
-              </select>
-            </div>
-            <div style="margin-bottom: 12px;">
-              <label style="display: block; color: rgba(255,255,255,0.7); font-size: 11px; margin-bottom: 6px;">Start Pitch: <span id="pitch-curve-start-display">${pitchCurveStart}%</span></label>
-              <input type="range" id="pitch-curve-start" min="50" max="200" value="${pitchCurveStart}" style="width: 100%; accent-color: #4f46e5;">
-            </div>
-            <div style="margin-bottom: 12px;">
-              <label style="display: block; color: rgba(255,255,255,0.7); font-size: 11px; margin-bottom: 6px;">End Pitch: <span id="pitch-curve-end-display">${pitchCurveEnd}%</span></label>
-              <input type="range" id="pitch-curve-end" min="50" max="200" value="${pitchCurveEnd}" style="width: 100%; accent-color: #4f46e5;">
-            </div>
-            <div style="margin-bottom: 12px;">
-              <label style="display: block; color: rgba(255,255,255,0.7); font-size: 11px; margin-bottom: 6px;">Duration: <span id="pitch-curve-duration-display">${pitchCurveDuration}s</span></label>
-              <input type="range" id="pitch-curve-duration" min="5" max="300" value="${pitchCurveDuration}" style="width: 100%; accent-color: #4f46e5;">
-            </div>
-            <div>
-              <label style="display: flex; align-items: center; gap: 10px; cursor: pointer;">
-                <input type="checkbox" id="pitch-curve-loop" ${pitchCurveLoop ? 'checked' : ''} style="width: 16px; height: 16px; accent-color: #4f46e5;">
-                Loop Curve
-              </label>
-            </div>
+          <div id="pitch-curve-content" style="display: none; border: 1px solid rgba(255,255,255,0.1); border-top: none; border-radius: 0 0 8px 8px;">
+            <div id="pitch-curve-editor-container"></div>
           </div>
         </div>
 
-        <!-- Tempo Curve Accordion -->
+        <!-- FL Studio-style Tempo Curve Editor -->
         <div class="customization-group" style="margin-top: 15px;">
           <div id="tempo-curve-toggle" style="display: flex; align-items: center; justify-content: space-between; padding: 10px 12px; background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.1); border-radius: 8px; cursor: pointer;">
-            <span style="color: rgba(255,255,255,0.8); font-size: 12px;">Tempo Curve Over Time</span>
+            <span style="color: rgba(255,255,255,0.8); font-size: 12px;">⏱️ Tempo Automation Curve</span>
             <span id="tempo-curve-arrow" style="color: rgba(255,255,255,0.5); font-size: 12px;">▼</span>
           </div>
-          <div id="tempo-curve-content" style="display: none; padding: 12px; background: rgba(0,0,0,0.2); border: 1px solid rgba(255,255,255,0.1); border-top: none; border-radius: 0 0 8px 8px;">
-            <div style="margin-bottom: 12px;">
-              <label style="display: flex; align-items: center; gap: 10px; cursor: pointer;">
-                <input type="checkbox" id="tempo-curve-enabled" ${tempoCurveEnabled ? 'checked' : ''} style="width: 16px; height: 16px; accent-color: #4f46e5;">
-                Enable Tempo Curve
-              </label>
-            </div>
-            <div style="margin-bottom: 12px;">
-              <label style="display: block; color: rgba(255,255,255,0.7); font-size: 11px; margin-bottom: 6px;">Curve Type</label>
-              <select id="tempo-curve-type" style="width: 100%; padding: 8px; background: rgba(255,255,255,0.1); border: 1px solid rgba(255,255,255,0.2); border-radius: 6px; color: #fff;">
-                <option value="linear" ${tempoCurveType === 'linear' ? 'selected' : ''}>Linear</option>
-                <option value="ease-in" ${tempoCurveType === 'ease-in' ? 'selected' : ''}>Ease In (Slow Start)</option>
-                <option value="ease-out" ${tempoCurveType === 'ease-out' ? 'selected' : ''}>Ease Out (Slow End)</option>
-                <option value="sine" ${tempoCurveType === 'sine' ? 'selected' : ''}>Sine Wave</option>
-              </select>
-            </div>
-            <div style="margin-bottom: 12px;">
-              <label style="display: block; color: rgba(255,255,255,0.7); font-size: 11px; margin-bottom: 6px;">Start BPM: <span id="tempo-curve-start-display">${tempoCurveStart}</span></label>
-              <input type="range" id="tempo-curve-start" min="10" max="220" value="${tempoCurveStart}" style="width: 100%; accent-color: #4f46e5;">
-            </div>
-            <div style="margin-bottom: 12px;">
-              <label style="display: block; color: rgba(255,255,255,0.7); font-size: 11px; margin-bottom: 6px;">End BPM: <span id="tempo-curve-end-display">${tempoCurveEnd}</span></label>
-              <input type="range" id="tempo-curve-end" min="10" max="220" value="${tempoCurveEnd}" style="width: 100%; accent-color: #4f46e5;">
-            </div>
-            <div style="margin-bottom: 12px;">
-              <label style="display: block; color: rgba(255,255,255,0.7); font-size: 11px; margin-bottom: 6px;">Duration: <span id="tempo-curve-duration-display">${tempoCurveDuration}s</span></label>
-              <input type="range" id="tempo-curve-duration" min="5" max="300" value="${tempoCurveDuration}" style="width: 100%; accent-color: #4f46e5;">
-            </div>
-            <div>
-              <label style="display: flex; align-items: center; gap: 10px; cursor: pointer;">
-                <input type="checkbox" id="tempo-curve-loop" ${tempoCurveLoop ? 'checked' : ''} style="width: 16px; height: 16px; accent-color: #4f46e5;">
-                Loop Curve
-              </label>
-            </div>
+          <div id="tempo-curve-content" style="display: none; border: 1px solid rgba(255,255,255,0.1); border-top: none; border-radius: 0 0 8px 8px;">
+            <div id="tempo-curve-editor-container"></div>
           </div>
         </div>
 
@@ -8153,163 +9064,43 @@ function setupMetronomeCustomizationHandlers(object) {
       addScrollToSlider(pitchSlider);
     }
 
-    // Pitch Curve accordion toggle
+    // FL Studio-style Pitch Curve Editor
     const pitchCurveToggle = document.getElementById('pitch-curve-toggle');
     const pitchCurveContent = document.getElementById('pitch-curve-content');
     const pitchCurveArrow = document.getElementById('pitch-curve-arrow');
+    let pitchCurveEditor = null;
+
     if (pitchCurveToggle && pitchCurveContent) {
       pitchCurveToggle.addEventListener('click', () => {
         const isOpen = pitchCurveContent.style.display !== 'none';
         pitchCurveContent.style.display = isOpen ? 'none' : 'block';
         pitchCurveArrow.textContent = isOpen ? '▼' : '▲';
         pitchCurveToggle.style.borderRadius = isOpen ? '8px' : '8px 8px 0 0';
-      });
-    }
 
-    // Pitch Curve enabled checkbox
-    const pitchCurveEnabledCheckbox = document.getElementById('pitch-curve-enabled');
-    if (pitchCurveEnabledCheckbox) {
-      pitchCurveEnabledCheckbox.addEventListener('change', (e) => {
-        object.userData.pitchCurveEnabled = e.target.checked;
-        // Reset curve start time when enabling
-        if (e.target.checked) {
-          object.userData.pitchCurveStartTime = Date.now();
+        // Initialize curve editor when accordion is opened
+        if (!isOpen && !pitchCurveEditor) {
+          pitchCurveEditor = createAutomationCurveEditor(object, 'pitch', 'pitch-curve-editor-container');
         }
-        saveState();
       });
     }
 
-    // Pitch Curve type dropdown
-    const pitchCurveTypeSelect = document.getElementById('pitch-curve-type');
-    if (pitchCurveTypeSelect) {
-      pitchCurveTypeSelect.addEventListener('change', (e) => {
-        object.userData.pitchCurveType = e.target.value;
-        saveState();
-      });
-    }
-
-    // Pitch Curve start slider
-    const pitchCurveStartSlider = document.getElementById('pitch-curve-start');
-    const pitchCurveStartDisplay = document.getElementById('pitch-curve-start-display');
-    if (pitchCurveStartSlider) {
-      pitchCurveStartSlider.addEventListener('input', (e) => {
-        object.userData.pitchCurveStart = parseInt(e.target.value);
-        pitchCurveStartDisplay.textContent = e.target.value + '%';
-        saveState();
-      });
-      addScrollToSlider(pitchCurveStartSlider);
-    }
-
-    // Pitch Curve end slider
-    const pitchCurveEndSlider = document.getElementById('pitch-curve-end');
-    const pitchCurveEndDisplay = document.getElementById('pitch-curve-end-display');
-    if (pitchCurveEndSlider) {
-      pitchCurveEndSlider.addEventListener('input', (e) => {
-        object.userData.pitchCurveEnd = parseInt(e.target.value);
-        pitchCurveEndDisplay.textContent = e.target.value + '%';
-        saveState();
-      });
-      addScrollToSlider(pitchCurveEndSlider);
-    }
-
-    // Pitch Curve duration slider
-    const pitchCurveDurationSlider = document.getElementById('pitch-curve-duration');
-    const pitchCurveDurationDisplay = document.getElementById('pitch-curve-duration-display');
-    if (pitchCurveDurationSlider) {
-      pitchCurveDurationSlider.addEventListener('input', (e) => {
-        object.userData.pitchCurveDuration = parseInt(e.target.value);
-        pitchCurveDurationDisplay.textContent = e.target.value + 's';
-        saveState();
-      });
-      addScrollToSlider(pitchCurveDurationSlider);
-    }
-
-    // Pitch Curve loop checkbox
-    const pitchCurveLoopCheckbox = document.getElementById('pitch-curve-loop');
-    if (pitchCurveLoopCheckbox) {
-      pitchCurveLoopCheckbox.addEventListener('change', (e) => {
-        object.userData.pitchCurveLoop = e.target.checked;
-        saveState();
-      });
-    }
-
-    // Tempo Curve accordion toggle
+    // FL Studio-style Tempo Curve Editor
     const tempoCurveToggle = document.getElementById('tempo-curve-toggle');
     const tempoCurveContent = document.getElementById('tempo-curve-content');
     const tempoCurveArrow = document.getElementById('tempo-curve-arrow');
+    let tempoCurveEditor = null;
+
     if (tempoCurveToggle && tempoCurveContent) {
       tempoCurveToggle.addEventListener('click', () => {
         const isOpen = tempoCurveContent.style.display !== 'none';
         tempoCurveContent.style.display = isOpen ? 'none' : 'block';
         tempoCurveArrow.textContent = isOpen ? '▼' : '▲';
         tempoCurveToggle.style.borderRadius = isOpen ? '8px' : '8px 8px 0 0';
-      });
-    }
 
-    // Tempo Curve enabled checkbox
-    const tempoCurveEnabledCheckbox = document.getElementById('tempo-curve-enabled');
-    if (tempoCurveEnabledCheckbox) {
-      tempoCurveEnabledCheckbox.addEventListener('change', (e) => {
-        object.userData.tempoCurveEnabled = e.target.checked;
-        // Reset curve start time when enabling
-        if (e.target.checked) {
-          object.userData.tempoCurveStartTime = Date.now();
+        // Initialize curve editor when accordion is opened
+        if (!isOpen && !tempoCurveEditor) {
+          tempoCurveEditor = createAutomationCurveEditor(object, 'tempo', 'tempo-curve-editor-container');
         }
-        saveState();
-      });
-    }
-
-    // Tempo Curve type dropdown
-    const tempoCurveTypeSelect = document.getElementById('tempo-curve-type');
-    if (tempoCurveTypeSelect) {
-      tempoCurveTypeSelect.addEventListener('change', (e) => {
-        object.userData.tempoCurveType = e.target.value;
-        saveState();
-      });
-    }
-
-    // Tempo Curve start slider
-    const tempoCurveStartSlider = document.getElementById('tempo-curve-start');
-    const tempoCurveStartDisplay = document.getElementById('tempo-curve-start-display');
-    if (tempoCurveStartSlider) {
-      tempoCurveStartSlider.addEventListener('input', (e) => {
-        object.userData.tempoCurveStart = parseInt(e.target.value);
-        tempoCurveStartDisplay.textContent = e.target.value;
-        saveState();
-      });
-      addScrollToSlider(tempoCurveStartSlider);
-    }
-
-    // Tempo Curve end slider
-    const tempoCurveEndSlider = document.getElementById('tempo-curve-end');
-    const tempoCurveEndDisplay = document.getElementById('tempo-curve-end-display');
-    if (tempoCurveEndSlider) {
-      tempoCurveEndSlider.addEventListener('input', (e) => {
-        object.userData.tempoCurveEnd = parseInt(e.target.value);
-        tempoCurveEndDisplay.textContent = e.target.value;
-        saveState();
-      });
-      addScrollToSlider(tempoCurveEndSlider);
-    }
-
-    // Tempo Curve duration slider
-    const tempoCurveDurationSlider = document.getElementById('tempo-curve-duration');
-    const tempoCurveDurationDisplay = document.getElementById('tempo-curve-duration-display');
-    if (tempoCurveDurationSlider) {
-      tempoCurveDurationSlider.addEventListener('input', (e) => {
-        object.userData.tempoCurveDuration = parseInt(e.target.value);
-        tempoCurveDurationDisplay.textContent = e.target.value + 's';
-        saveState();
-      });
-      addScrollToSlider(tempoCurveDurationSlider);
-    }
-
-    // Tempo Curve loop checkbox
-    const tempoCurveLoopCheckbox = document.getElementById('tempo-curve-loop');
-    if (tempoCurveLoopCheckbox) {
-      tempoCurveLoopCheckbox.addEventListener('change', (e) => {
-        object.userData.tempoCurveLoop = e.target.checked;
-        saveState();
       });
     }
 
@@ -14953,6 +15744,13 @@ async function saveStateImmediate() {
           if (obj.userData.tempoCurveLoop !== undefined) {
             data.tempoCurveLoop = obj.userData.tempoCurveLoop;
           }
+          // Save curve points arrays for FL Studio-style automation curves
+          if (obj.userData.pitchCurvePoints && obj.userData.pitchCurvePoints.length > 0) {
+            data.pitchCurvePoints = obj.userData.pitchCurvePoints;
+          }
+          if (obj.userData.tempoCurvePoints && obj.userData.tempoCurvePoints.length > 0) {
+            data.tempoCurvePoints = obj.userData.tempoCurvePoints;
+          }
           // Save running state and pendulum phase for persistence
           if (obj.userData.isRunning !== undefined) {
             data.isRunning = obj.userData.isRunning;
@@ -15387,6 +16185,13 @@ async function loadState() {
                 if (objData.tempoCurveEnd !== undefined) obj.userData.tempoCurveEnd = objData.tempoCurveEnd;
                 if (objData.tempoCurveDuration !== undefined) obj.userData.tempoCurveDuration = objData.tempoCurveDuration;
                 if (objData.tempoCurveLoop !== undefined) obj.userData.tempoCurveLoop = objData.tempoCurveLoop;
+                // Restore curve points arrays for FL Studio-style automation curves
+                if (objData.pitchCurvePoints && objData.pitchCurvePoints.length > 0) {
+                  obj.userData.pitchCurvePoints = objData.pitchCurvePoints;
+                }
+                if (objData.tempoCurvePoints && objData.tempoCurvePoints.length > 0) {
+                  obj.userData.tempoCurvePoints = objData.tempoCurvePoints;
+                }
                 // Restore running state and pendulum phase
                 if (objData.isRunning !== undefined) obj.userData.isRunning = objData.isRunning;
                 if (objData.pendulumAngle !== undefined) obj.userData.pendulumAngle = objData.pendulumAngle;
@@ -15626,7 +16431,7 @@ function animate() {
         // One beat = one swing to the left + one swing to the right, so 2 direction changes per beat
         let bpm = obj.userData.bpm || 120;
 
-        // Apply tempo curve if enabled
+        // Apply tempo curve if enabled (using FL Studio-style automation points)
         if (obj.userData.tempoCurveEnabled) {
           const curveStartTime = obj.userData.tempoCurveStartTime || Date.now();
           const elapsed = (Date.now() - curveStartTime) / 1000; // seconds
@@ -15640,27 +16445,8 @@ function animate() {
             progress = Math.min(progress, 1); // Clamp at 1 for non-looping
           }
 
-          // Apply easing based on curve type
-          let easedProgress = progress;
-          const curveType = obj.userData.tempoCurveType || 'linear';
-          switch (curveType) {
-            case 'ease-in':
-              easedProgress = progress * progress; // Quadratic ease-in
-              break;
-            case 'ease-out':
-              easedProgress = 1 - (1 - progress) * (1 - progress); // Quadratic ease-out
-              break;
-            case 'sine':
-              // Sine wave: goes from start to end and back
-              easedProgress = (Math.sin(progress * Math.PI * 2 - Math.PI / 2) + 1) / 2;
-              break;
-            // 'linear' uses progress as-is
-          }
-
-          // Interpolate between start and end BPM
-          const startBPM = obj.userData.tempoCurveStart || 60;
-          const endBPM = obj.userData.tempoCurveEnd || 120;
-          bpm = startBPM + (endBPM - startBPM) * easedProgress;
+          // Get BPM from automation curve (supports custom control points)
+          bpm = getCurveValueAtProgress(obj, 'tempo', progress);
         }
 
         const msPerBeat = 60000 / bpm; // Milliseconds per beat
@@ -15695,7 +16481,7 @@ function animate() {
               let pitchMultiplier = (obj.userData.tickPitch || 100) / 100;
 
               if (obj.userData.pitchCurveEnabled) {
-                // Calculate current pitch based on curve
+                // Calculate current pitch based on automation curve (FL Studio-style)
                 const curveStartTime = obj.userData.pitchCurveStartTime || Date.now();
                 const elapsed = (Date.now() - curveStartTime) / 1000; // seconds
                 const duration = obj.userData.pitchCurveDuration || 60;
@@ -15708,27 +16494,9 @@ function animate() {
                   progress = Math.min(progress, 1); // Clamp at 1 for non-looping
                 }
 
-                // Apply easing based on curve type
-                let easedProgress = progress;
-                const curveType = obj.userData.pitchCurveType || 'linear';
-                switch (curveType) {
-                  case 'ease-in':
-                    easedProgress = progress * progress; // Quadratic ease-in
-                    break;
-                  case 'ease-out':
-                    easedProgress = 1 - (1 - progress) * (1 - progress); // Quadratic ease-out
-                    break;
-                  case 'sine':
-                    // Sine wave: goes from start to end and back
-                    easedProgress = (Math.sin(progress * Math.PI * 2 - Math.PI / 2) + 1) / 2;
-                    break;
-                  // 'linear' uses progress as-is
-                }
-
-                // Interpolate between start and end pitch
-                const startPitch = (obj.userData.pitchCurveStart || 100) / 100;
-                const endPitch = (obj.userData.pitchCurveEnd || 100) / 100;
-                pitchMultiplier = startPitch + (endPitch - startPitch) * easedProgress;
+                // Get pitch from automation curve (supports custom control points)
+                // Pitch is stored as percentage (50-200), convert to multiplier
+                pitchMultiplier = getCurveValueAtProgress(obj, 'pitch', progress) / 100;
               }
 
               if (obj.userData.tickSoundType === 'custom' && obj.userData.customSoundDataUrl) {

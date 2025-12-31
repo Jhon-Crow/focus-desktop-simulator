@@ -85,7 +85,16 @@ let timerState = {
   intervalId: null,
   alertAudioCtx: null,
   alertOscillator: null,
-  isAlerting: false
+  isAlerting: false,
+  // Alarm settings
+  alarmEnabled: false,
+  alarmHours: 0,
+  alarmMinutes: 0,
+  alarmTriggered: false,
+  // Sound settings
+  alertVolume: 0.5, // 0-1
+  alertPitch: 800, // Hz (default 800Hz)
+  customSoundDataUrl: null // Custom sound file data URL
 };
 
 // Shared audio context for metronome (reuse to avoid lag)
@@ -831,6 +840,35 @@ function createClock(options = {}) {
   secondHand.position.y = 0.13; // Half the length
   secondPivot.add(secondHand);
   group.add(secondPivot);
+
+  // Alarm hand - pivot group (red, positioned behind second hand, initially hidden)
+  const alarmPivot = new THREE.Group();
+  alarmPivot.name = 'alarmHand';
+  alarmPivot.position.z = 0.055; // Behind other hands
+  alarmPivot.visible = false; // Hidden by default until alarm is set
+
+  const alarmMaterial = new THREE.MeshStandardMaterial({
+    color: 0xff4444, // Bright red
+    roughness: 0.3,
+    metalness: 0.5,
+    emissive: 0xff2222,
+    emissiveIntensity: 0.3
+  });
+
+  // Alarm hand geometry - triangular/arrow shape pointing to alarm time
+  const alarmGeometry = new THREE.BoxGeometry(0.04, 0.18, 0.01);
+  const alarmHand = new THREE.Mesh(alarmGeometry, alarmMaterial);
+  alarmHand.position.y = 0.09; // Half the length
+  alarmPivot.add(alarmHand);
+
+  // Small circle at the tip to make it distinctive
+  const alarmTipGeometry = new THREE.CircleGeometry(0.02, 8);
+  const alarmTip = new THREE.Mesh(alarmTipGeometry, alarmMaterial);
+  alarmTip.position.y = 0.18;
+  alarmTip.position.z = 0.005;
+  alarmPivot.add(alarmTip);
+
+  group.add(alarmPivot);
 
   // Center dot (covers pivot point)
   const centerGeometry = new THREE.SphereGeometry(0.035, 16, 16);
@@ -2228,6 +2266,8 @@ function createMetronome(options = {}) {
     volume: options.volume !== undefined ? options.volume : 0.5, // Volume 0-1
     tickSound: true, // Tick sound ON by default (strike sound)
     tickSoundType: 'strike', // 'strike' (default) or 'beep'
+    tickPitch: options.tickPitch !== undefined ? options.tickPitch : 100, // Pitch percentage (100 = normal)
+    customSoundDataUrl: null, // Custom sound file data URL
     pendulumAngle: 0,
     pendulumDirection: 1,
     mainColor: options.mainColor || '#8b4513',
@@ -3955,6 +3995,27 @@ function updateClock() {
   const seconds = now.getSeconds().toString().padStart(2, '0');
 
   document.getElementById('clock-display').textContent = `${hours}:${minutes}:${seconds}`;
+
+  // Check if alarm should trigger
+  if (timerState.alarmEnabled && !timerState.alarmTriggered && !timerState.isAlerting) {
+    const currentHours = now.getHours();
+    const currentMinutes = now.getMinutes();
+
+    if (currentHours === timerState.alarmHours && currentMinutes === timerState.alarmMinutes) {
+      // Trigger the alarm
+      timerState.alarmTriggered = true;
+      playTimerAlert();
+    }
+  }
+
+  // Reset alarm triggered flag when time changes past the alarm minute
+  if (timerState.alarmTriggered) {
+    const currentHours = now.getHours();
+    const currentMinutes = now.getMinutes();
+    if (currentHours !== timerState.alarmHours || currentMinutes !== timerState.alarmMinutes) {
+      timerState.alarmTriggered = false;
+    }
+  }
 
   // Update 3D clock objects
   deskObjects.forEach(obj => {
@@ -5989,6 +6050,7 @@ function updateCustomizationPanel(object) {
 
     case 'metronome':
       const volumePercent = Math.round((object.userData.volume || 0.5) * 100);
+      const pitchPercent = object.userData.tickPitch || 100;
       dynamicOptions.innerHTML = `
         <div class="customization-group" style="margin-top: 20px; padding-top: 15px; border-top: 1px solid rgba(255,255,255,0.1);">
           <label>BPM: <span id="bpm-display">${object.userData.bpm}</span></label>
@@ -6001,6 +6063,11 @@ function updateCustomizationPanel(object) {
                  style="width: 100%; margin-top: 8px; accent-color: #4f46e5;">
         </div>
         <div class="customization-group" style="margin-top: 15px;">
+          <label>Pitch: <span id="pitch-display">${pitchPercent}%</span></label>
+          <input type="range" id="metronome-pitch-edit" min="50" max="200" value="${pitchPercent}"
+                 style="width: 100%; margin-top: 8px; accent-color: #4f46e5;">
+        </div>
+        <div class="customization-group" style="margin-top: 15px;">
           <label style="display: flex; align-items: center; gap: 10px; cursor: pointer;">
             <input type="checkbox" id="tick-sound" ${object.userData.tickSound ? 'checked' : ''} style="width: 18px; height: 18px; accent-color: #4f46e5;">
             Enable tick sound
@@ -6009,12 +6076,29 @@ function updateCustomizationPanel(object) {
         <div class="customization-group" style="margin-top: 15px;">
           <label>Sound Type</label>
           <div style="display: flex; gap: 10px; margin-top: 8px;">
-            <button id="sound-type-strike" class="timer-btn ${object.userData.tickSoundType !== 'beep' ? 'pause' : 'start'}" style="flex: 1;">
+            <button id="sound-type-strike" class="timer-btn ${object.userData.tickSoundType !== 'beep' && object.userData.tickSoundType !== 'custom' ? 'pause' : 'start'}" style="flex: 1;">
               Strike
             </button>
             <button id="sound-type-beep" class="timer-btn ${object.userData.tickSoundType === 'beep' ? 'pause' : 'start'}" style="flex: 1;">
               Beep
             </button>
+          </div>
+        </div>
+        <div class="customization-group" style="margin-top: 15px;">
+          <label>Custom Sound File</label>
+          <div style="display: flex; flex-direction: column; gap: 10px; margin-top: 8px;">
+            <label style="display: inline-block; padding: 10px 15px; background: rgba(79, 70, 229, 0.3); border: 1px solid rgba(79, 70, 229, 0.5); border-radius: 8px; color: #fff; cursor: pointer; text-align: center;">
+              ${object.userData.customSoundDataUrl ? 'Change Sound' : 'Upload Sound'}
+              <input type="file" id="metronome-custom-sound" accept="audio/*" style="display: none;">
+            </label>
+            ${object.userData.customSoundDataUrl ? `
+              <button id="sound-type-custom" class="timer-btn ${object.userData.tickSoundType === 'custom' ? 'pause' : 'start'}" style="width: 100%;">
+                Use Custom Sound
+              </button>
+              <button id="metronome-clear-sound" style="padding: 10px 15px; background: rgba(239, 68, 68, 0.2); border: 1px solid rgba(239, 68, 68, 0.4); border-radius: 8px; color: #ef4444; cursor: pointer;">
+                Clear Sound
+              </button>
+            ` : ''}
           </div>
         </div>
       `;
@@ -6451,6 +6535,20 @@ function setupMetronomeCustomizationHandlers(object) {
       addScrollToSlider(volumeSlider);
     }
 
+    // Pitch slider
+    const pitchSlider = document.getElementById('metronome-pitch-edit');
+    const pitchDisplay = document.getElementById('pitch-display');
+    if (pitchSlider) {
+      pitchSlider.addEventListener('input', (e) => {
+        object.userData.tickPitch = parseInt(e.target.value);
+        pitchDisplay.textContent = e.target.value + '%';
+        saveState();
+      });
+
+      // Add scroll-based adjustment for pitch slider
+      addScrollToSlider(pitchSlider);
+    }
+
     const tickCheckbox = document.getElementById('tick-sound');
     if (tickCheckbox) {
       tickCheckbox.addEventListener('change', (e) => {
@@ -6462,20 +6560,20 @@ function setupMetronomeCustomizationHandlers(object) {
     // Sound type buttons
     const strikeBtn = document.getElementById('sound-type-strike');
     const beepBtn = document.getElementById('sound-type-beep');
+    const customBtn = document.getElementById('sound-type-custom');
 
     const updateSoundTypeButtons = () => {
-      if (strikeBtn && beepBtn) {
-        if (object.userData.tickSoundType === 'beep') {
-          beepBtn.classList.remove('start');
-          beepBtn.classList.add('pause');
-          strikeBtn.classList.remove('pause');
-          strikeBtn.classList.add('start');
-        } else {
-          strikeBtn.classList.remove('start');
-          strikeBtn.classList.add('pause');
-          beepBtn.classList.remove('pause');
-          beepBtn.classList.add('start');
-        }
+      if (strikeBtn) {
+        strikeBtn.classList.remove('start', 'pause');
+        strikeBtn.classList.add(object.userData.tickSoundType === 'strike' ? 'pause' : 'start');
+      }
+      if (beepBtn) {
+        beepBtn.classList.remove('start', 'pause');
+        beepBtn.classList.add(object.userData.tickSoundType === 'beep' ? 'pause' : 'start');
+      }
+      if (customBtn) {
+        customBtn.classList.remove('start', 'pause');
+        customBtn.classList.add(object.userData.tickSoundType === 'custom' ? 'pause' : 'start');
       }
     };
 
@@ -6496,7 +6594,74 @@ function setupMetronomeCustomizationHandlers(object) {
         saveState();
       });
     }
+
+    if (customBtn) {
+      customBtn.addEventListener('click', () => {
+        object.userData.tickSoundType = 'custom';
+        updateSoundTypeButtons();
+        saveState();
+      });
+    }
+
+    // Custom sound file upload
+    const customSoundInput = document.getElementById('metronome-custom-sound');
+    if (customSoundInput) {
+      customSoundInput.addEventListener('change', (e) => {
+        const file = e.target.files[0];
+        if (file && file.type.startsWith('audio/')) {
+          const reader = new FileReader();
+          reader.onload = (event) => {
+            object.userData.customSoundDataUrl = event.target.result;
+            // Pre-decode the audio for faster playback
+            preloadMetronomeCustomSound(object);
+            saveState();
+            // Refresh the customization panel to show the new buttons
+            openCustomizationPanel(object);
+          };
+          reader.readAsDataURL(file);
+        }
+      });
+    }
+
+    // Clear custom sound button
+    const clearSoundBtn = document.getElementById('metronome-clear-sound');
+    if (clearSoundBtn) {
+      clearSoundBtn.addEventListener('click', () => {
+        object.userData.customSoundDataUrl = null;
+        object.userData.customSoundBuffer = null;
+        if (object.userData.tickSoundType === 'custom') {
+          object.userData.tickSoundType = 'strike';
+        }
+        saveState();
+        // Refresh the customization panel
+        openCustomizationPanel(object);
+      });
+    }
   }, 0);
+}
+
+// Preload custom sound for metronome to avoid delay on first play
+function preloadMetronomeCustomSound(object) {
+  if (!object.userData.customSoundDataUrl) return;
+
+  try {
+    const audioCtx = getSharedAudioContext();
+    // Convert data URL to array buffer
+    const base64 = object.userData.customSoundDataUrl.split(',')[1];
+    const binary = atob(base64);
+    const bytes = new Uint8Array(binary.length);
+    for (let i = 0; i < binary.length; i++) {
+      bytes[i] = binary.charCodeAt(i);
+    }
+
+    audioCtx.decodeAudioData(bytes.buffer.slice(0), (buffer) => {
+      object.userData.customSoundBuffer = buffer;
+    }, (err) => {
+      console.error('Error decoding custom sound:', err);
+    });
+  } catch (e) {
+    console.error('Error preloading custom sound:', e);
+  }
 }
 
 function setupLaptopCustomizationHandlers(object) {
@@ -7338,22 +7503,79 @@ function closeInteractionModal() {
 function getInteractionContent(object) {
   switch (object.userData.type) {
     case 'clock':
+      const clockData = object.userData;
+      const alarmHours = timerState.alarmHours || 0;
+      const alarmMinutes = timerState.alarmMinutes || 0;
+      const alarmEnabled = timerState.alarmEnabled || false;
+      const alertVolume = Math.round((timerState.alertVolume || 0.5) * 100);
+      const alertPitch = Math.round((timerState.alertPitch || 800) / 8); // Convert Hz to percentage (800Hz = 100%)
       return `
         <div class="timer-controls">
-          <div class="timer-display">
-            <div class="time" id="timer-display">00:00:00</div>
+          <!-- Timer Section -->
+          <div style="margin-bottom: 15px;">
+            <div style="color: rgba(255,255,255,0.7); font-size: 12px; margin-bottom: 8px; text-transform: uppercase; letter-spacing: 0.5px;">Timer</div>
+            <div class="timer-display">
+              <div class="time" id="timer-display">00:00:00</div>
+            </div>
+            <div class="timer-input-group">
+              <input type="number" id="timer-hours" min="0" max="23" value="0" placeholder="HH" class="timer-scroll-input">
+              <span>:</span>
+              <input type="number" id="timer-minutes" min="0" max="59" value="5" placeholder="MM" class="timer-scroll-input">
+              <span>:</span>
+              <input type="number" id="timer-seconds" min="0" max="59" value="0" placeholder="SS" class="timer-scroll-input">
+            </div>
+            <div class="timer-buttons">
+              <button class="timer-btn start" id="timer-start">Start</button>
+              <button class="timer-btn pause" id="timer-pause" style="display:none">Pause</button>
+              <button class="timer-btn reset" id="timer-reset">Reset</button>
+            </div>
           </div>
-          <div class="timer-input-group">
-            <input type="number" id="timer-hours" min="0" max="23" value="0" placeholder="HH">
-            <span>:</span>
-            <input type="number" id="timer-minutes" min="0" max="59" value="5" placeholder="MM">
-            <span>:</span>
-            <input type="number" id="timer-seconds" min="0" max="59" value="0" placeholder="SS">
+
+          <!-- Alarm Section -->
+          <div style="margin-top: 20px; padding-top: 15px; border-top: 1px solid rgba(255,255,255,0.1);">
+            <div style="color: rgba(255,255,255,0.7); font-size: 12px; margin-bottom: 8px; text-transform: uppercase; letter-spacing: 0.5px;">Alarm</div>
+            <div class="timer-input-group">
+              <input type="number" id="alarm-hours" min="0" max="23" value="${alarmHours}" placeholder="HH" class="timer-scroll-input">
+              <span>:</span>
+              <input type="number" id="alarm-minutes" min="0" max="59" value="${alarmMinutes}" placeholder="MM" class="timer-scroll-input">
+            </div>
+            <div class="timer-buttons" style="margin-top: 10px;">
+              <button class="timer-btn ${alarmEnabled ? 'pause' : 'start'}" id="alarm-toggle">
+                ${alarmEnabled ? 'Alarm ON' : 'Set Alarm'}
+              </button>
+              <button class="timer-btn reset" id="alarm-clear" ${!alarmEnabled ? 'disabled' : ''}>Clear</button>
+            </div>
           </div>
-          <div class="timer-buttons">
-            <button class="timer-btn start" id="timer-start">Start</button>
-            <button class="timer-btn pause" id="timer-pause" style="display:none">Pause</button>
-            <button class="timer-btn reset" id="timer-reset">Reset</button>
+
+          <!-- Sound Settings Accordion -->
+          <div style="margin-top: 20px; padding-top: 15px; border-top: 1px solid rgba(255,255,255,0.1);">
+            <div id="sound-settings-toggle" style="display: flex; align-items: center; justify-content: space-between; padding: 10px 15px; background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.1); border-radius: 8px; cursor: pointer;">
+              <span style="color: rgba(255,255,255,0.8); font-size: 12px; text-transform: uppercase; letter-spacing: 0.5px;">Sound Settings</span>
+              <span id="sound-settings-arrow" style="color: rgba(255,255,255,0.5); font-size: 12px;">▼</span>
+            </div>
+            <div id="sound-settings-content" style="display: none; padding: 15px; background: rgba(0,0,0,0.2); border: 1px solid rgba(255,255,255,0.1); border-top: none; border-radius: 0 0 8px 8px;">
+              <div style="margin-bottom: 15px;">
+                <label style="display: block; color: rgba(255,255,255,0.7); font-size: 12px; margin-bottom: 8px;">Volume: <span id="alert-volume-display">${alertVolume}%</span></label>
+                <input type="range" id="alert-volume" min="0" max="100" value="${alertVolume}" style="width: 100%; accent-color: #4f46e5;">
+              </div>
+              <div style="margin-bottom: 15px;">
+                <label style="display: block; color: rgba(255,255,255,0.7); font-size: 12px; margin-bottom: 8px;">Pitch: <span id="alert-pitch-display">${alertPitch}%</span></label>
+                <input type="range" id="alert-pitch" min="50" max="200" value="${alertPitch}" style="width: 100%; accent-color: #4f46e5;">
+              </div>
+              <div>
+                <label style="display: block; color: rgba(255,255,255,0.7); font-size: 12px; margin-bottom: 8px;">Custom Sound</label>
+                <div style="display: flex; flex-direction: column; gap: 10px;">
+                  <label style="display: inline-block; padding: 10px 15px; background: rgba(79, 70, 229, 0.3); border: 1px solid rgba(79, 70, 229, 0.5); border-radius: 8px; color: #fff; cursor: pointer; text-align: center;">
+                    ${timerState.customSoundDataUrl ? 'Change Sound' : 'Upload Sound'}
+                    <input type="file" id="timer-custom-sound" accept="audio/*" style="display: none;">
+                  </label>
+                  ${timerState.customSoundDataUrl ? `
+                    <button id="timer-use-custom" class="timer-btn start" style="width: 100%;">Use Custom Sound</button>
+                    <button id="timer-clear-sound" style="padding: 10px 15px; background: rgba(239, 68, 68, 0.2); border: 1px solid rgba(239, 68, 68, 0.4); border-radius: 8px; color: #ef4444; cursor: pointer;">Clear Sound</button>
+                  ` : ''}
+                </div>
+              </div>
+            </div>
           </div>
         </div>
       `;
@@ -7711,6 +7933,9 @@ function setupTimerHandlers() {
           playTimerAlert();
         }
       }, 1000);
+
+      // Close modal after starting timer
+      closeInteractionModal();
     }
   });
 
@@ -7737,6 +7962,221 @@ function setupTimerHandlers() {
     display.textContent = '00:00:00';
     display.classList.remove('running', 'paused');
   });
+
+  // Setup alarm handlers
+  const alarmToggleBtn = document.getElementById('alarm-toggle');
+  const alarmClearBtn = document.getElementById('alarm-clear');
+
+  if (alarmToggleBtn) {
+    alarmToggleBtn.addEventListener('click', () => {
+      const alarmHours = parseInt(document.getElementById('alarm-hours').value) || 0;
+      const alarmMinutes = parseInt(document.getElementById('alarm-minutes').value) || 0;
+
+      if (!timerState.alarmEnabled) {
+        // Set alarm
+        timerState.alarmHours = alarmHours;
+        timerState.alarmMinutes = alarmMinutes;
+        timerState.alarmEnabled = true;
+        timerState.alarmTriggered = false;
+
+        alarmToggleBtn.textContent = 'Alarm ON';
+        alarmToggleBtn.classList.remove('start');
+        alarmToggleBtn.classList.add('pause');
+        alarmClearBtn.disabled = false;
+
+        // Update the alarm hand on clock objects
+        updateAlarmHandsOnAllClocks();
+
+        // Close modal after setting alarm
+        closeInteractionModal();
+      } else {
+        // Toggle off
+        timerState.alarmEnabled = false;
+        alarmToggleBtn.textContent = 'Set Alarm';
+        alarmToggleBtn.classList.remove('pause');
+        alarmToggleBtn.classList.add('start');
+        alarmClearBtn.disabled = true;
+
+        // Hide alarm hand
+        updateAlarmHandsOnAllClocks();
+      }
+    });
+  }
+
+  if (alarmClearBtn) {
+    alarmClearBtn.addEventListener('click', () => {
+      timerState.alarmEnabled = false;
+      timerState.alarmTriggered = false;
+      alarmToggleBtn.textContent = 'Set Alarm';
+      alarmToggleBtn.classList.remove('pause');
+      alarmToggleBtn.classList.add('start');
+      alarmClearBtn.disabled = true;
+
+      // Hide alarm hand
+      updateAlarmHandsOnAllClocks();
+    });
+  }
+
+  // Setup sound settings accordion
+  const soundSettingsToggle = document.getElementById('sound-settings-toggle');
+  const soundSettingsContent = document.getElementById('sound-settings-content');
+  const soundSettingsArrow = document.getElementById('sound-settings-arrow');
+
+  if (soundSettingsToggle) {
+    soundSettingsToggle.addEventListener('click', () => {
+      const isOpen = soundSettingsContent.style.display !== 'none';
+      soundSettingsContent.style.display = isOpen ? 'none' : 'block';
+      soundSettingsArrow.textContent = isOpen ? '▼' : '▲';
+      soundSettingsToggle.style.borderRadius = isOpen ? '8px' : '8px 8px 0 0';
+    });
+  }
+
+  // Volume slider
+  const volumeSlider = document.getElementById('alert-volume');
+  const volumeDisplay = document.getElementById('alert-volume-display');
+  if (volumeSlider) {
+    volumeSlider.addEventListener('input', (e) => {
+      timerState.alertVolume = parseInt(e.target.value) / 100;
+      volumeDisplay.textContent = e.target.value + '%';
+    });
+    addScrollToSlider(volumeSlider);
+  }
+
+  // Pitch slider
+  const pitchSlider = document.getElementById('alert-pitch');
+  const pitchDisplay = document.getElementById('alert-pitch-display');
+  if (pitchSlider) {
+    pitchSlider.addEventListener('input', (e) => {
+      timerState.alertPitch = parseInt(e.target.value) * 8; // Convert percentage to Hz (100% = 800Hz)
+      pitchDisplay.textContent = e.target.value + '%';
+    });
+    addScrollToSlider(pitchSlider);
+  }
+
+  // Custom sound upload
+  const customSoundInput = document.getElementById('timer-custom-sound');
+  if (customSoundInput) {
+    customSoundInput.addEventListener('change', (e) => {
+      const file = e.target.files[0];
+      if (file && file.type.startsWith('audio/')) {
+        const reader = new FileReader();
+        reader.onload = (event) => {
+          timerState.customSoundDataUrl = event.target.result;
+          // Pre-decode the audio
+          preloadTimerCustomSound();
+          // Refresh the modal to show new buttons
+          if (interactionObject && interactionObject.userData.type === 'clock') {
+            const content = document.getElementById('interaction-content');
+            content.innerHTML = getInteractionContent(interactionObject);
+            setupTimerHandlers();
+          }
+        };
+        reader.readAsDataURL(file);
+      }
+    });
+  }
+
+  // Use custom sound button
+  const useCustomBtn = document.getElementById('timer-use-custom');
+  if (useCustomBtn) {
+    useCustomBtn.addEventListener('click', () => {
+      timerState.useCustomSound = true;
+    });
+  }
+
+  // Clear custom sound button
+  const clearSoundBtn = document.getElementById('timer-clear-sound');
+  if (clearSoundBtn) {
+    clearSoundBtn.addEventListener('click', () => {
+      timerState.customSoundDataUrl = null;
+      timerState.customSoundBuffer = null;
+      timerState.useCustomSound = false;
+      // Refresh the modal
+      if (interactionObject && interactionObject.userData.type === 'clock') {
+        const content = document.getElementById('interaction-content');
+        content.innerHTML = getInteractionContent(interactionObject);
+        setupTimerHandlers();
+      }
+    });
+  }
+
+  // Setup scroll-based digit change for timer inputs
+  setupScrollInputs();
+}
+
+// Setup scroll-based digit change for timer/alarm inputs
+function setupScrollInputs() {
+  const scrollInputs = document.querySelectorAll('.timer-scroll-input');
+  scrollInputs.forEach(input => {
+    input.addEventListener('wheel', (e) => {
+      e.preventDefault();
+      const currentValue = parseInt(input.value) || 0;
+      const min = parseInt(input.min) || 0;
+      const max = parseInt(input.max) || 59;
+      const step = e.deltaY < 0 ? 1 : -1;
+      let newValue = currentValue + step;
+
+      // Wrap around
+      if (newValue > max) newValue = min;
+      if (newValue < min) newValue = max;
+
+      input.value = newValue;
+    });
+  });
+}
+
+// Preload custom sound for timer to avoid delay
+function preloadTimerCustomSound() {
+  if (!timerState.customSoundDataUrl) return;
+
+  try {
+    const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    const base64 = timerState.customSoundDataUrl.split(',')[1];
+    const binary = atob(base64);
+    const bytes = new Uint8Array(binary.length);
+    for (let i = 0; i < binary.length; i++) {
+      bytes[i] = binary.charCodeAt(i);
+    }
+
+    audioCtx.decodeAudioData(bytes.buffer.slice(0), (buffer) => {
+      timerState.customSoundBuffer = buffer;
+    }, (err) => {
+      console.error('Error decoding custom sound:', err);
+    });
+  } catch (e) {
+    console.error('Error preloading custom sound:', e);
+  }
+}
+
+// Update alarm hands on all clock objects
+// Update the alarm hand position on a clock object
+function updateClockAlarmHand(clockObject) {
+  const alarmHand = clockObject.getObjectByName('alarmHand');
+  if (!alarmHand) return;
+
+  if (timerState.alarmEnabled) {
+    // Show the alarm hand
+    alarmHand.visible = true;
+
+    // Calculate angle for alarm time (like an hour hand)
+    // 12 hours = 360 degrees, so each hour = 30 degrees
+    const totalMinutes = timerState.alarmHours * 60 + timerState.alarmMinutes;
+    // Convert to 12-hour format and calculate angle
+    const hours12 = (timerState.alarmHours % 12) + timerState.alarmMinutes / 60;
+    const angle = -(hours12 / 12) * Math.PI * 2 + Math.PI / 2; // Start from 12 o'clock
+    alarmHand.rotation.z = angle;
+  } else {
+    // Hide the alarm hand
+    alarmHand.visible = false;
+  }
+}
+
+function updateAlarmHandsOnAllClocks() {
+  deskObjects.forEach(obj => {
+    if (obj.userData.type === 'clock') {
+      updateClockAlarmHand(obj);
+    }
+  });
 }
 
 function updateTimerDisplay() {
@@ -7757,6 +8197,52 @@ function playTimerAlert() {
     modal.style.animation = '';
   }, 1500);
 
+  const volume = timerState.alertVolume || 0.5;
+  const pitch = timerState.alertPitch || 800;
+
+  // Check if custom sound is available and should be used
+  if (timerState.useCustomSound && timerState.customSoundBuffer) {
+    try {
+      timerState.alertAudioCtx = new (window.AudioContext || window.webkitAudioContext)();
+      timerState.isAlerting = true;
+
+      // Play custom sound in a loop
+      const playCustomLoop = () => {
+        if (!timerState.isAlerting) return;
+
+        const source = timerState.alertAudioCtx.createBufferSource();
+        const gainNode = timerState.alertAudioCtx.createGain();
+        source.buffer = timerState.customSoundBuffer;
+        source.playbackRate.value = pitch / 800; // Pitch adjustment
+        source.connect(gainNode);
+        gainNode.connect(timerState.alertAudioCtx.destination);
+        gainNode.gain.value = volume;
+        source.start();
+
+        // Schedule next play after buffer duration
+        source.onended = () => {
+          if (timerState.isAlerting) {
+            setTimeout(playCustomLoop, 500); // 500ms pause between plays
+          }
+        };
+      };
+
+      playCustomLoop();
+
+      // Auto-stop after 30 seconds
+      setTimeout(() => {
+        stopTimerAlert();
+      }, 30000);
+    } catch (e) {
+      console.log('Custom audio not available, falling back to default');
+      playDefaultTimerAlert(volume, pitch);
+    }
+  } else {
+    playDefaultTimerAlert(volume, pitch);
+  }
+}
+
+function playDefaultTimerAlert(volume, pitch) {
   // Play a continuous beeping sound using Web Audio API
   // The sound will continue until stopped by middle-click on clock
   try {
@@ -7767,18 +8253,17 @@ function playTimerAlert() {
     timerState.alertOscillator.connect(gainNode);
     gainNode.connect(timerState.alertAudioCtx.destination);
 
-    timerState.alertOscillator.frequency.value = 800;
+    timerState.alertOscillator.frequency.value = pitch;
     timerState.alertOscillator.type = 'sine';
-    gainNode.gain.value = 0.3;
 
     // Create a pulsing effect by modulating the gain
     const now = timerState.alertAudioCtx.currentTime;
-    gainNode.gain.setValueAtTime(0.3, now);
+    const peakGain = 0.6 * volume;
 
     // Pulse the sound on/off
     let time = now;
     for (let i = 0; i < 60; i++) { // Up to 30 seconds of pulsing (60 * 0.5s)
-      gainNode.gain.setValueAtTime(0.3, time);
+      gainNode.gain.setValueAtTime(peakGain, time);
       gainNode.gain.setValueAtTime(0, time + 0.3);
       time += 0.5;
     }
@@ -12667,21 +13152,32 @@ function animate() {
               const audioCtx = getSharedAudioContext();
               const currentTime = audioCtx.currentTime;
               const volume = obj.userData.volume !== undefined ? obj.userData.volume : 0.5;
+              const pitchMultiplier = (obj.userData.tickPitch || 100) / 100; // Convert percentage to multiplier
 
-              if (obj.userData.tickSoundType === 'beep') {
-                // Simple beep sound
+              if (obj.userData.tickSoundType === 'custom' && obj.userData.customSoundBuffer) {
+                // Play custom sound with pitch adjustment
+                const source = audioCtx.createBufferSource();
+                const gain = audioCtx.createGain();
+                source.buffer = obj.userData.customSoundBuffer;
+                source.playbackRate.value = pitchMultiplier; // Pitch adjustment via playback rate
+                source.connect(gain);
+                gain.connect(audioCtx.destination);
+                gain.gain.setValueAtTime(volume, currentTime);
+                source.start(currentTime);
+              } else if (obj.userData.tickSoundType === 'beep') {
+                // Simple beep sound with pitch adjustment
                 const osc = audioCtx.createOscillator();
                 const gain = audioCtx.createGain();
                 osc.connect(gain);
                 gain.connect(audioCtx.destination);
-                osc.frequency.value = 880; // A5 note
+                osc.frequency.value = 880 * pitchMultiplier; // A5 note with pitch adjustment
                 osc.type = 'sine';
                 gain.gain.setValueAtTime(0.2 * volume, currentTime);
                 gain.gain.exponentialRampToValueAtTime(0.01, currentTime + 0.08);
                 osc.start(currentTime);
                 osc.stop(currentTime + 0.1);
               } else {
-                // Default: Strike/click sound (more percussive/mechanical)
+                // Default: Strike/click sound (more percussive/mechanical) with pitch adjustment
                 const osc = audioCtx.createOscillator();
                 const osc2 = audioCtx.createOscillator();
                 const gain = audioCtx.createGain();
@@ -12693,16 +13189,16 @@ function animate() {
                 filter.connect(gain);
                 gain.connect(audioCtx.destination);
 
-                // Mechanical metronome click sound
+                // Mechanical metronome click sound with pitch adjustment
                 // Use lower frequencies for a wooden "click" sound
-                osc.frequency.value = 1200; // Main click frequency
+                osc.frequency.value = 1200 * pitchMultiplier; // Main click frequency
                 osc.type = 'sine';
-                osc2.frequency.value = 300; // Low body resonance
+                osc2.frequency.value = 300 * pitchMultiplier; // Low body resonance
                 osc2.type = 'sine';
 
-                // Bandpass filter for natural wood resonance
+                // Bandpass filter for natural wood resonance (also pitch-adjusted)
                 filter.type = 'bandpass';
-                filter.frequency.value = 800;
+                filter.frequency.value = 800 * pitchMultiplier;
                 filter.Q.value = 2;
 
                 // Very sharp attack, quick exponential decay for percussive "tick"

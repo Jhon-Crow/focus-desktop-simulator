@@ -3776,6 +3776,8 @@ function createDictaphone(options = {}) {
     recordingNumber: options.recordingNumber || 1,
     // Folder for saving recordings
     recordingsFolderPath: options.recordingsFolderPath || null,
+    // Recording format: 'wav' (default) or 'mp3'
+    recordingFormat: options.recordingFormat || 'wav',
     // Colors - all black minimalist design
     mainColor: options.mainColor || '#1a1a1a', // Black
     accentColor: options.accentColor || '#2a2a2a' // Dark gray accent
@@ -3805,14 +3807,35 @@ function createDictaphone(options = {}) {
   base.receiveShadow = true;
   group.add(base);
 
-  // Long neck/stem - thin cylinder going up
+  // Long neck/stem - angled and slightly curved using TubeGeometry
   const neckRadius = 0.008;
   const neckHeight = 0.25;
-  const neckGeometry = new THREE.CylinderGeometry(neckRadius, neckRadius, neckHeight, 16);
+
+  // Create a curved path for the neck - tilted forward and slightly curved
+  class NeckCurve extends THREE.Curve {
+    constructor() {
+      super();
+    }
+    getPoint(t) {
+      // Start at base, curve forward as it goes up
+      const y = t * neckHeight;
+      // Add forward tilt (negative z) that increases with height
+      const tiltAngle = 0.25; // About 15 degrees forward
+      const curveAmount = 0.015; // Slight curve
+      const z = -t * neckHeight * Math.tan(tiltAngle) - curveAmount * Math.sin(t * Math.PI);
+      return new THREE.Vector3(0, y, z);
+    }
+  }
+
+  const neckCurve = new NeckCurve();
+  const neckGeometry = new THREE.TubeGeometry(neckCurve, 20, neckRadius, 16, false);
   const neck = new THREE.Mesh(neckGeometry, blackPlasticMaterial);
-  neck.position.set(0, baseHeight + neckHeight / 2, 0);
+  neck.position.set(0, baseHeight, 0);
   neck.castShadow = true;
   group.add(neck);
+
+  // Calculate the end position of the neck for placing the foam
+  const neckEndPoint = neckCurve.getPoint(1);
 
   // Microphone head - small oval foam (capsule shape)
   const foamRadiusX = 0.025;
@@ -3826,7 +3849,12 @@ function createDictaphone(options = {}) {
     metalness: 0
   });
   const foam = new THREE.Mesh(foamGeometry, foamMaterial);
-  foam.position.set(0, baseHeight + neckHeight + foamRadiusY * 0.7, 0);
+  // Position at the end of the curved neck
+  foam.position.set(
+    neckEndPoint.x,
+    baseHeight + neckEndPoint.y + foamRadiusY * 0.7,
+    neckEndPoint.z
+  );
   foam.castShadow = true;
   foam.name = 'microphoneFoam';
   group.add(foam);
@@ -4086,11 +4114,13 @@ async function saveDictaphoneRecording(object) {
 
     const base64Data = await base64Promise;
 
-    // Save via IPC
+    // Save via IPC with format
+    const format = object.userData.recordingFormat || 'wav';
     const result = await window.electronAPI.saveRecording(
       object.userData.recordingsFolderPath,
       object.userData.recordingNumber,
-      base64Data
+      base64Data,
+      format
     );
 
     if (result.success) {
@@ -8417,15 +8447,31 @@ function updateCustomizationPanel(object) {
         ? object.userData.recordingsFolderPath.split('/').pop() || object.userData.recordingsFolderPath.split('\\').pop()
         : 'No folder selected';
       const nextRecording = object.userData.recordingNumber || 1;
+      const recordingFormat = object.userData.recordingFormat || 'wav';
       dynamicOptions.innerHTML = `
         <div class="customization-group" style="margin-top: 20px; padding-top: 15px; border-top: 1px solid rgba(255,255,255,0.1);">
+          <label>Recording Format</label>
+          <div id="dictaphone-format-buttons" style="display: flex; gap: 8px; margin-top: 8px;">
+            <button data-format="wav" style="flex: 1; padding: 10px; background: ${recordingFormat === 'wav' ? 'rgba(79, 70, 229, 0.3)' : 'rgba(255,255,255,0.1)'}; border: 1px solid ${recordingFormat === 'wav' ? 'rgba(79, 70, 229, 0.6)' : 'rgba(255,255,255,0.2)'}; border-radius: 8px; color: #fff; cursor: pointer; font-size: 12px;">
+              WAV
+            </button>
+            <button data-format="mp3" style="flex: 1; padding: 10px; background: ${recordingFormat === 'mp3' ? 'rgba(79, 70, 229, 0.3)' : 'rgba(255,255,255,0.1)'}; border: 1px solid ${recordingFormat === 'mp3' ? 'rgba(79, 70, 229, 0.6)' : 'rgba(255,255,255,0.2)'}; border-radius: 8px; color: #fff; cursor: pointer; font-size: 12px;">
+              MP3
+            </button>
+          </div>
+          <div style="color: rgba(255,255,255,0.4); font-size: 10px; margin-top: 6px;">
+            WAV: lossless quality, larger files. MP3: compressed, smaller files.
+          </div>
+        </div>
+
+        <div class="customization-group" style="margin-top: 15px; padding-top: 15px; border-top: 1px solid rgba(255,255,255,0.1);">
           <label>Recordings Folder</label>
           <div style="display: flex; flex-direction: column; gap: 10px; margin-top: 8px;">
             <div style="color: rgba(255,255,255,0.5); font-size: 12px; word-break: break-all;">
               ${recordingsFolderDisplay}
             </div>
             <div style="color: rgba(255,255,255,0.4); font-size: 11px;">
-              Next recording: Запись ${nextRecording}.webm
+              Next recording: Запись ${nextRecording}.${recordingFormat}
             </div>
             <button id="dictaphone-select-folder" style="padding: 10px 15px; background: rgba(79, 70, 229, 0.3); border: 1px solid rgba(79, 70, 229, 0.5); border-radius: 8px; color: #fff; cursor: pointer;">
               ${object.userData.recordingsFolderPath ? 'Change Folder' : 'Select Recordings Folder'}
@@ -8447,7 +8493,8 @@ function updateCustomizationPanel(object) {
 
         <div style="margin-top: 15px; color: rgba(255,255,255,0.4); font-size: 11px;">
           Click the power button to start/stop recording.<br>
-          Records both microphone input and virtual room sounds.
+          Records both microphone input and virtual room sounds.<br>
+          Requires FFmpeg to be installed for WAV/MP3 encoding.
         </div>
       `;
       setupDictaphoneCustomizationHandlers(object);
@@ -9345,6 +9392,25 @@ function setupCassetteCustomizationHandlers(object) {
 
 function setupDictaphoneCustomizationHandlers(object) {
   setTimeout(() => {
+    // Format selection buttons
+    const formatButtons = document.querySelectorAll('#dictaphone-format-buttons button');
+    formatButtons.forEach(btn => {
+      btn.addEventListener('click', () => {
+        const format = btn.dataset.format;
+        object.userData.recordingFormat = format;
+
+        // Update button styles
+        formatButtons.forEach(b => {
+          const isSelected = b.dataset.format === format;
+          b.style.background = isSelected ? 'rgba(79, 70, 229, 0.3)' : 'rgba(255,255,255,0.1)';
+          b.style.borderColor = isSelected ? 'rgba(79, 70, 229, 0.6)' : 'rgba(255,255,255,0.2)';
+        });
+
+        saveState();
+        updateCustomizationPanel(object);
+      });
+    });
+
     // Recordings folder selection
     const selectFolderBtn = document.getElementById('dictaphone-select-folder');
     const clearFolderBtn = document.getElementById('dictaphone-clear-folder');
@@ -9352,7 +9418,8 @@ function setupDictaphoneCustomizationHandlers(object) {
     if (selectFolderBtn) {
       selectFolderBtn.addEventListener('click', async () => {
         try {
-          const result = await window.electronAPI.selectRecordingsFolder();
+          const format = object.userData.recordingFormat || 'wav';
+          const result = await window.electronAPI.selectRecordingsFolder(format);
           if (result.success && !result.canceled) {
             object.userData.recordingsFolderPath = result.folderPath;
             object.userData.recordingNumber = result.nextRecordingNumber;

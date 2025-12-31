@@ -13,8 +13,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
   readAudioFile: (filePath) => ipcRenderer.invoke('read-audio-file', filePath),
   refreshMusicFolder: (folderPath) => ipcRenderer.invoke('refresh-music-folder', folderPath),
   // Dictaphone - recording folder selection and saving
-  selectRecordingsFolder: () => ipcRenderer.invoke('select-recordings-folder'),
-  saveRecording: (folderPath, recordingNumber, audioDataBase64) => ipcRenderer.invoke('save-recording', folderPath, recordingNumber, audioDataBase64),
+  selectRecordingsFolder: (format) => ipcRenderer.invoke('select-recordings-folder', format),
+  saveRecording: (folderPath, recordingNumber, audioDataBase64, format) => ipcRenderer.invoke('save-recording', folderPath, recordingNumber, audioDataBase64, format),
   getNextRecordingNumber: (folderPath) => ipcRenderer.invoke('get-next-recording-number', folderPath),
   // Markdown editor - notes folder selection and saving
   getDefaultNotesFolder: () => ipcRenderer.invoke('get-default-notes-folder'),

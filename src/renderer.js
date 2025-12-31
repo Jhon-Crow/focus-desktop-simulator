@@ -5140,19 +5140,35 @@ async function startDictaphoneRecording(object) {
     dictaphoneState.scriptProcessor = audioCtx.createScriptProcessor(bufferSize, 1, 1);
 
     dictaphoneState.scriptProcessor.onaudioprocess = (event) => {
-      if (dictaphoneState.isRecording) {
-        // Get the input buffer's channel data and copy it
-        const inputData = event.inputBuffer.getChannelData(0);
-        // Must copy because buffer gets reused
-        dictaphoneState.pcmChunks.push(new Float32Array(inputData));
+      try {
+        if (dictaphoneState.isRecording) {
+          // Get the input buffer's channel data and copy it
+          const inputData = event.inputBuffer.getChannelData(0);
+          // Must copy because buffer gets reused
+          dictaphoneState.pcmChunks.push(new Float32Array(inputData));
+        }
+      } catch (error) {
+        console.warn('Error in audio processing callback:', error);
       }
     };
 
     // Connect: source -> scriptProcessor -> destination (for monitoring/passthrough)
-    dictaphoneState.destinationNode.stream.getAudioTracks().forEach(track => {
-      const source = audioCtx.createMediaStreamSource(new MediaStream([track]));
-      source.connect(dictaphoneState.scriptProcessor);
-    });
+    const audioTracks = dictaphoneState.destinationNode.stream.getAudioTracks();
+    console.log('Audio tracks for recording:', audioTracks.length);
+
+    if (audioTracks.length > 0) {
+      audioTracks.forEach(track => {
+        try {
+          const source = audioCtx.createMediaStreamSource(new MediaStream([track]));
+          source.connect(dictaphoneState.scriptProcessor);
+        } catch (trackError) {
+          console.warn('Error connecting audio track:', trackError);
+        }
+      });
+    } else {
+      console.warn('No audio tracks available for recording');
+    }
+
     dictaphoneState.scriptProcessor.connect(audioCtx.destination);
 
     console.log('PCM recording started, sample rate:', audioCtx.sampleRate);
@@ -5334,34 +5350,43 @@ async function saveDictaphoneRecording(object) {
 
 // Update LED visual state
 function updateDictaphoneLed(object, isRecording) {
-  const led = object.getObjectByName('recordingLed');
-  const ledLight = object.getObjectByName('ledLight');
+  try {
+    const led = object.getObjectByName('recordingLed');
+    const ledLight = object.getObjectByName('ledLight');
 
-  if (led) {
-    if (isRecording) {
-      // Bright red LED
-      led.material = new THREE.MeshStandardMaterial({
-        color: 0xff0000,
-        roughness: 0.3,
-        metalness: 0.2,
-        emissive: 0xff0000,
-        emissiveIntensity: 0.8
-      });
-    } else {
-      // Dim/off LED
-      led.material = new THREE.MeshStandardMaterial({
-        color: 0x330000,
-        roughness: 0.3,
-        metalness: 0.5,
-        transparent: true,
-        opacity: 0.3
-      });
+    if (led) {
+      // Dispose old material to prevent WebGL resource leaks
+      if (led.material) {
+        led.material.dispose();
+      }
+
+      if (isRecording) {
+        // Bright red LED
+        led.material = new THREE.MeshStandardMaterial({
+          color: 0xff0000,
+          roughness: 0.3,
+          metalness: 0.2,
+          emissive: new THREE.Color(0xff0000),
+          emissiveIntensity: 0.8
+        });
+      } else {
+        // Dim/off LED
+        led.material = new THREE.MeshStandardMaterial({
+          color: 0x330000,
+          roughness: 0.3,
+          metalness: 0.5,
+          transparent: true,
+          opacity: 0.3
+        });
+      }
     }
-  }
 
-  if (ledLight) {
-    // Set light intensity
-    ledLight.intensity = isRecording ? 0.3 : 0;
+    if (ledLight) {
+      // Set light intensity
+      ledLight.intensity = isRecording ? 0.3 : 0;
+    }
+  } catch (error) {
+    console.error('Error updating dictaphone LED:', error);
   }
 }
 
@@ -17202,14 +17227,19 @@ async function loadState() {
 function animate() {
   requestAnimationFrame(animate);
 
-  // Update physics
-  updatePhysics();
+  try {
+    // Update physics
+    updatePhysics();
 
-  // Update debug collision visualization positions
-  updateCollisionDebugPositions();
+    // Update debug collision visualization positions
+    updateCollisionDebugPositions();
+  } catch (error) {
+    console.warn('Animation loop physics error:', error);
+  }
 
   // Update object positions (lift/drop animation)
   deskObjects.forEach(obj => {
+    try {
     // Handle examine mode animation
     if (obj.userData.examineTarget) {
       const targetPos = obj.userData.examineTarget;
@@ -17437,22 +17467,29 @@ function animate() {
 
     // Animate dictaphone LED when recording (subtle pulsing glow)
     if (obj.userData.type === 'dictaphone') {
-      if (dictaphoneState.isRecording && dictaphoneState.currentRecorderId === obj.userData.id) {
-        const led = obj.getObjectByName('recordingLed');
-        const ledLight = obj.getObjectByName('ledLight');
+      try {
+        if (dictaphoneState.isRecording && dictaphoneState.currentRecorderId === obj.userData.id) {
+          const led = obj.getObjectByName('recordingLed');
+          const ledLight = obj.getObjectByName('ledLight');
 
-        if (led && ledLight) {
-          // Pulsing effect - varies between 0.5 and 1.0
-          const pulse = 0.75 + Math.sin(Date.now() * 0.005) * 0.25;
+          if (led && ledLight) {
+            // Pulsing effect - varies between 0.5 and 1.0
+            const pulse = 0.75 + Math.sin(Date.now() * 0.005) * 0.25;
 
-          // Update LED emissive intensity
-          if (led.material && led.material.emissiveIntensity !== undefined) {
-            led.material.emissiveIntensity = 0.8 * pulse;
+            // Update LED emissive intensity (safely check material properties)
+            if (led.material && typeof led.material.emissiveIntensity === 'number') {
+              led.material.emissiveIntensity = 0.8 * pulse;
+            }
+
+            // Update point light intensity
+            if (typeof ledLight.intensity === 'number') {
+              ledLight.intensity = 0.3 * pulse;
+            }
           }
-
-          // Update point light intensity
-          ledLight.intensity = 0.3 * pulse;
         }
+      } catch (error) {
+        // Silently ignore animation errors to prevent render loop crash
+        console.warn('Dictaphone LED animation error:', error);
       }
     }
 
@@ -17576,13 +17613,21 @@ function animate() {
         updateMagazinePages(obj);
       }
     }
+    } catch (objError) {
+      // Log error but continue animating other objects
+      console.warn('Animation error for object:', obj.userData?.type, objError);
+    }
   });
 
   // Render with pixel art post-processing if enabled
-  if (CONFIG.pixelation.enabled) {
-    renderPixelArt();
-  } else {
-    renderer.render(scene, camera);
+  try {
+    if (CONFIG.pixelation.enabled) {
+      renderPixelArt();
+    } else {
+      renderer.render(scene, camera);
+    }
+  } catch (renderError) {
+    console.error('Render error:', renderError);
   }
 }
 

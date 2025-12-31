@@ -5788,6 +5788,17 @@ async function saveDictaphoneRecording(object) {
     if (result.success) {
       console.log('✓ Recording saved successfully:', result.fileName);
       console.log('  File path:', result.filePath);
+      console.log('  Actual format:', result.actualFormat);
+
+      // Show message if format was different from requested
+      if (result.message) {
+        console.log('  Note:', result.message);
+        // Only show alert for unexpected format changes
+        if (result.actualFormat !== format) {
+          alert(`Note: ${result.message}`);
+        }
+      }
+
       // Increment recording number for next recording
       object.userData.recordingNumber = recordingNumber + 1;
       saveState();

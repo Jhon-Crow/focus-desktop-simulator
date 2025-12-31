@@ -139,12 +139,28 @@ ipcMain.handle('load-object-data', async (event, objectId, dataType) => {
 // the user to install FFmpeg or convert the file manually.
 
 // Check if FFmpeg is available on the system
+// Uses 'ffmpeg -version' directly for more reliable cross-platform detection
 function checkFfmpegAvailable() {
   return new Promise((resolve) => {
-    const ffmpegCmd = process.platform === 'win32' ? 'where ffmpeg' : 'which ffmpeg';
-    exec(ffmpegCmd, (error) => {
-      resolve(!error);
+    // Try running ffmpeg directly - more reliable than 'where' or 'which'
+    const ffmpeg = spawn('ffmpeg', ['-version']);
+
+    ffmpeg.on('error', () => {
+      // ffmpeg not found or not executable
+      console.log('FFmpeg check: not available (spawn error)');
+      resolve(false);
     });
+
+    ffmpeg.on('close', (code) => {
+      const available = code === 0;
+      console.log('FFmpeg check:', available ? 'available' : 'not available', '(exit code:', code + ')');
+      resolve(available);
+    });
+
+    // Kill the process after a short timeout if it hangs
+    setTimeout(() => {
+      ffmpeg.kill();
+    }, 3000);
   });
 }
 
@@ -515,36 +531,121 @@ ipcMain.handle('save-recording', async (event, folderPath, recordingNumber, audi
       const fileName = `Запись ${recordingNumber}.${outputFormat}`;
       const filePath = path.join(folderPath, fileName);
 
+      console.log('Converting to', outputFormat.toUpperCase(), '...');
+      console.log('  Input file size:', webmBuffer.length, 'bytes');
+      console.log('  Output path:', filePath);
+
       // Convert webm to wav or mp3 using FFmpeg
-      await new Promise((resolve, reject) => {
-        const ffmpegArgs = outputFormat === 'mp3'
-          ? ['-i', tempInputPath, '-vn', '-acodec', 'libmp3lame', '-q:a', '2', '-y', filePath]
-          : ['-i', tempInputPath, '-vn', '-acodec', 'pcm_s16le', '-ar', '44100', '-ac', '1', '-y', filePath];
+      let ffmpegStderr = '';
+      try {
+        await new Promise((resolve, reject) => {
+          const ffmpegArgs = outputFormat === 'mp3'
+            ? ['-i', tempInputPath, '-vn', '-acodec', 'libmp3lame', '-q:a', '2', '-y', filePath]
+            : ['-i', tempInputPath, '-vn', '-acodec', 'pcm_s16le', '-ar', '44100', '-ac', '1', '-y', filePath];
 
-        console.log('Running FFmpeg:', 'ffmpeg', ffmpegArgs.join(' '));
+          console.log('Running FFmpeg:', 'ffmpeg', ffmpegArgs.join(' '));
 
-        const ffmpeg = spawn('ffmpeg', ffmpegArgs);
+          const ffmpeg = spawn('ffmpeg', ffmpegArgs);
 
-        let stderr = '';
-        ffmpeg.stderr.on('data', (data) => {
-          stderr += data.toString();
+          ffmpeg.stderr.on('data', (data) => {
+            ffmpegStderr += data.toString();
+          });
+
+          ffmpeg.on('close', (code) => {
+            if (code === 0) {
+              console.log('FFmpeg conversion finished with code 0');
+              resolve();
+            } else {
+              console.error('FFmpeg conversion failed with code:', code);
+              console.error('FFmpeg stderr (last 1000 chars):', ffmpegStderr.slice(-1000));
+              reject(new Error(`FFmpeg exited with code ${code}: ${ffmpegStderr.slice(-200)}`));
+            }
+          });
+
+          ffmpeg.on('error', (err) => {
+            console.error('FFmpeg spawn error:', err.message);
+            reject(new Error(`Failed to run FFmpeg: ${err.message}`));
+          });
         });
+      } catch (ffmpegError) {
+        // FFmpeg failed - fall back to webm
+        console.error('FFmpeg conversion failed:', ffmpegError.message);
 
-        ffmpeg.on('close', (code) => {
-          if (code === 0) {
-            console.log('FFmpeg conversion successful');
-            resolve();
-          } else {
-            console.error('FFmpeg error:', stderr);
-            reject(new Error(`FFmpeg exited with code ${code}`));
-          }
-        });
+        // Save as webm instead
+        const webmFileName = `Запись ${recordingNumber}.webm`;
+        const webmFilePath = path.join(folderPath, webmFileName);
+        fs.copyFileSync(tempInputPath, webmFilePath);
 
-        ffmpeg.on('error', (err) => {
-          console.error('FFmpeg spawn error:', err);
-          reject(err);
-        });
-      });
+        // Clean up temp file
+        try {
+          fs.unlinkSync(tempInputPath);
+        } catch (e) {
+          console.warn('Failed to clean up temp file:', e.message);
+        }
+
+        console.log('Saved as WebM (fallback due to FFmpeg error):', webmFilePath);
+        return {
+          success: true,
+          filePath: webmFilePath,
+          fileName: webmFileName,
+          actualFormat: 'webm',
+          message: `Saved as WebM. FFmpeg conversion failed: ${ffmpegError.message}`
+        };
+      }
+
+      // Verify output file was created
+      if (!fs.existsSync(filePath)) {
+        console.error('FFmpeg finished but output file not found:', filePath);
+
+        // Save as webm instead
+        const webmFileName = `Запись ${recordingNumber}.webm`;
+        const webmFilePath = path.join(folderPath, webmFileName);
+        fs.copyFileSync(tempInputPath, webmFilePath);
+
+        // Clean up temp file
+        try {
+          fs.unlinkSync(tempInputPath);
+        } catch (e) {
+          console.warn('Failed to clean up temp file:', e.message);
+        }
+
+        return {
+          success: true,
+          filePath: webmFilePath,
+          fileName: webmFileName,
+          actualFormat: 'webm',
+          message: 'Saved as WebM. FFmpeg conversion produced no output file.'
+        };
+      }
+
+      // Check output file size
+      const outputStats = fs.statSync(filePath);
+      console.log('Output file created, size:', outputStats.size, 'bytes');
+
+      if (outputStats.size === 0) {
+        console.error('FFmpeg produced empty output file');
+
+        // Delete empty file and save as webm
+        fs.unlinkSync(filePath);
+        const webmFileName = `Запись ${recordingNumber}.webm`;
+        const webmFilePath = path.join(folderPath, webmFileName);
+        fs.copyFileSync(tempInputPath, webmFilePath);
+
+        // Clean up temp file
+        try {
+          fs.unlinkSync(tempInputPath);
+        } catch (e) {
+          console.warn('Failed to clean up temp file:', e.message);
+        }
+
+        return {
+          success: true,
+          filePath: webmFilePath,
+          fileName: webmFileName,
+          actualFormat: 'webm',
+          message: 'Saved as WebM. FFmpeg produced empty output file.'
+        };
+      }
 
       // Clean up temp file
       try {

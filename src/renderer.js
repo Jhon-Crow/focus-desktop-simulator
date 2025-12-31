@@ -689,8 +689,17 @@ let playerModeState = {
   playerWorldPos: null,
   // Button navigation state (left/right arrows)
   currentButtonIndex: -1, // -1 = front view (no button selected), 0-3 = button index
-  buttonNames: ['playButton', 'stopButton', 'prevButton', 'nextButton'],
-  buttonTypes: ['play', 'stop', 'prev', 'next']
+  // Button order is player-type specific (set when entering player mode)
+  // Mini player (cassette-player): buttons on top edge in different layout
+  // Big player (big-cassette-player): buttons on front face in order: prev, play, stop, next (left to right)
+  buttonNames: ['prevButton', 'playButton', 'stopButton', 'nextButton'], // Default for big player (left to right order)
+  buttonTypes: ['prev', 'play', 'stop', 'next'],
+  // Mini player button order (different physical layout)
+  miniPlayerButtonNames: ['prevButton', 'playButton', 'stopButton', 'nextButton'],
+  miniPlayerButtonTypes: ['prev', 'play', 'stop', 'next'],
+  // Big player button order: prev → play → stop → next → (front view) → prev ...
+  bigPlayerButtonNames: ['prevButton', 'playButton', 'stopButton', 'nextButton'],
+  bigPlayerButtonTypes: ['prev', 'play', 'stop', 'next']
 };
 
 // Double-click tracking for laptop desktop
@@ -3907,8 +3916,8 @@ async function playCassetteTrack(object, trackIndex, startTime = 0) {
   }
 
   try {
-    // Stop any currently playing audio
-    stopCassettePlayback();
+    // Stop this player's currently playing audio (not other players!)
+    stopPlayerAudio(object);
 
     // Read audio file
     const result = await window.electronAPI.readAudioFile(track.path);
@@ -3934,12 +3943,13 @@ async function playCassetteTrack(object, trackIndex, startTime = 0) {
     const audio = new Audio(result.dataUrl);
     audio.volume = 1.0; // Volume controlled through gain nodes
 
-    cassettePlayerState.audioElement = audio;
-    cassettePlayerState.currentPlayerId = object.userData.id;
+    // Store audio state per-player in object.userData (allows independent playback)
+    object.userData.audioElement = audio;
+    object.userData.audioContext = audioCtx;
 
     // Create media element source
     const sourceNode = audioCtx.createMediaElementSource(audio);
-    cassettePlayerState.sourceNode = sourceNode;
+    object.userData.sourceNode = sourceNode;
 
     // Create effect nodes
     const nodes = createCassetteAudioNodes(audioCtx);
@@ -3977,8 +3987,8 @@ async function playCassetteTrack(object, trackIndex, startTime = 0) {
     // Connect to output
     nodes.merger.connect(audioCtx.destination);
 
-    // Store nodes for cleanup
-    cassettePlayerState.effectNodes = nodes;
+    // Store nodes for cleanup per-player
+    object.userData.effectNodes = nodes;
 
     // Start LFOs
     nodes.wowLFO.start();
@@ -3994,7 +4004,7 @@ async function playCassetteTrack(object, trackIndex, startTime = 0) {
           playCassetteTrack(object, nextIndex);
         } else {
           // End of playlist
-          stopCassettePlayback();
+          stopPlayerAudio(object);
           object.userData.isPlaying = false;
           object.userData.currentTrackIndex = 0;
           object.userData.currentTime = 0;
@@ -4017,18 +4027,46 @@ async function playCassetteTrack(object, trackIndex, startTime = 0) {
     // Start playback
     await audio.play();
     object.userData.isPlaying = true;
-    cassettePlayerState.isPlaying = true;
 
     saveState();
   } catch (error) {
     console.error('Error playing cassette track:', error);
     updateCassetteScreen(object, 'PLAY ERROR');
     object.userData.isPlaying = false;
-    cassettePlayerState.isPlaying = false;
   }
 }
 
-// Stop cassette playback
+// Stop a specific player's audio (per-player audio state)
+function stopPlayerAudio(object) {
+  if (!object || !object.userData) return;
+
+  if (object.userData.audioElement) {
+    object.userData.audioElement.pause();
+    object.userData.audioElement.src = '';
+    object.userData.audioElement = null;
+  }
+
+  if (object.userData.sourceNode) {
+    try {
+      object.userData.sourceNode.disconnect();
+    } catch (e) {}
+    object.userData.sourceNode = null;
+  }
+
+  if (object.userData.effectNodes) {
+    const nodes = object.userData.effectNodes;
+    try {
+      if (nodes.wowLFO) nodes.wowLFO.stop();
+      if (nodes.flutterLFO) nodes.flutterLFO.stop();
+      if (nodes.noiseSource) nodes.noiseSource.stop();
+    } catch (e) {}
+    object.userData.effectNodes = null;
+  }
+
+  object.userData.isPlaying = false;
+}
+
+// Stop cassette playback (legacy - for backwards compatibility)
 function stopCassettePlayback() {
   if (cassettePlayerState.audioElement) {
     cassettePlayerState.audioElement.pause();
@@ -4056,9 +4094,9 @@ function stopCassettePlayback() {
   cassettePlayerState.isPlaying = false;
 }
 
-// Pause/resume cassette playback
+// Pause/resume cassette playback (uses per-player audio state)
 function toggleCassettePlayback(object) {
-  if (!cassettePlayerState.audioElement) {
+  if (!object.userData.audioElement) {
     // Not playing - start from current track
     if (object.userData.audioFiles && object.userData.audioFiles.length > 0) {
       playCassetteTrack(object, object.userData.currentTrackIndex, object.userData.currentTime);
@@ -4068,36 +4106,34 @@ function toggleCassettePlayback(object) {
     return;
   }
 
-  if (cassettePlayerState.audioElement.paused) {
-    cassettePlayerState.audioElement.play();
+  if (object.userData.audioElement.paused) {
+    object.userData.audioElement.play();
     object.userData.isPlaying = true;
-    cassettePlayerState.isPlaying = true;
     // Resume tape hiss when resuming playback
-    if (cassettePlayerState.effectNodes && cassettePlayerState.effectNodes.noiseGain) {
+    if (object.userData.effectNodes && object.userData.effectNodes.noiseGain) {
       const hissLevel = object.userData.tapeHissLevel || 0.3;
-      cassettePlayerState.effectNodes.noiseGain.gain.value = 0.015 * hissLevel;
+      object.userData.effectNodes.noiseGain.gain.value = 0.015 * hissLevel;
     }
   } else {
-    cassettePlayerState.audioElement.pause();
+    object.userData.audioElement.pause();
     object.userData.isPlaying = false;
-    cassettePlayerState.isPlaying = false;
     // Store current playback position for persistence
-    object.userData.currentTime = cassettePlayerState.audioElement.currentTime;
+    object.userData.currentTime = object.userData.audioElement.currentTime;
     // Mute tape hiss when pausing (set noise gain to 0)
-    if (cassettePlayerState.effectNodes && cassettePlayerState.effectNodes.noiseGain) {
-      cassettePlayerState.effectNodes.noiseGain.gain.value = 0;
+    if (object.userData.effectNodes && object.userData.effectNodes.noiseGain) {
+      object.userData.effectNodes.noiseGain.gain.value = 0;
     }
   }
 
   saveState();
 }
 
-// Previous track
+// Previous track (uses per-player audio state)
 function cassettePrevTrack(object) {
   if (!object.userData.audioFiles || object.userData.audioFiles.length === 0) return;
 
   const newIndex = Math.max(0, object.userData.currentTrackIndex - 1);
-  if (object.userData.isPlaying || cassettePlayerState.isPlaying) {
+  if (object.userData.isPlaying) {
     playCassetteTrack(object, newIndex);
   } else {
     object.userData.currentTrackIndex = newIndex;
@@ -4106,12 +4142,12 @@ function cassettePrevTrack(object) {
   }
 }
 
-// Next track
+// Next track (uses per-player audio state)
 function cassetteNextTrack(object) {
   if (!object.userData.audioFiles || object.userData.audioFiles.length === 0) return;
 
   const newIndex = Math.min(object.userData.audioFiles.length - 1, object.userData.currentTrackIndex + 1);
-  if (object.userData.isPlaying || cassettePlayerState.isPlaying) {
+  if (object.userData.isPlaying) {
     playCassetteTrack(object, newIndex);
   } else {
     object.userData.currentTrackIndex = newIndex;
@@ -4120,11 +4156,12 @@ function cassetteNextTrack(object) {
   }
 }
 
-// Stop cassette player
+// Stop cassette player (uses per-player audio state)
 function cassetteStop(object) {
-  stopCassettePlayback();
+  stopPlayerAudio(object);
   object.userData.isPlaying = false;
   object.userData.currentTrackIndex = 0;
+  object.userData.currentTime = 0;
 
   if (object.userData.audioFiles && object.userData.audioFiles.length > 0) {
     updateCassetteScreen(object, 'STOPPED');
@@ -6716,23 +6753,10 @@ function onMouseDown(event) {
   }
 
   // If in player mode:
-  // - LMB clicking on the player interacts with buttons (same as MMB)
-  // - LMB clicking outside the player exits player mode
+  // - LMB clicking anywhere exits player mode (for consistency, all button clicks use MMB only)
   if (playerModeState.active && playerModeState.player) {
-    updateMousePosition(event);
-    raycaster.setFromCamera(mouse, camera);
-    const intersects = raycaster.intersectObjects([playerModeState.player], true);
-
-    if (intersects.length > 0) {
-      // Clicked on the player - handle button interaction (same as MMB click)
-      const clickedMesh = intersects[0].object;
-      performQuickInteraction(playerModeState.player, clickedMesh);
-      return;
-    } else {
-      // Clicked outside the player - exit player mode
-      exitPlayerMode();
-      return;
-    }
+    exitPlayerMode();
+    return;
   }
 
   // If in examine mode with LMB click:
@@ -9247,10 +9271,8 @@ function setupCassetteCustomizationHandlers(object) {
 
     if (clearFolderBtn) {
       clearFolderBtn.addEventListener('click', () => {
-        // Stop playback first
-        if (cassettePlayerState.currentPlayerId === object.userData.id) {
-          stopCassettePlayback();
-        }
+        // Stop this player's playback first (per-player audio state)
+        stopPlayerAudio(object);
 
         object.userData.musicFolderPath = null;
         object.userData.audioFiles = [];
@@ -9270,9 +9292,9 @@ function setupCassetteCustomizationHandlers(object) {
         object.userData.volume = parseInt(e.target.value) / 100;
         volumeDisplay.textContent = e.target.value + '%';
 
-        // Update live playback volume if this player is active
-        if (cassettePlayerState.currentPlayerId === object.userData.id && cassettePlayerState.effectNodes) {
-          cassettePlayerState.effectNodes.mainGain.gain.value = object.userData.volume;
+        // Update live playback volume for this player (per-player audio state)
+        if (object.userData.effectNodes) {
+          object.userData.effectNodes.mainGain.gain.value = object.userData.volume;
         }
         saveState();
       });
@@ -9300,9 +9322,9 @@ function setupCassetteCustomizationHandlers(object) {
         object.userData.tapeHissLevel = parseInt(e.target.value) / 100;
         hissDisplay.textContent = e.target.value + '%';
 
-        // Update live playback if active
-        if (cassettePlayerState.currentPlayerId === object.userData.id && cassettePlayerState.effectNodes) {
-          cassettePlayerState.effectNodes.noiseGain.gain.value = 0.015 * object.userData.tapeHissLevel;
+        // Update live playback for this player (per-player audio state)
+        if (object.userData.effectNodes) {
+          object.userData.effectNodes.noiseGain.gain.value = 0.015 * object.userData.tapeHissLevel;
         }
         saveState();
       });
@@ -9317,10 +9339,10 @@ function setupCassetteCustomizationHandlers(object) {
         object.userData.wowFlutterLevel = parseInt(e.target.value) / 100;
         flutterDisplay.textContent = e.target.value + '%';
 
-        // Update live playback if active
-        if (cassettePlayerState.currentPlayerId === object.userData.id && cassettePlayerState.effectNodes) {
-          cassettePlayerState.effectNodes.wowLFOGain.gain.value = 0.001 * object.userData.wowFlutterLevel;
-          cassettePlayerState.effectNodes.flutterLFOGain.gain.value = 0.0005 * object.userData.wowFlutterLevel;
+        // Update live playback for this player (per-player audio state)
+        if (object.userData.effectNodes) {
+          object.userData.effectNodes.wowLFOGain.gain.value = 0.001 * object.userData.wowFlutterLevel;
+          object.userData.effectNodes.flutterLFOGain.gain.value = 0.0005 * object.userData.wowFlutterLevel;
         }
         saveState();
       });
@@ -9335,9 +9357,9 @@ function setupCassetteCustomizationHandlers(object) {
         object.userData.saturationLevel = parseInt(e.target.value) / 100;
         saturationDisplay.textContent = e.target.value + '%';
 
-        // Update live playback if active
-        if (cassettePlayerState.currentPlayerId === object.userData.id && cassettePlayerState.effectNodes) {
-          cassettePlayerState.effectNodes.saturation.curve = createSaturationCurve(object.userData.saturationLevel);
+        // Update live playback for this player (per-player audio state)
+        if (object.userData.effectNodes) {
+          object.userData.effectNodes.saturation.curve = createSaturationCurve(object.userData.saturationLevel);
         }
         saveState();
       });
@@ -9352,9 +9374,9 @@ function setupCassetteCustomizationHandlers(object) {
         object.userData.lowCutoff = parseInt(e.target.value);
         lowcutDisplay.textContent = e.target.value + 'Hz';
 
-        // Update live playback if active
-        if (cassettePlayerState.currentPlayerId === object.userData.id && cassettePlayerState.effectNodes) {
-          cassettePlayerState.effectNodes.highpass.frequency.value = object.userData.lowCutoff;
+        // Update live playback for this player (per-player audio state)
+        if (object.userData.effectNodes) {
+          object.userData.effectNodes.highpass.frequency.value = object.userData.lowCutoff;
         }
         saveState();
       });
@@ -9369,9 +9391,9 @@ function setupCassetteCustomizationHandlers(object) {
         object.userData.highCutoff = parseInt(e.target.value);
         highcutDisplay.textContent = e.target.value + 'Hz';
 
-        // Update live playback if active
-        if (cassettePlayerState.currentPlayerId === object.userData.id && cassettePlayerState.effectNodes) {
-          cassettePlayerState.effectNodes.lowpass.frequency.value = object.userData.highCutoff;
+        // Update live playback for this player (per-player audio state)
+        if (object.userData.effectNodes) {
+          object.userData.effectNodes.lowpass.frequency.value = object.userData.highCutoff;
         }
         saveState();
       });
@@ -14111,6 +14133,18 @@ function enterPlayerMode(player) {
   playerModeState.active = true;
   playerModeState.player = player;
 
+  // Set button order based on player type
+  // Big player: buttons on front face in order prev → play → stop → next (left to right)
+  // Mini player: buttons on top edge, same order for consistency
+  const isBigPlayer = player.userData.type === 'big-cassette-player';
+  if (isBigPlayer) {
+    playerModeState.buttonNames = playerModeState.bigPlayerButtonNames;
+    playerModeState.buttonTypes = playerModeState.bigPlayerButtonTypes;
+  } else {
+    playerModeState.buttonNames = playerModeState.miniPlayerButtonNames;
+    playerModeState.buttonTypes = playerModeState.miniPlayerButtonTypes;
+  }
+
   // Reset zoom and pan offsets
   playerModeState.zoomDistance = 0.25;
   playerModeState.panOffsetX = 0;
@@ -14133,12 +14167,17 @@ function enterPlayerMode(player) {
   // Get player's rotation to calculate correct camera position
   const playerRotationY = player.rotation.y;
 
-  // Calculate target camera position - same as front view when navigating with arrows
-  // Front view positions camera slightly above center to see the screen
-  const viewDistance = 0.15 * playerScale;
+  // Calculate target camera position - different for big vs mini player
+  // Big player is much larger and needs more distance to see screen properly
+  // Mini player: compact, needs to be closer
+  const viewDistance = isBigPlayer ? 0.5 * playerScale : 0.15 * playerScale;
+  // Big player: camera at center height to see screen properly
+  // Mini player: slightly above center
+  const cameraHeight = isBigPlayer ? 0.08 * playerScale : 0.04 * playerScale;
+
   const targetCameraPos = new THREE.Vector3(
     playerWorldPos.x + Math.sin(playerRotationY) * viewDistance,
-    playerWorldPos.y + 0.04 * playerScale, // Slightly above center to see screen
+    playerWorldPos.y + cameraHeight,
     playerWorldPos.z + Math.cos(playerRotationY) * viewDistance
   );
 
@@ -14239,14 +14278,20 @@ function navigatePlayerButtons(direction) {
   // Get player's rotation to calculate correct button positions
   const playerRotationY = player.rotation.y;
 
+  // Different camera positioning based on player type
+  const isBigPlayer = player.userData.type === 'big-cassette-player';
+
   if (newIndex === -1) {
     // Front view mode - camera faces the player screen directly
-    const viewDistance = 0.15 * playerScale;
+    // Big player is much larger and needs more distance to see screen properly
+    const viewDistance = isBigPlayer ? 0.5 * playerScale : 0.15 * playerScale;
+    // Big player: camera at center height to see screen properly
+    const cameraHeight = isBigPlayer ? 0.08 * playerScale : 0.04 * playerScale;
 
     // Calculate target position in front of the player (accounting for player rotation)
     const targetCameraPos = new THREE.Vector3(
       playerWorldPos.x + Math.sin(playerRotationY) * viewDistance,
-      playerWorldPos.y + 0.04 * playerScale, // Slightly above center to see screen
+      playerWorldPos.y + cameraHeight,
       playerWorldPos.z + Math.cos(playerRotationY) * viewDistance
     );
 
@@ -14267,13 +14312,14 @@ function navigatePlayerButtons(direction) {
 
         // Position camera above and angled to see the button
         // Different positioning based on player type:
-        // - Mini player (cassette-player): buttons on TOP EDGE, need to look down more
+        // - Mini player (cassette-player): buttons on TOP EDGE, need to look down more (~4 degrees additional)
         // - Big player (big-cassette-player): buttons on FRONT FACE, look more level
-        const isBigPlayer = player.userData.type === 'big-cassette-player';
-        const viewDistance = isBigPlayer ? 0.12 * playerScale : 0.08 * playerScale;
-        const cameraHeight = isBigPlayer ? 0.04 * playerScale : 0.08 * playerScale;
-        // Increased tilt for better button visibility (more tilted down)
-        const buttonTilt = isBigPlayer ? -0.4 : -0.6;
+        const viewDistance = isBigPlayer ? 0.25 * playerScale : 0.08 * playerScale;
+        const cameraHeight = isBigPlayer ? 0.06 * playerScale : 0.08 * playerScale;
+        // Increased tilt for better button visibility
+        // Mini player: -0.67 radians (original -0.6 + ~4 degrees = ~0.07 radians more)
+        // Big player: -0.4 radians (looking more level at front-facing buttons)
+        const buttonTilt = isBigPlayer ? -0.4 : -0.67;
 
         const targetCameraPos = new THREE.Vector3(
           buttonWorldPos.x + Math.sin(playerRotationY) * viewDistance,
@@ -15691,9 +15737,9 @@ async function saveStateImmediate() {
           data.lowCutoff = obj.userData.lowCutoff;
           data.highCutoff = obj.userData.highCutoff;
           // Save playback position and state for resume after reload
-          // Get current time from audio element if playing
-          if (cassettePlayerState.audioElement && cassettePlayerState.currentPlayerId === obj.userData.id) {
-            data.currentTime = cassettePlayerState.audioElement.currentTime;
+          // Get current time from player's audio element if playing (per-player audio state)
+          if (obj.userData.audioElement) {
+            data.currentTime = obj.userData.audioElement.currentTime;
             data.wasPlaying = obj.userData.isPlaying;
           } else {
             data.currentTime = obj.userData.currentTime || 0;
@@ -16453,8 +16499,8 @@ function animate() {
     if (obj.userData.type === 'cassette-player' || obj.userData.type === 'big-cassette-player') {
       const reels = obj.getObjectByName('reels');
       if (reels) {
-        // Only spin reels when this player is actively playing
-        if (cassettePlayerState.isPlaying && cassettePlayerState.currentPlayerId === obj.userData.id) {
+        // Only spin reels when this player is actively playing (per-player audio state)
+        if (obj.userData.isPlaying && obj.userData.audioElement && !obj.userData.audioElement.paused) {
           // Rotate both reels (visible through the window)
           obj.userData.reelRotation = (obj.userData.reelRotation || 0) + 0.05;
 

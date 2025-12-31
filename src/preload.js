@@ -11,5 +11,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // Cassette player - music folder selection and audio file reading
   selectMusicFolder: () => ipcRenderer.invoke('select-music-folder'),
   readAudioFile: (filePath) => ipcRenderer.invoke('read-audio-file', filePath),
-  refreshMusicFolder: (folderPath) => ipcRenderer.invoke('refresh-music-folder', folderPath)
+  refreshMusicFolder: (folderPath) => ipcRenderer.invoke('refresh-music-folder', folderPath),
+  // Dictaphone - recording folder selection and saving
+  selectRecordingsFolder: () => ipcRenderer.invoke('select-recordings-folder'),
+  saveRecording: (folderPath, recordingNumber, audioDataBase64) => ipcRenderer.invoke('save-recording', folderPath, recordingNumber, audioDataBase64),
+  getNextRecordingNumber: (folderPath) => ipcRenderer.invoke('get-next-recording-number', folderPath)
 });

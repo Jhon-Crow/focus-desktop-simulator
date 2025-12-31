@@ -360,3 +360,101 @@ ipcMain.handle('refresh-music-folder', async (event, folderPath) => {
     return { success: false, error: error.message };
   }
 });
+
+// ============================================================================
+// DICTAPHONE - Recording folder selection and audio saving
+// ============================================================================
+
+// Select folder for saving recordings
+ipcMain.handle('select-recordings-folder', async () => {
+  try {
+    const result = await dialog.showOpenDialog(mainWindow, {
+      properties: ['openDirectory'],
+      title: 'Select Recordings Folder'
+    });
+
+    if (result.canceled || result.filePaths.length === 0) {
+      return { success: true, canceled: true };
+    }
+
+    const folderPath = result.filePaths[0];
+
+    // Count existing recordings to determine next number
+    const files = fs.readdirSync(folderPath);
+    const recordingPattern = /^Запись (\d+)\.webm$/;
+    let maxNumber = 0;
+
+    files.forEach(file => {
+      const match = file.match(recordingPattern);
+      if (match) {
+        const num = parseInt(match[1], 10);
+        if (num > maxNumber) maxNumber = num;
+      }
+    });
+
+    return {
+      success: true,
+      folderPath: folderPath,
+      nextRecordingNumber: maxNumber + 1
+    };
+  } catch (error) {
+    console.error('Error selecting recordings folder:', error);
+    return { success: false, error: error.message };
+  }
+});
+
+// Save recording to file
+ipcMain.handle('save-recording', async (event, folderPath, recordingNumber, audioDataBase64) => {
+  try {
+    if (!fs.existsSync(folderPath)) {
+      return { success: false, error: 'Folder not found' };
+    }
+
+    const fileName = `Запись ${recordingNumber}.webm`;
+    const filePath = path.join(folderPath, fileName);
+
+    // Decode base64 and save
+    const audioBuffer = Buffer.from(audioDataBase64, 'base64');
+    fs.writeFileSync(filePath, audioBuffer);
+
+    console.log('Recording saved:', filePath);
+
+    return {
+      success: true,
+      filePath: filePath,
+      fileName: fileName
+    };
+  } catch (error) {
+    console.error('Error saving recording:', error);
+    return { success: false, error: error.message };
+  }
+});
+
+// Get next recording number for a folder
+ipcMain.handle('get-next-recording-number', async (event, folderPath) => {
+  try {
+    if (!fs.existsSync(folderPath)) {
+      return { success: false, error: 'Folder not found' };
+    }
+
+    const files = fs.readdirSync(folderPath);
+    const recordingPattern = /^Запись (\d+)\.webm$/;
+    let maxNumber = 0;
+
+    files.forEach(file => {
+      const match = file.match(recordingPattern);
+      if (match) {
+        const num = parseInt(match[1], 10);
+        if (num > maxNumber) maxNumber = num;
+      }
+    });
+
+    return {
+      success: true,
+      nextNumber: maxNumber + 1
+    };
+  } catch (error) {
+    console.error('Error getting next recording number:', error);
+    return { success: false, error: error.message };
+  }
+});

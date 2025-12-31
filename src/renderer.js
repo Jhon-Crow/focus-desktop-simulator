@@ -1146,7 +1146,8 @@ const PRESET_CREATORS = {
   hourglass: createHourglass,
   paper: createPaper,
   metronome: createMetronome,
-  'cassette-player': createCassettePlayer
+  'cassette-player': createCassettePlayer,
+  dictaphone: createDictaphone
 };
 
 // ============================================================================
@@ -1204,7 +1205,8 @@ const PALETTE_CATEGORIES = {
     icon: '🎵',
     variants: [
       { id: 'metronome', name: 'Metronome', icon: '🎵' },
-      { id: 'cassette-player', name: 'Cassette Player', icon: '📼' }
+      { id: 'cassette-player', name: 'Cassette Player', icon: '📼' },
+      { id: 'dictaphone', name: 'Dictaphone', icon: '🎙️' }
     ],
     activeIndex: 0
   },
@@ -3741,6 +3743,410 @@ function handleCassetteButtonClick(object, buttonType) {
       break;
     case 'next':
       cassetteNextTrack(object);
+      break;
+  }
+}
+
+// ============================================================================
+// DICTAPHONE
+// ============================================================================
+// Dictaphone state for recording
+let dictaphoneState = {
+  audioContext: null,
+  mediaRecorder: null,
+  recordedChunks: [],
+  isRecording: false,
+  currentRecorderId: null,
+  microphoneStream: null,
+  // For mixing virtual room sounds with microphone
+  destinationNode: null,
+  microphoneGainNode: null,
+  virtualAudioGainNode: null
+};
+
+function createDictaphone(options = {}) {
+  const group = new THREE.Group();
+  group.userData = {
+    type: 'dictaphone',
+    name: 'Dictaphone',
+    interactive: false, // Uses button clicks, not modal interaction
+    // Recording state
+    isRecording: false,
+    recordingNumber: options.recordingNumber || 1,
+    // Folder for saving recordings
+    recordingsFolderPath: options.recordingsFolderPath || null,
+    // Colors - all black minimalist design
+    mainColor: options.mainColor || '#1a1a1a', // Black
+    accentColor: options.accentColor || '#2a2a2a' // Dark gray accent
+  };
+
+  // Materials - black plastic
+  const blackPlasticMaterial = new THREE.MeshStandardMaterial({
+    color: new THREE.Color(group.userData.mainColor),
+    roughness: 0.7,
+    metalness: 0.1
+  });
+
+  const darkGrayMaterial = new THREE.MeshStandardMaterial({
+    color: new THREE.Color(group.userData.accentColor),
+    roughness: 0.6,
+    metalness: 0.2
+  });
+
+  // Flat base/stand - rectangular, flat
+  const baseWidth = 0.12;
+  const baseDepth = 0.08;
+  const baseHeight = 0.015;
+  const baseGeometry = new THREE.BoxGeometry(baseWidth, baseHeight, baseDepth);
+  const base = new THREE.Mesh(baseGeometry, blackPlasticMaterial);
+  base.position.y = baseHeight / 2;
+  base.castShadow = true;
+  base.receiveShadow = true;
+  group.add(base);
+
+  // Long neck/stem - thin cylinder going up
+  const neckRadius = 0.008;
+  const neckHeight = 0.25;
+  const neckGeometry = new THREE.CylinderGeometry(neckRadius, neckRadius, neckHeight, 16);
+  const neck = new THREE.Mesh(neckGeometry, blackPlasticMaterial);
+  neck.position.set(0, baseHeight + neckHeight / 2, 0);
+  neck.castShadow = true;
+  group.add(neck);
+
+  // Microphone head - small oval foam (capsule shape)
+  const foamRadiusX = 0.025;
+  const foamRadiusY = 0.035;
+  const foamGeometry = new THREE.SphereGeometry(foamRadiusX, 16, 12);
+  foamGeometry.scale(1, foamRadiusY / foamRadiusX, 1); // Make it oval
+
+  const foamMaterial = new THREE.MeshStandardMaterial({
+    color: 0x1a1a1a, // Black foam
+    roughness: 0.95,
+    metalness: 0
+  });
+  const foam = new THREE.Mesh(foamGeometry, foamMaterial);
+  foam.position.set(0, baseHeight + neckHeight + foamRadiusY * 0.7, 0);
+  foam.castShadow = true;
+  foam.name = 'microphoneFoam';
+  group.add(foam);
+
+  // Power button on the base (like laptop power button) - circular
+  const buttonRadius = 0.012;
+  const buttonHeight = 0.004;
+  const buttonGeometry = new THREE.CylinderGeometry(buttonRadius, buttonRadius, buttonHeight, 16);
+
+  const buttonMaterial = new THREE.MeshStandardMaterial({
+    color: 0x3a3a3a,
+    roughness: 0.4,
+    metalness: 0.3
+  });
+  const powerButton = new THREE.Mesh(buttonGeometry, buttonMaterial);
+  powerButton.position.set(0, baseHeight + buttonHeight / 2, baseDepth / 2 - 0.015);
+  powerButton.rotation.x = Math.PI / 2; // Lay flat facing user
+  powerButton.name = 'powerButton';
+  powerButton.userData.buttonType = 'power';
+  powerButton.castShadow = true;
+  group.add(powerButton);
+
+  // Power button symbol (circle with line) - decorative
+  const symbolGeometry = new THREE.RingGeometry(0.005, 0.007, 16);
+  const symbolMaterial = new THREE.MeshBasicMaterial({
+    color: 0x666666,
+    side: THREE.DoubleSide
+  });
+  const powerSymbol = new THREE.Mesh(symbolGeometry, symbolMaterial);
+  powerSymbol.position.set(0, baseHeight + buttonHeight + 0.001, baseDepth / 2 - 0.015);
+  powerSymbol.rotation.x = -Math.PI / 2;
+  powerSymbol.userData.buttonType = 'power';
+  group.add(powerSymbol);
+
+  // Power symbol line at top
+  const lineGeometry = new THREE.BoxGeometry(0.002, 0.006, 0.001);
+  const powerLine = new THREE.Mesh(lineGeometry, symbolMaterial);
+  powerLine.position.set(0, baseHeight + buttonHeight + 0.001, baseDepth / 2 - 0.015 + 0.006);
+  powerLine.rotation.x = -Math.PI / 2;
+  powerLine.userData.buttonType = 'power';
+  group.add(powerLine);
+
+  // LED indicator - small, hidden when not recording
+  const ledRadius = 0.004;
+  const ledGeometry = new THREE.SphereGeometry(ledRadius, 12, 8);
+
+  // LED off material (barely visible dark)
+  const ledOffMaterial = new THREE.MeshStandardMaterial({
+    color: 0x330000,
+    roughness: 0.3,
+    metalness: 0.5,
+    transparent: true,
+    opacity: 0.3
+  });
+
+  const led = new THREE.Mesh(ledGeometry, ledOffMaterial);
+  led.position.set(buttonRadius + 0.008, baseHeight + 0.003, baseDepth / 2 - 0.015);
+  led.name = 'recordingLed';
+  group.add(led);
+
+  // LED point light (red glow when recording) - starts invisible
+  const ledLight = new THREE.PointLight(0xff0000, 0, 0.5, 2);
+  ledLight.position.copy(led.position);
+  ledLight.name = 'ledLight';
+  group.add(ledLight);
+
+  group.position.y = getDeskSurfaceY();
+
+  return group;
+}
+
+// Toggle dictaphone recording
+async function toggleDictaphoneRecording(object) {
+  if (!object || object.userData.type !== 'dictaphone') return;
+
+  if (object.userData.isRecording) {
+    // Stop recording
+    await stopDictaphoneRecording(object);
+  } else {
+    // Start recording
+    await startDictaphoneRecording(object);
+  }
+}
+
+// Start recording
+async function startDictaphoneRecording(object) {
+  if (!object || object.userData.isRecording) return;
+
+  // Check if folder is set
+  if (!object.userData.recordingsFolderPath) {
+    console.log('No recordings folder set - opening folder selection');
+    const result = await window.electronAPI.selectRecordingsFolder();
+    if (!result.success || result.canceled) {
+      console.log('Folder selection canceled');
+      return;
+    }
+    object.userData.recordingsFolderPath = result.folderPath;
+    object.userData.recordingNumber = result.nextRecordingNumber;
+    saveState();
+  }
+
+  try {
+    // Create audio context if needed
+    if (!dictaphoneState.audioContext) {
+      dictaphoneState.audioContext = new (window.AudioContext || window.webkitAudioContext)();
+    }
+
+    const audioCtx = dictaphoneState.audioContext;
+
+    // Resume audio context if suspended
+    if (audioCtx.state === 'suspended') {
+      await audioCtx.resume();
+    }
+
+    // Create destination for mixing audio sources
+    dictaphoneState.destinationNode = audioCtx.createMediaStreamDestination();
+
+    // Request microphone access
+    try {
+      const micStream = await navigator.mediaDevices.getUserMedia({
+        audio: {
+          echoCancellation: false,
+          noiseSuppression: false,
+          autoGainControl: false
+        }
+      });
+      dictaphoneState.microphoneStream = micStream;
+
+      // Connect microphone to destination
+      const micSource = audioCtx.createMediaStreamSource(micStream);
+      dictaphoneState.microphoneGainNode = audioCtx.createGain();
+      dictaphoneState.microphoneGainNode.gain.value = 1.0;
+      micSource.connect(dictaphoneState.microphoneGainNode);
+      dictaphoneState.microphoneGainNode.connect(dictaphoneState.destinationNode);
+
+      console.log('Microphone connected for recording');
+    } catch (micError) {
+      console.warn('Could not access microphone:', micError);
+      // Continue without microphone - will record only virtual sounds
+    }
+
+    // Connect virtual room sounds if cassette player is playing
+    if (cassettePlayerState.isPlaying && cassettePlayerState.gainNode) {
+      dictaphoneState.virtualAudioGainNode = audioCtx.createGain();
+      dictaphoneState.virtualAudioGainNode.gain.value = 0.5; // Mix at 50%
+
+      // Connect from cassette's gain node to our destination
+      cassettePlayerState.gainNode.connect(dictaphoneState.virtualAudioGainNode);
+      dictaphoneState.virtualAudioGainNode.connect(dictaphoneState.destinationNode);
+
+      console.log('Virtual audio connected for recording');
+    }
+
+    // Create MediaRecorder
+    const options = { mimeType: 'audio/webm;codecs=opus' };
+    if (!MediaRecorder.isTypeSupported(options.mimeType)) {
+      options.mimeType = 'audio/webm';
+    }
+
+    dictaphoneState.recordedChunks = [];
+    dictaphoneState.mediaRecorder = new MediaRecorder(
+      dictaphoneState.destinationNode.stream,
+      options
+    );
+
+    dictaphoneState.mediaRecorder.ondataavailable = (event) => {
+      if (event.data.size > 0) {
+        dictaphoneState.recordedChunks.push(event.data);
+      }
+    };
+
+    dictaphoneState.mediaRecorder.onstop = async () => {
+      // Handle saving when recording stops
+      await saveDictaphoneRecording(object);
+    };
+
+    // Start recording
+    dictaphoneState.mediaRecorder.start(100); // Collect data every 100ms
+    dictaphoneState.isRecording = true;
+    dictaphoneState.currentRecorderId = object.userData.id;
+    object.userData.isRecording = true;
+
+    // Update LED visual
+    updateDictaphoneLed(object, true);
+
+    console.log('Dictaphone recording started');
+    saveState();
+
+  } catch (error) {
+    console.error('Error starting dictaphone recording:', error);
+    object.userData.isRecording = false;
+    dictaphoneState.isRecording = false;
+  }
+}
+
+// Stop recording
+async function stopDictaphoneRecording(object) {
+  if (!object || !object.userData.isRecording) return;
+
+  try {
+    // Stop MediaRecorder
+    if (dictaphoneState.mediaRecorder && dictaphoneState.mediaRecorder.state !== 'inactive') {
+      dictaphoneState.mediaRecorder.stop();
+    }
+
+    // Stop microphone stream
+    if (dictaphoneState.microphoneStream) {
+      dictaphoneState.microphoneStream.getTracks().forEach(track => track.stop());
+      dictaphoneState.microphoneStream = null;
+    }
+
+    // Disconnect virtual audio
+    if (dictaphoneState.virtualAudioGainNode) {
+      try {
+        dictaphoneState.virtualAudioGainNode.disconnect();
+      } catch (e) {}
+      dictaphoneState.virtualAudioGainNode = null;
+    }
+
+    // Update state
+    object.userData.isRecording = false;
+    dictaphoneState.isRecording = false;
+    dictaphoneState.currentRecorderId = null;
+
+    // Update LED visual
+    updateDictaphoneLed(object, false);
+
+    console.log('Dictaphone recording stopped');
+    saveState();
+
+  } catch (error) {
+    console.error('Error stopping dictaphone recording:', error);
+  }
+}
+
+// Save recording to file
+async function saveDictaphoneRecording(object) {
+  if (dictaphoneState.recordedChunks.length === 0) {
+    console.log('No recording data to save');
+    return;
+  }
+
+  try {
+    // Create blob from chunks
+    const blob = new Blob(dictaphoneState.recordedChunks, { type: 'audio/webm' });
+
+    // Convert to base64
+    const reader = new FileReader();
+    const base64Promise = new Promise((resolve, reject) => {
+      reader.onloadend = () => {
+        const base64 = reader.result.split(',')[1]; // Remove data URL prefix
+        resolve(base64);
+      };
+      reader.onerror = reject;
+    });
+    reader.readAsDataURL(blob);
+
+    const base64Data = await base64Promise;
+
+    // Save via IPC
+    const result = await window.electronAPI.saveRecording(
+      object.userData.recordingsFolderPath,
+      object.userData.recordingNumber,
+      base64Data
+    );
+
+    if (result.success) {
+      console.log('Recording saved:', result.fileName);
+      // Increment recording number for next recording
+      object.userData.recordingNumber++;
+      saveState();
+    } else {
+      console.error('Failed to save recording:', result.error);
+    }
+
+    // Clear chunks
+    dictaphoneState.recordedChunks = [];
+
+  } catch (error) {
+    console.error('Error saving recording:', error);
+  }
+}
+
+// Update LED visual state
+function updateDictaphoneLed(object, isRecording) {
+  const led = object.getObjectByName('recordingLed');
+  const ledLight = object.getObjectByName('ledLight');
+
+  if (led) {
+    if (isRecording) {
+      // Bright red LED
+      led.material = new THREE.MeshStandardMaterial({
+        color: 0xff0000,
+        roughness: 0.3,
+        metalness: 0.2,
+        emissive: 0xff0000,
+        emissiveIntensity: 0.8
+      });
+    } else {
+      // Dim/off LED
+      led.material = new THREE.MeshStandardMaterial({
+        color: 0x330000,
+        roughness: 0.3,
+        metalness: 0.5,
+        transparent: true,
+        opacity: 0.3
+      });
+    }
+  }
+
+  if (ledLight) {
+    // Set light intensity
+    ledLight.intensity = isRecording ? 0.3 : 0;
+  }
+}
+
+// Handle dictaphone button click
+function handleDictaphoneButtonClick(object, buttonType) {
+  switch (buttonType) {
+    case 'power':
+      toggleDictaphoneRecording(object);
       break;
   }
 }
@@ -7986,6 +8392,47 @@ function updateCustomizationPanel(object) {
       `;
       setupCassetteCustomizationHandlers(object);
       break;
+
+    case 'dictaphone':
+      const recordingsFolderDisplay = object.userData.recordingsFolderPath
+        ? object.userData.recordingsFolderPath.split('/').pop() || object.userData.recordingsFolderPath.split('\\').pop()
+        : 'No folder selected';
+      const nextRecording = object.userData.recordingNumber || 1;
+      dynamicOptions.innerHTML = `
+        <div class="customization-group" style="margin-top: 20px; padding-top: 15px; border-top: 1px solid rgba(255,255,255,0.1);">
+          <label>Recordings Folder</label>
+          <div style="display: flex; flex-direction: column; gap: 10px; margin-top: 8px;">
+            <div style="color: rgba(255,255,255,0.5); font-size: 12px; word-break: break-all;">
+              ${recordingsFolderDisplay}
+            </div>
+            <div style="color: rgba(255,255,255,0.4); font-size: 11px;">
+              Next recording: Запись ${nextRecording}.webm
+            </div>
+            <button id="dictaphone-select-folder" style="padding: 10px 15px; background: rgba(79, 70, 229, 0.3); border: 1px solid rgba(79, 70, 229, 0.5); border-radius: 8px; color: #fff; cursor: pointer;">
+              ${object.userData.recordingsFolderPath ? 'Change Folder' : 'Select Recordings Folder'}
+            </button>
+            ${object.userData.recordingsFolderPath ? `
+              <button id="dictaphone-clear-folder" style="padding: 10px 15px; background: rgba(239, 68, 68, 0.2); border: 1px solid rgba(239, 68, 68, 0.4); border-radius: 8px; color: #ef4444; cursor: pointer;">
+                Clear Folder
+              </button>
+            ` : ''}
+          </div>
+        </div>
+
+        <div style="margin-top: 15px; padding: 12px; background: rgba(255,255,255,0.05); border-radius: 8px;">
+          <div style="color: rgba(255,255,255,0.7); font-size: 12px; margin-bottom: 8px;">Recording Status</div>
+          <div id="dictaphone-status" style="color: ${object.userData.isRecording ? '#ef4444' : 'rgba(255,255,255,0.4)'}; font-size: 11px;">
+            ${object.userData.isRecording ? '🔴 Recording in progress...' : '⚫ Not recording'}
+          </div>
+        </div>
+
+        <div style="margin-top: 15px; color: rgba(255,255,255,0.4); font-size: 11px;">
+          Click the power button to start/stop recording.<br>
+          Records both microphone input and virtual room sounds.
+        </div>
+      `;
+      setupDictaphoneCustomizationHandlers(object);
+      break;
   }
 }
 
@@ -8837,6 +9284,44 @@ function setupCassetteCustomizationHandlers(object) {
         saveState();
       });
     });
+  }, 0);
+}
+
+function setupDictaphoneCustomizationHandlers(object) {
+  setTimeout(() => {
+    // Recordings folder selection
+    const selectFolderBtn = document.getElementById('dictaphone-select-folder');
+    const clearFolderBtn = document.getElementById('dictaphone-clear-folder');
+
+    if (selectFolderBtn) {
+      selectFolderBtn.addEventListener('click', async () => {
+        try {
+          const result = await window.electronAPI.selectRecordingsFolder();
+          if (result.success && !result.canceled) {
+            object.userData.recordingsFolderPath = result.folderPath;
+            object.userData.recordingNumber = result.nextRecordingNumber;
+            saveState();
+            updateCustomizationPanel(object);
+          }
+        } catch (error) {
+          console.error('Error selecting recordings folder:', error);
+        }
+      });
+    }
+
+    if (clearFolderBtn) {
+      clearFolderBtn.addEventListener('click', () => {
+        // Stop recording first if active
+        if (dictaphoneState.currentRecorderId === object.userData.id && object.userData.isRecording) {
+          stopDictaphoneRecording(object);
+        }
+
+        object.userData.recordingsFolderPath = null;
+        object.userData.recordingNumber = 1;
+        saveState();
+        updateCustomizationPanel(object);
+      });
+    }
   }, 0);
 }
 
@@ -12084,6 +12569,35 @@ function performQuickInteraction(object, clickedMesh = null) {
       }
       break;
 
+    case 'dictaphone':
+      // Handle button clicks on the dictaphone
+      if (clickedMesh && clickedMesh.userData && clickedMesh.userData.buttonType) {
+        handleDictaphoneButtonClick(object, clickedMesh.userData.buttonType);
+      } else {
+        // Check if clicking near the power button
+        let buttonType = null;
+        if (clickedMesh && clickedMesh.parent) {
+          // Walk up to find if we're inside a button
+          let parent = clickedMesh;
+          while (parent && parent !== object) {
+            if (parent.userData && parent.userData.buttonType) {
+              buttonType = parent.userData.buttonType;
+              break;
+            }
+            if (parent.name === 'powerButton') buttonType = 'power';
+            if (buttonType) break;
+            parent = parent.parent;
+          }
+        }
+        if (buttonType) {
+          handleDictaphoneButtonClick(object, buttonType);
+        } else {
+          // No button clicked - toggle recording as default action
+          toggleDictaphoneRecording(object);
+        }
+      }
+      break;
+
     case 'pen-holder':
       // Pen holder is now just a container, no interaction
       break;
@@ -14908,6 +15422,13 @@ async function saveStateImmediate() {
             data.wasPlaying = obj.userData.isPlaying || false;
           }
           break;
+        case 'dictaphone':
+          // Save recordings folder path and next recording number
+          if (obj.userData.recordingsFolderPath) {
+            data.recordingsFolderPath = obj.userData.recordingsFolderPath;
+            data.recordingNumber = obj.userData.recordingNumber || 1;
+          }
+          break;
       }
 
       return data;
@@ -15362,6 +15883,13 @@ async function loadState() {
                 if (objData.lowCutoff !== undefined) obj.userData.lowCutoff = objData.lowCutoff;
                 if (objData.highCutoff !== undefined) obj.userData.highCutoff = objData.highCutoff;
                 break;
+              case 'dictaphone':
+                // Restore recordings folder path and next recording number
+                if (objData.recordingsFolderPath) {
+                  obj.userData.recordingsFolderPath = objData.recordingsFolderPath;
+                  obj.userData.recordingNumber = objData.recordingNumber || 1;
+                }
+                break;
             }
 
             // Restore per-object collision settings (applies to all object types)
@@ -15681,6 +16209,27 @@ function animate() {
               updateCassetteScreen(obj, track.name, true);
             }
           }
+        }
+      }
+    }
+
+    // Animate dictaphone LED when recording (subtle pulsing glow)
+    if (obj.userData.type === 'dictaphone') {
+      if (dictaphoneState.isRecording && dictaphoneState.currentRecorderId === obj.userData.id) {
+        const led = obj.getObjectByName('recordingLed');
+        const ledLight = obj.getObjectByName('ledLight');
+
+        if (led && ledLight) {
+          // Pulsing effect - varies between 0.5 and 1.0
+          const pulse = 0.75 + Math.sin(Date.now() * 0.005) * 0.25;
+
+          // Update LED emissive intensity
+          if (led.material && led.material.emissiveIntensity !== undefined) {
+            led.material.emissiveIntensity = 0.8 * pulse;
+          }
+
+          // Update point light intensity
+          ledLight.intensity = 0.3 * pulse;
         }
       }
     }

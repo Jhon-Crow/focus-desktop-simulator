@@ -2858,16 +2858,19 @@ function getObjectBounds(object) {
   const type = object.userData.type;
   const scale = object.scale?.x || 1;
 
-  // Use predefined collision radius if available (with multiplier applied)
+  // Get per-object collision radius multiplier (default 1.0 = 100%)
+  const objectMultiplier = object.userData.objectCollisionRadiusMultiplier || 1.0;
+
+  // Use predefined collision radius if available (with global and per-object multipliers applied)
   const baseRadius = OBJECT_COLLISION_RADII_BASE[type];
   if (baseRadius !== undefined) {
-    return baseRadius * collisionRadiusMultiplier * scale;
+    return baseRadius * collisionRadiusMultiplier * objectMultiplier * scale;
   }
 
   // For unknown types, use default radius
   // This avoids expensive recursive setFromObject() calls that can cause
   // stack overflow with complex objects like PDFs with many pages
-  return DEFAULT_COLLISION_RADIUS_BASE * collisionRadiusMultiplier * scale;
+  return DEFAULT_COLLISION_RADIUS_BASE * collisionRadiusMultiplier * objectMultiplier * scale;
 }
 
 // Get stacking radius for an object (used for overlap detection when stacking)
@@ -2891,14 +2894,17 @@ function getCollisionHeight(object) {
   const type = object.userData.type;
   const scale = object.scale?.y || object.scale?.x || 1;
 
-  // Use predefined collision height if available (with multiplier applied)
+  // Get per-object collision height multiplier (default 1.0 = 100%)
+  const objectMultiplier = object.userData.objectCollisionHeightMultiplier || 1.0;
+
+  // Use predefined collision height if available (with global and per-object multipliers applied)
   const baseHeight = OBJECT_COLLISION_HEIGHTS_BASE[type];
   if (baseHeight !== undefined) {
-    return baseHeight * collisionHeightMultiplier * scale;
+    return baseHeight * collisionHeightMultiplier * objectMultiplier * scale;
   }
 
   // For unknown types, use default collision height
-  return DEFAULT_COLLISION_HEIGHT_BASE * collisionHeightMultiplier * scale;
+  return DEFAULT_COLLISION_HEIGHT_BASE * collisionHeightMultiplier * objectMultiplier * scale;
 }
 
 // Check if two objects overlap vertically (their vertical ranges intersect)
@@ -4341,6 +4347,91 @@ function setupEventListeners() {
     });
   }
 
+  // Per-object collision settings accordion (in customization panel)
+  const collisionAccordionToggle = document.getElementById('collision-accordion-toggle');
+  const collisionAccordionContent = document.getElementById('collision-accordion-content');
+  if (collisionAccordionToggle && collisionAccordionContent) {
+    collisionAccordionToggle.addEventListener('click', () => {
+      collisionAccordionToggle.classList.toggle('open');
+      collisionAccordionContent.classList.toggle('open');
+    });
+  }
+
+  // Per-object collision radius slider
+  const objectCollisionRadiusSlider = document.getElementById('object-collision-radius-slider');
+  const objectCollisionRadiusValue = document.getElementById('object-collision-radius-value');
+  if (objectCollisionRadiusSlider && objectCollisionRadiusValue) {
+    objectCollisionRadiusSlider.addEventListener('input', (e) => {
+      if (!selectedObject) return;
+      const percentage = parseInt(e.target.value);
+      selectedObject.userData.objectCollisionRadiusMultiplier = percentage / 100;
+      objectCollisionRadiusValue.textContent = percentage + '%';
+      saveState();
+      // Update collision debug visualization if enabled
+      if (debugState.showCollisionRadii) {
+        updateCollisionDebugHelpers();
+      }
+    });
+    // Add scroll-based adjustment
+    addScrollToSlider(objectCollisionRadiusSlider, (value) => {
+      if (!selectedObject) return;
+      selectedObject.userData.objectCollisionRadiusMultiplier = value / 100;
+      objectCollisionRadiusValue.textContent = value + '%';
+      saveState();
+      if (debugState.showCollisionRadii) {
+        updateCollisionDebugHelpers();
+      }
+    });
+  }
+
+  // Per-object collision height slider
+  const objectCollisionHeightSlider = document.getElementById('object-collision-height-slider');
+  const objectCollisionHeightValue = document.getElementById('object-collision-height-value');
+  if (objectCollisionHeightSlider && objectCollisionHeightValue) {
+    objectCollisionHeightSlider.addEventListener('input', (e) => {
+      if (!selectedObject) return;
+      const percentage = parseInt(e.target.value);
+      selectedObject.userData.objectCollisionHeightMultiplier = percentage / 100;
+      objectCollisionHeightValue.textContent = percentage + '%';
+      saveState();
+      // Update collision debug visualization if enabled
+      if (debugState.showCollisionRadii) {
+        updateCollisionDebugHelpers();
+      }
+    });
+    // Add scroll-based adjustment
+    addScrollToSlider(objectCollisionHeightSlider, (value) => {
+      if (!selectedObject) return;
+      selectedObject.userData.objectCollisionHeightMultiplier = value / 100;
+      objectCollisionHeightValue.textContent = value + '%';
+      saveState();
+      if (debugState.showCollisionRadii) {
+        updateCollisionDebugHelpers();
+      }
+    });
+  }
+
+  // Per-object collision reset button
+  const collisionResetBtn = document.getElementById('collision-reset-btn');
+  if (collisionResetBtn) {
+    collisionResetBtn.addEventListener('click', () => {
+      if (!selectedObject) return;
+      // Reset to default (1.0 = 100%)
+      selectedObject.userData.objectCollisionRadiusMultiplier = 1.0;
+      selectedObject.userData.objectCollisionHeightMultiplier = 1.0;
+      // Update UI
+      if (objectCollisionRadiusSlider) objectCollisionRadiusSlider.value = 100;
+      if (objectCollisionRadiusValue) objectCollisionRadiusValue.textContent = '100%';
+      if (objectCollisionHeightSlider) objectCollisionHeightSlider.value = 100;
+      if (objectCollisionHeightValue) objectCollisionHeightValue.textContent = '100%';
+      saveState();
+      // Update collision debug visualization if enabled
+      if (debugState.showCollisionRadii) {
+        updateCollisionDebugHelpers();
+      }
+    });
+  }
+
   // Color swatches
   document.querySelectorAll('#main-colors .color-swatch').forEach(swatch => {
     swatch.addEventListener('click', () => {
@@ -5609,6 +5700,9 @@ function handleRightClick(event) {
 
       // Add object-specific customization options
       updateCustomizationPanel(object);
+
+      // Update per-object collision settings sliders
+      updateObjectCollisionUI(object);
     }
   } else {
     // RMB on empty space - only open left sidebar if right sidebar is not open
@@ -5629,6 +5723,28 @@ function handleRightClick(event) {
         document.exitPointerLock();
       }
     }
+  }
+}
+
+// Update per-object collision settings UI when an object is selected
+function updateObjectCollisionUI(object) {
+  const radiusSlider = document.getElementById('object-collision-radius-slider');
+  const radiusValue = document.getElementById('object-collision-radius-value');
+  const heightSlider = document.getElementById('object-collision-height-slider');
+  const heightValue = document.getElementById('object-collision-height-value');
+
+  if (radiusSlider && radiusValue) {
+    const radiusMultiplier = object.userData.objectCollisionRadiusMultiplier || 1.0;
+    const radiusPercent = Math.round(radiusMultiplier * 100);
+    radiusSlider.value = radiusPercent;
+    radiusValue.textContent = radiusPercent + '%';
+  }
+
+  if (heightSlider && heightValue) {
+    const heightMultiplier = object.userData.objectCollisionHeightMultiplier || 1.0;
+    const heightPercent = Math.round(heightMultiplier * 100);
+    heightSlider.value = heightPercent;
+    heightValue.textContent = heightPercent + '%';
   }
 }
 
@@ -11699,6 +11815,14 @@ async function saveStateImmediate() {
         accentColor: obj.userData.accentColor
       };
 
+      // Save per-object collision settings (only if non-default)
+      if (obj.userData.objectCollisionRadiusMultiplier !== undefined && obj.userData.objectCollisionRadiusMultiplier !== 1.0) {
+        data.objectCollisionRadiusMultiplier = obj.userData.objectCollisionRadiusMultiplier;
+      }
+      if (obj.userData.objectCollisionHeightMultiplier !== undefined && obj.userData.objectCollisionHeightMultiplier !== 1.0) {
+        data.objectCollisionHeightMultiplier = obj.userData.objectCollisionHeightMultiplier;
+      }
+
       // Save type-specific data
       switch (obj.userData.type) {
         case 'photo-frame':
@@ -12206,6 +12330,14 @@ async function loadState() {
                   });
                 }
                 break;
+            }
+
+            // Restore per-object collision settings (applies to all object types)
+            if (objData.objectCollisionRadiusMultiplier !== undefined) {
+              obj.userData.objectCollisionRadiusMultiplier = objData.objectCollisionRadiusMultiplier;
+            }
+            if (objData.objectCollisionHeightMultiplier !== undefined) {
+              obj.userData.objectCollisionHeightMultiplier = objData.objectCollisionHeightMultiplier;
             }
           }
         });

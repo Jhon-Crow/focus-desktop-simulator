@@ -430,6 +430,104 @@
       background: rgba(239, 68, 68, 0.3);
     }
 
+    /* Collision settings accordion */
+    .collision-accordion {
+      margin-top: 20px;
+      border-top: 1px solid rgba(255, 255, 255, 0.1);
+      padding-top: 15px;
+    }
+
+    .collision-accordion-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 12px 15px;
+      background: rgba(255, 255, 255, 0.05);
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      border-radius: 8px;
+      cursor: pointer;
+      transition: all 0.2s ease;
+      user-select: none;
+    }
+
+    .collision-accordion-header:hover {
+      background: rgba(79, 70, 229, 0.15);
+      border-color: rgba(79, 70, 229, 0.3);
+    }
+
+    .collision-accordion-header.open {
+      border-radius: 8px 8px 0 0;
+      border-bottom-color: transparent;
+    }
+
+    .collision-accordion-header .accordion-title {
+      color: rgba(255, 255, 255, 0.8);
+      font-size: 12px;
+      font-weight: 500;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+
+    .collision-accordion-header .accordion-arrow {
+      color: rgba(255, 255, 255, 0.5);
+      font-size: 12px;
+      transition: transform 0.2s ease;
+    }
+
+    .collision-accordion-header.open .accordion-arrow {
+      transform: rotate(180deg);
+    }
+
+    .collision-accordion-content {
+      display: none;
+      padding: 15px;
+      background: rgba(0, 0, 0, 0.2);
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      border-top: none;
+      border-radius: 0 0 8px 8px;
+    }
+
+    .collision-accordion-content.open {
+      display: block;
+    }
+
+    .collision-slider-group {
+      margin-bottom: 15px;
+    }
+
+    .collision-slider-group:last-child {
+      margin-bottom: 0;
+    }
+
+    .collision-slider-group label {
+      display: block;
+      color: rgba(255, 255, 255, 0.7);
+      font-size: 12px;
+      margin-bottom: 8px;
+    }
+
+    .collision-slider-group input[type="range"] {
+      width: 100%;
+    }
+
+    .collision-reset-btn {
+      width: 100%;
+      padding: 8px;
+      margin-top: 10px;
+      background: rgba(255, 255, 255, 0.05);
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      border-radius: 6px;
+      color: rgba(255, 255, 255, 0.6);
+      font-size: 12px;
+      cursor: pointer;
+      transition: all 0.2s ease;
+    }
+
+    .collision-reset-btn:hover {
+      background: rgba(255, 255, 255, 0.1);
+      color: rgba(255, 255, 255, 0.8);
+    }
+
     /* Object Interaction Modal */
     #interaction-modal {
       position: fixed;
@@ -920,6 +1018,25 @@
     </div>
 
     <button class="delete-btn" id="delete-object">Delete Object</button>
+
+    <!-- Collision Settings Accordion (at the bottom) -->
+    <div id="collision-settings-accordion" class="collision-accordion">
+      <div class="collision-accordion-header" id="collision-accordion-toggle">
+        <span class="accordion-title">Collision Settings</span>
+        <span class="accordion-arrow">▼</span>
+      </div>
+      <div class="collision-accordion-content" id="collision-accordion-content">
+        <div class="collision-slider-group">
+          <label>Collision Width: <span id="object-collision-radius-value">100%</span></label>
+          <input type="range" id="object-collision-radius-slider" min="20" max="300" value="100" step="10">
+        </div>
+        <div class="collision-slider-group">
+          <label>Collision Height: <span id="object-collision-height-value">100%</span></label>
+          <input type="range" id="object-collision-height-slider" min="20" max="300" value="100" step="10">
+        </div>
+        <button class="collision-reset-btn" id="collision-reset-btn">Reset to Default</button>
+      </div>
+    </div>
   </div>
 
   <div id="tooltip"></div>

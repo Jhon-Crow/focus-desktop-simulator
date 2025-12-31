@@ -565,8 +565,13 @@ ipcMain.handle('save-recording', async (event, folderPath, recordingNumber, audi
       const fileName = `Запись ${recordingNumber}.webm`;
       const filePath = path.join(folderPath, fileName);
 
-      // Move temp file to final location
-      fs.renameSync(tempInputPath, filePath);
+      // Copy temp file to final location (use copy+delete instead of rename for cross-device support)
+      fs.copyFileSync(tempInputPath, filePath);
+      try {
+        fs.unlinkSync(tempInputPath);
+      } catch (e) {
+        console.warn('Failed to clean up temp file:', e.message);
+      }
       console.log('Recording saved as WebM (FFmpeg not installed):', filePath);
 
       return {

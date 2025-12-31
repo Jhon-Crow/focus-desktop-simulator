@@ -5748,19 +5748,16 @@ function onMouseWheel(event) {
   }
 
   // If in examine mode: scroll rotates object, LMB held + scroll UP exits, Shift+scroll scales
-  if (examineState.active && examineState.object) {
-    event.preventDefault();
+  // Check if modal is open - Shift+scroll for scaling should work even with modal open
+  const modal = document.getElementById('interaction-modal');
+  const isModalOpen = modal && modal.classList.contains('open');
 
+  if (examineState.active && examineState.object) {
     const object = examineState.object;
 
-    // Scroll UP (deltaY < 0) with LMB held exits examine mode
-    // This prevents accidental exits
-    if (event.deltaY < 0 && !event.shiftKey && event.buttons === 1) {
-      exitExamineMode();
-      return;
-    }
-
+    // Shift+scroll scales object - should work even when modal is open
     if (event.shiftKey) {
+      event.preventDefault();
       // Scale object (preserving proportions) with Shift+scroll
       const scaleDelta = event.deltaY > 0 ? 0.95 : 1.05;
       const minScale = 0.3;
@@ -5788,14 +5785,29 @@ function onMouseWheel(event) {
         adjustObjectYForScale(object, oldScale, newScale);
         saveState();
       }
-    } else {
-      // Scroll (both UP and DOWN) rotates object around Y axis
-      // Scroll DOWN (deltaY > 0) rotates clockwise, scroll UP (deltaY < 0) rotates counter-clockwise
-      const rotationDelta = event.deltaY > 0 ? 0.15 : -0.15;
-      object.rotation.y += rotationDelta;
-      object.userData.rotationY = object.rotation.y;
-      saveState();
+      return;
     }
+
+    // Skip rotation/exit controls if modal is open (don't interfere with modal scrolling)
+    if (isModalOpen) {
+      return;
+    }
+
+    event.preventDefault();
+
+    // Scroll UP (deltaY < 0) with LMB held exits examine mode
+    // This prevents accidental exits
+    if (event.deltaY < 0 && !event.shiftKey && event.buttons === 1) {
+      exitExamineMode();
+      return;
+    }
+
+    // Scroll (both UP and DOWN) rotates object around Y axis
+    // Scroll DOWN (deltaY > 0) rotates clockwise, scroll UP (deltaY < 0) rotates counter-clockwise
+    const rotationDelta = event.deltaY > 0 ? 0.15 : -0.15;
+    object.rotation.y += rotationDelta;
+    object.userData.rotationY = object.rotation.y;
+    saveState();
     return;
   }
 
@@ -6646,6 +6658,10 @@ function preloadMetronomeCustomSound(object) {
 
   try {
     const audioCtx = getSharedAudioContext();
+    // Resume audio context if suspended (browsers require user interaction)
+    if (audioCtx.state === 'suspended') {
+      audioCtx.resume();
+    }
     // Convert data URL to array buffer
     const base64 = object.userData.customSoundDataUrl.split(',')[1];
     const binary = atob(base64);
@@ -6654,10 +6670,18 @@ function preloadMetronomeCustomSound(object) {
       bytes[i] = binary.charCodeAt(i);
     }
 
-    audioCtx.decodeAudioData(bytes.buffer.slice(0), (buffer) => {
+    // Create a proper copy of the ArrayBuffer for decodeAudioData
+    const arrayBuffer = bytes.buffer.slice(0);
+    audioCtx.decodeAudioData(arrayBuffer, (buffer) => {
       object.userData.customSoundBuffer = buffer;
+      // Automatically switch to custom sound when loaded successfully
+      object.userData.tickSoundType = 'custom';
+      console.log('Metronome custom sound loaded successfully');
+      saveState();
     }, (err) => {
       console.error('Error decoding custom sound:', err);
+      // Reset custom sound state on error
+      object.userData.customSoundBuffer = null;
     });
   } catch (e) {
     console.error('Error preloading custom sound:', e);
@@ -8131,6 +8155,10 @@ function preloadTimerCustomSound() {
 
   try {
     const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    // Resume audio context if suspended (browsers require user interaction)
+    if (audioCtx.state === 'suspended') {
+      audioCtx.resume();
+    }
     const base64 = timerState.customSoundDataUrl.split(',')[1];
     const binary = atob(base64);
     const bytes = new Uint8Array(binary.length);
@@ -8138,13 +8166,23 @@ function preloadTimerCustomSound() {
       bytes[i] = binary.charCodeAt(i);
     }
 
-    audioCtx.decodeAudioData(bytes.buffer.slice(0), (buffer) => {
+    // Create a proper copy of the ArrayBuffer for decodeAudioData
+    const arrayBuffer = bytes.buffer.slice(0);
+    audioCtx.decodeAudioData(arrayBuffer, (buffer) => {
       timerState.customSoundBuffer = buffer;
+      // Automatically enable custom sound when loaded successfully
+      timerState.useCustomSound = true;
+      console.log('Custom sound loaded successfully');
     }, (err) => {
       console.error('Error decoding custom sound:', err);
+      // Reset custom sound state on error
+      timerState.customSoundBuffer = null;
+      timerState.useCustomSound = false;
     });
   } catch (e) {
     console.error('Error preloading custom sound:', e);
+    timerState.customSoundBuffer = null;
+    timerState.useCustomSound = false;
   }
 }
 
@@ -8160,10 +8198,10 @@ function updateClockAlarmHand(clockObject) {
 
     // Calculate angle for alarm time (like an hour hand)
     // 12 hours = 360 degrees, so each hour = 30 degrees
-    const totalMinutes = timerState.alarmHours * 60 + timerState.alarmMinutes;
     // Convert to 12-hour format and calculate angle
+    // Use the same formula as the hour hand: -(hourFloat / 12) * Math.PI * 2
     const hours12 = (timerState.alarmHours % 12) + timerState.alarmMinutes / 60;
-    const angle = -(hours12 / 12) * Math.PI * 2 + Math.PI / 2; // Start from 12 o'clock
+    const angle = -(hours12 / 12) * Math.PI * 2;
     alarmHand.rotation.z = angle;
   } else {
     // Hide the alarm hand

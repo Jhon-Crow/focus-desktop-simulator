@@ -4097,9 +4097,18 @@ async function saveDictaphoneRecording(object) {
     return;
   }
 
+  // Check if folder path is set
+  if (!object || !object.userData || !object.userData.recordingsFolderPath) {
+    console.error('Cannot save recording: folder path is not set');
+    alert('Cannot save recording: please select a folder first');
+    dictaphoneState.recordedChunks = [];
+    return;
+  }
+
   try {
     // Create blob from chunks
     const blob = new Blob(dictaphoneState.recordedChunks, { type: 'audio/webm' });
+    console.log('Recording blob size:', blob.size, 'bytes');
 
     // Convert to base64
     const reader = new FileReader();
@@ -4116,6 +4125,7 @@ async function saveDictaphoneRecording(object) {
 
     // Save via IPC with format
     const format = object.userData.recordingFormat || 'wav';
+    console.log('Saving recording to:', object.userData.recordingsFolderPath, 'as', format);
     const result = await window.electronAPI.saveRecording(
       object.userData.recordingsFolderPath,
       object.userData.recordingNumber,
@@ -4130,6 +4140,12 @@ async function saveDictaphoneRecording(object) {
       saveState();
     } else {
       console.error('Failed to save recording:', result.error);
+      // Show error to user
+      if (result.ffmpegMissing) {
+        alert('FFmpeg is not installed. Please install FFmpeg to save recordings.\n\nOn Windows: winget install ffmpeg\nOn macOS: brew install ffmpeg\nOn Linux: sudo apt install ffmpeg');
+      } else {
+        alert('Failed to save recording: ' + result.error);
+      }
     }
 
     // Clear chunks
@@ -4137,6 +4153,8 @@ async function saveDictaphoneRecording(object) {
 
   } catch (error) {
     console.error('Error saving recording:', error);
+    alert('Error saving recording: ' + error.message);
+    dictaphoneState.recordedChunks = [];
   }
 }
 
@@ -15639,6 +15657,10 @@ async function saveStateImmediate() {
             data.recordingsFolderPath = obj.userData.recordingsFolderPath;
             data.recordingNumber = obj.userData.recordingNumber || 1;
           }
+          // Save recording format (wav/mp3)
+          if (obj.userData.recordingFormat) {
+            data.recordingFormat = obj.userData.recordingFormat;
+          }
           break;
       }
 
@@ -16100,6 +16122,10 @@ async function loadState() {
                 if (objData.recordingsFolderPath) {
                   obj.userData.recordingsFolderPath = objData.recordingsFolderPath;
                   obj.userData.recordingNumber = objData.recordingNumber || 1;
+                }
+                // Restore recording format (wav/mp3)
+                if (objData.recordingFormat) {
+                  obj.userData.recordingFormat = objData.recordingFormat;
                 }
                 break;
             }

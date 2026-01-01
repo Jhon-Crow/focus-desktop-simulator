@@ -3945,10 +3945,11 @@ function createMetronome(options = {}) {
 let sharedAudioSystem = {
   audioContext: null,
   masterGain: null,        // Master output node - all audio passes through here
-  recordingGain: null,     // Gain node for recording (copies audio for recording)
-  recordingGainPanorama: null, // Gain node for panoramic recording (preserves spatial audio)
+  recordingGain: null,     // Gain node for mono recording (no spatial audio)
+  recordingGainPanorama: null, // Gain node for panoramic recording (dictaphone-centered spatial audio)
   activePlayers: new Set(), // Set of active audio sources (cassette players, etc.)
-  spatialNodes: new Map()   // Map of object ID -> { pannerNode, gainNode } for spatial audio
+  spatialNodes: new Map(),   // Map of object ID -> { pannerNode, gainNode, object } for playback spatial audio
+  recordingSpatialNodes: new Map() // Map of object ID -> { pannerNode, gainNode, sourceNode } for recording with dictaphone-centered spatial
 };
 
 // ============================================================================
@@ -3960,10 +3961,12 @@ let sharedAudioSystem = {
 /**
  * Calculate spatial audio parameters (pan and volume) for an object
  * @param {THREE.Object3D} object - The 3D object with sound source
+ * @param {THREE.Object3D} referenceObject - Optional reference object (default: camera).
+ *        If provided, spatial audio is calculated relative to this object instead of camera.
  * @returns {{ pan: number, volume: number }} - Pan (-1 to 1) and volume (0 to 1) multipliers
  */
-function calculateSpatialAudio(object) {
-  if (!object || !camera) {
+function calculateSpatialAudio(object, referenceObject = null) {
+  if (!object) {
     return { pan: 0, volume: 1 };
   }
 
@@ -3971,13 +3974,19 @@ function calculateSpatialAudio(object) {
   const objectPos = new THREE.Vector3();
   object.getWorldPosition(objectPos);
 
-  // Get camera's world position
-  const cameraPos = new THREE.Vector3();
-  camera.getWorldPosition(cameraPos);
+  // Get reference position (either provided object or camera)
+  const refPos = new THREE.Vector3();
+  if (referenceObject) {
+    referenceObject.getWorldPosition(refPos);
+  } else if (camera) {
+    camera.getWorldPosition(refPos);
+  } else {
+    return { pan: 0, volume: 1 };
+  }
 
-  // Calculate relative position from camera to object
-  const relativeX = objectPos.x - cameraPos.x;
-  const relativeZ = objectPos.z - cameraPos.z;
+  // Calculate relative position from reference to object
+  const relativeX = objectPos.x - refPos.x;
+  const relativeZ = objectPos.z - refPos.z;
 
   // Calculate distance for volume attenuation
   const distance = Math.sqrt(relativeX * relativeX + relativeZ * relativeZ);
@@ -3996,7 +4005,7 @@ function calculateSpatialAudio(object) {
     volume = Math.max(0.2, volume);
   }
 
-  // Calculate panning based on x-position relative to camera
+  // Calculate panning based on x-position relative to reference
   // Desk width is ~10 units, so max offset is ~5 units
   // Pan range: -1 (full left) to 1 (full right)
   const panRange = 5; // Units from center for full pan
@@ -4043,6 +4052,43 @@ function createSpatialAudioNodes(object, sourceGain) {
 }
 
 /**
+ * Create spatial audio nodes for recording (dictaphone-centered)
+ * These nodes calculate pan/volume relative to the dictaphone, not the camera
+ * @param {THREE.Object3D} object - The object to add spatial audio to
+ * @param {AudioNode} sourceNode - The audio node that outputs the audio
+ * @returns {{ pannerNode: StereoPannerNode, gainNode: GainNode }} - The spatial audio nodes for recording
+ */
+function createRecordingSpatialNodes(object, sourceNode) {
+  const audioCtx = getSharedAudioContext();
+
+  // Create stereo panner node for left/right panning (relative to dictaphone)
+  const pannerNode = audioCtx.createStereoPanner();
+
+  // Create gain node for distance-based volume attenuation
+  const gainNode = audioCtx.createGain();
+
+  // Connect: source -> panner -> gain -> recordingGainPanorama
+  sourceNode.connect(pannerNode);
+  pannerNode.connect(gainNode);
+  gainNode.connect(sharedAudioSystem.recordingGainPanorama);
+
+  // Initial values (will be updated when recording starts with dictaphone reference)
+  pannerNode.pan.value = 0;
+  gainNode.gain.value = 1;
+
+  // Store reference for updates during recording
+  if (object.userData && object.userData.id) {
+    sharedAudioSystem.recordingSpatialNodes.set(object.userData.id, {
+      pannerNode,
+      gainNode,
+      object
+    });
+  }
+
+  return { pannerNode, gainNode };
+}
+
+/**
  * Update spatial audio parameters for an object (call during drag or animation)
  * @param {THREE.Object3D} object - The object that moved
  */
@@ -4068,6 +4114,7 @@ function updateSpatialAudio(object) {
  * Called from the animation loop
  */
 function updateAllSpatialAudio() {
+  // Update playback spatial audio (camera-relative) for all sound sources
   sharedAudioSystem.spatialNodes.forEach((nodes, objectId) => {
     if (nodes.object) {
       const spatial = calculateSpatialAudio(nodes.object);
@@ -4080,13 +4127,37 @@ function updateAllSpatialAudio() {
     }
   });
 
+  // Update recording spatial audio (dictaphone-relative) when recording with environment panorama
+  if (dictaphoneState.isRecording &&
+      dictaphoneState.usePanoramicEnvironment &&
+      dictaphoneState.currentRecordingObject) {
+    const dictaphone = dictaphoneState.currentRecordingObject;
+
+    // Update recording spatial nodes for all sound sources relative to dictaphone
+    sharedAudioSystem.recordingSpatialNodes.forEach((nodes, objectId) => {
+      if (nodes.object) {
+        // Calculate spatial audio relative to dictaphone position, not camera
+        const spatial = calculateSpatialAudio(nodes.object, dictaphone);
+        if (nodes.pannerNode && nodes.gainNode) {
+          nodes.pannerNode.pan.value = spatial.pan;
+          const baseVolume = nodes.baseVolume !== undefined ? nodes.baseVolume : 1;
+          nodes.gainNode.gain.value = spatial.volume * baseVolume;
+        }
+      }
+    });
+  }
+
   // Update dictaphone microphone panner if recording with panorama enabled
+  // The pan is INVERTED because from the camera's perspective, if the dictaphone
+  // is on the right, the recorded voice should appear on the LEFT in the recording
+  // (as if the sound source is at the camera's position looking toward the dictaphone)
   if (dictaphoneState.isRecording &&
       dictaphoneState.useMicrophonePanorama &&
       dictaphoneState.microphonePannerNode &&
       dictaphoneState.currentRecordingObject) {
     const spatial = calculateSpatialAudio(dictaphoneState.currentRecordingObject);
-    dictaphoneState.microphonePannerNode.pan.value = spatial.pan;
+    // Invert the pan: if dictaphone is on the right (+pan), voice should be on the left (-pan)
+    dictaphoneState.microphonePannerNode.pan.value = -spatial.pan;
   }
 }
 
@@ -4095,6 +4166,7 @@ function updateAllSpatialAudio() {
  * @param {string|number} objectId - The object ID
  */
 function removeSpatialAudioNodes(objectId) {
+  // Remove playback spatial nodes
   const nodes = sharedAudioSystem.spatialNodes.get(objectId);
   if (nodes) {
     try {
@@ -4104,6 +4176,18 @@ function removeSpatialAudioNodes(objectId) {
       // Ignore disconnection errors
     }
     sharedAudioSystem.spatialNodes.delete(objectId);
+  }
+
+  // Remove recording spatial nodes
+  const recordingNodes = sharedAudioSystem.recordingSpatialNodes.get(objectId);
+  if (recordingNodes) {
+    try {
+      if (recordingNodes.pannerNode) recordingNodes.pannerNode.disconnect();
+      if (recordingNodes.gainNode) recordingNodes.gainNode.disconnect();
+    } catch (e) {
+      // Ignore disconnection errors
+    }
+    sharedAudioSystem.recordingSpatialNodes.delete(objectId);
   }
 }
 
@@ -5231,12 +5315,18 @@ async function playCassetteTrack(object, trackIndex, startTime = 0) {
     // This enables sound to change based on object position relative to camera
     const spatialNodes = createSpatialAudioNodes(object, nodes.merger);
 
-    // Connect merger -> spatial panner -> spatial gain -> master
+    // Connect merger -> spatial panner -> spatial gain -> master (for playback)
     nodes.merger.connect(spatialNodes.pannerNode);
     spatialNodes.gainNode.connect(sharedAudioSystem.masterGain);
 
-    // Also connect to panoramic recording tap for dictaphone stereo recording
-    spatialNodes.gainNode.connect(sharedAudioSystem.recordingGainPanorama);
+    // Connect merger to mono recording (no spatial processing)
+    nodes.merger.connect(sharedAudioSystem.recordingGain);
+
+    // Create separate spatial nodes for recording (dictaphone-centered)
+    // These are updated relative to dictaphone position, not camera
+    const recordingSpatialNodes = createRecordingSpatialNodes(object, nodes.merger);
+    nodes.recordingSpatialPanner = recordingSpatialNodes.pannerNode;
+    nodes.recordingSpatialGain = recordingSpatialNodes.gainNode;
 
     // Store spatial nodes for position updates
     nodes.spatialPanner = spatialNodes.pannerNode;
@@ -5898,7 +5988,9 @@ async function startDictaphoneRecording(object) {
         // Create panner node for microphone spatial positioning
         dictaphoneState.microphonePannerNode = audioCtx.createStereoPanner();
         const spatial = calculateSpatialAudio(object);
-        dictaphoneState.microphonePannerNode.pan.value = spatial.pan;
+        // Invert pan: if dictaphone is on the right (+pan), voice should be on the left (-pan)
+        // This simulates recording from the camera's perspective
+        dictaphoneState.microphonePannerNode.pan.value = -spatial.pan;
 
         // Chain: micSource -> analyserNode -> microphoneGainNode -> pannerNode -> destinationNode
         micSource.connect(dictaphoneState.analyserNode);
@@ -5906,7 +5998,7 @@ async function startDictaphoneRecording(object) {
         dictaphoneState.microphoneGainNode.connect(dictaphoneState.microphonePannerNode);
         dictaphoneState.microphonePannerNode.connect(dictaphoneState.destinationNode);
 
-        console.log('Microphone connected with panoramic panning:', spatial.pan);
+        console.log('Microphone connected with panoramic panning (inverted):', -spatial.pan);
       } else {
         // Chain: micSource -> analyserNode -> microphoneGainNode -> destinationNode (no panning)
         micSource.connect(dictaphoneState.analyserNode);
@@ -6068,10 +6160,11 @@ function switchDictaphoneMicrophonePanorama(usePanoramic) {
         }
 
         // Calculate current spatial position based on dictaphone object
+        // Invert pan: if dictaphone is on the right (+pan), voice should be on the left (-pan)
         const object = dictaphoneState.currentRecordingObject;
         if (object) {
           const spatial = calculateSpatialAudio(object);
-          dictaphoneState.microphonePannerNode.pan.value = spatial.pan;
+          dictaphoneState.microphonePannerNode.pan.value = -spatial.pan;
         }
 
         // Reconnect: gain -> panner -> destination
@@ -6083,7 +6176,7 @@ function switchDictaphoneMicrophonePanorama(usePanoramic) {
         dictaphoneState.microphoneGainNode.connect(dictaphoneState.microphonePannerNode);
         dictaphoneState.microphonePannerNode.connect(dictaphoneState.destinationNode);
 
-        console.log('Enabled microphone panorama with pan:', dictaphoneState.microphonePannerNode.pan.value);
+        console.log('Enabled microphone panorama with pan (inverted):', dictaphoneState.microphonePannerNode.pan.value);
       }
     } else {
       // Remove panning: disconnect panner, connect gain directly to destination
@@ -13270,26 +13363,44 @@ function playTimerAlert() {
       const panner = audioCtx.createStereoPanner();
       const gain = audioCtx.createGain();
 
+      // Playback chain: source -> panner (camera-relative) -> gain -> master
       source.connect(panner);
       panner.connect(gain);
       gain.connect(sharedAudioSystem.masterGain);
-      // Also connect to panoramic recording for stereo dictaphone
-      gain.connect(sharedAudioSystem.recordingGainPanorama);
+
+      // Connect source to mono recording (no spatial processing)
+      source.connect(sharedAudioSystem.recordingGain);
+
+      // Create recording spatial nodes (dictaphone-relative) for panoramic recording
+      const recordingPanner = audioCtx.createStereoPanner();
+      const recordingGain = audioCtx.createGain();
+      source.connect(recordingPanner);
+      recordingPanner.connect(recordingGain);
+      recordingGain.connect(sharedAudioSystem.recordingGainPanorama);
+      recordingPanner.pan.value = 0; // Will be updated in real-time
+      recordingGain.gain.value = 1;
 
       panner.pan.value = spatial.pan;
       gain.gain.value = spatialVolume;
 
       // Store for cleanup
-      timerState.alertSpatialNodes = { source, panner, gain };
+      timerState.alertSpatialNodes = { source, panner, gain, recordingPanner, recordingGain };
       timerState.alertClockObject = clockObject;
 
-      // Register with spatial audio system for real-time position updates
+      // Register with spatial audio system for real-time position updates (playback)
       if (clockObject && clockObject.userData && clockObject.userData.id) {
         sharedAudioSystem.spatialNodes.set('clock-alarm-' + clockObject.userData.id, {
           pannerNode: panner,
           gainNode: gain,
           object: clockObject,
           baseVolume: volume  // Store base volume for recalculation
+        });
+        // Register recording spatial nodes for dictaphone-relative updates
+        sharedAudioSystem.recordingSpatialNodes.set('clock-alarm-' + clockObject.userData.id, {
+          pannerNode: recordingPanner,
+          gainNode: recordingGain,
+          object: clockObject,
+          baseVolume: volume
         });
       }
 
@@ -13345,13 +13456,23 @@ function playDefaultTimerAlert(volume, pitch, spatial = { pan: 0, volume: 1 }) {
     const spatialGainNode = audioCtx.createGain();  // For spatial volume (can be updated)
     const pannerNode = audioCtx.createStereoPanner();
 
-    // Chain: oscillator -> pulseGain (on/off) -> spatialGain (volume) -> panner -> master
+    // Playback chain: oscillator -> pulseGain -> spatialGain -> panner (camera-relative) -> master
     timerState.alertOscillator.connect(pulseGainNode);
     pulseGainNode.connect(spatialGainNode);
     spatialGainNode.connect(pannerNode);
     pannerNode.connect(sharedAudioSystem.masterGain);
-    // Also connect to panoramic recording for stereo dictaphone
-    pannerNode.connect(sharedAudioSystem.recordingGainPanorama);
+
+    // Connect pulseGain to mono recording (no spatial processing)
+    pulseGainNode.connect(sharedAudioSystem.recordingGain);
+
+    // Create recording spatial nodes (dictaphone-relative) for panoramic recording
+    const recordingPanner = audioCtx.createStereoPanner();
+    const recordingGainNode = audioCtx.createGain();
+    pulseGainNode.connect(recordingPanner);
+    recordingPanner.connect(recordingGainNode);
+    recordingGainNode.connect(sharedAudioSystem.recordingGainPanorama);
+    recordingPanner.pan.value = 0; // Will be updated in real-time
+    recordingGainNode.gain.value = 1;
 
     // Apply spatial audio panning and initial volume
     pannerNode.pan.value = spatial.pan;
@@ -13373,19 +13494,32 @@ function playDefaultTimerAlert(volume, pitch, spatial = { pan: 0, volume: 1 }) {
     }
 
     // Store spatial nodes for cleanup
-    timerState.alertSpatialNodes = { panner: pannerNode, gain: spatialGainNode, pulseGain: pulseGainNode };
+    timerState.alertSpatialNodes = {
+      panner: pannerNode,
+      gain: spatialGainNode,
+      pulseGain: pulseGainNode,
+      recordingPanner: recordingPanner,
+      recordingGain: recordingGainNode
+    };
 
     // Find clock object for spatial audio updates
     const clockObject = deskObjects.find(obj => obj.userData.type === 'clock');
     timerState.alertClockObject = clockObject;
 
-    // Register with spatial audio system for real-time position updates
+    // Register with spatial audio system for real-time position updates (playback)
     if (clockObject && clockObject.userData && clockObject.userData.id) {
       sharedAudioSystem.spatialNodes.set('clock-alarm-' + clockObject.userData.id, {
         pannerNode: pannerNode,
         gainNode: spatialGainNode,
         object: clockObject,
         baseVolume: 1  // Volume already applied via pulse gain
+      });
+      // Register recording spatial nodes for dictaphone-relative updates
+      sharedAudioSystem.recordingSpatialNodes.set('clock-alarm-' + clockObject.userData.id, {
+        pannerNode: recordingPanner,
+        gainNode: recordingGainNode,
+        object: clockObject,
+        baseVolume: 1
       });
     }
 
@@ -13404,9 +13538,11 @@ function playDefaultTimerAlert(volume, pitch, spatial = { pan: 0, volume: 1 }) {
 function stopTimerAlert() {
   timerState.isAlerting = false; // Stop any custom sound loops first
 
-  // Remove from spatial audio system before disconnecting
+  // Remove from spatial audio systems before disconnecting
   if (timerState.alertClockObject && timerState.alertClockObject.userData && timerState.alertClockObject.userData.id) {
-    sharedAudioSystem.spatialNodes.delete('clock-alarm-' + timerState.alertClockObject.userData.id);
+    const clockAlarmId = 'clock-alarm-' + timerState.alertClockObject.userData.id;
+    sharedAudioSystem.spatialNodes.delete(clockAlarmId);
+    sharedAudioSystem.recordingSpatialNodes.delete(clockAlarmId);
   }
   timerState.alertClockObject = null;
 
@@ -13421,13 +13557,15 @@ function stopTimerAlert() {
     timerState.customAudioElement = null;
   }
 
-  // Disconnect spatial audio nodes
+  // Disconnect spatial audio nodes (both playback and recording)
   if (timerState.alertSpatialNodes) {
     try {
       if (timerState.alertSpatialNodes.source) timerState.alertSpatialNodes.source.disconnect();
       if (timerState.alertSpatialNodes.panner) timerState.alertSpatialNodes.panner.disconnect();
       if (timerState.alertSpatialNodes.gain) timerState.alertSpatialNodes.gain.disconnect();
       if (timerState.alertSpatialNodes.pulseGain) timerState.alertSpatialNodes.pulseGain.disconnect();
+      if (timerState.alertSpatialNodes.recordingPanner) timerState.alertSpatialNodes.recordingPanner.disconnect();
+      if (timerState.alertSpatialNodes.recordingGain) timerState.alertSpatialNodes.recordingGain.disconnect();
     } catch (e) {
       // Ignore if already disconnected
     }
@@ -18990,9 +19128,18 @@ function animate() {
                 pitchMultiplier = getCurveValueAtProgress(obj, 'pitch', progress) / 100;
               }
 
-              // Calculate spatial audio parameters for this metronome
+              // Calculate spatial audio parameters for playback (camera-relative)
               const spatial = calculateSpatialAudio(obj);
               const spatialVolume = volume * spatial.volume;
+
+              // Calculate spatial audio for recording (dictaphone-relative) if recording
+              let recordingSpatial = { pan: 0, volume: 1 };
+              if (dictaphoneState.isRecording &&
+                  dictaphoneState.usePanoramicEnvironment &&
+                  dictaphoneState.currentRecordingObject) {
+                recordingSpatial = calculateSpatialAudio(obj, dictaphoneState.currentRecordingObject);
+              }
+              const recordingVolume = volume * recordingSpatial.volume;
 
               if (obj.userData.tickSoundType === 'custom' && obj.userData.customSoundDataUrl) {
                 // Play custom sound using HTML5 Audio element with spatial audio
@@ -19006,11 +19153,22 @@ function animate() {
                   const panner = audioCtx.createStereoPanner();
                   const gain = audioCtx.createGain();
 
+                  // Playback chain: source -> panner -> gain -> master
                   source.connect(panner);
                   panner.connect(gain);
                   gain.connect(sharedAudioSystem.masterGain);
-                  // Also connect to panoramic recording for stereo dictaphone
-                  gain.connect(sharedAudioSystem.recordingGainPanorama);
+
+                  // Connect source to mono recording (no spatial processing)
+                  source.connect(sharedAudioSystem.recordingGain);
+
+                  // Recording chain: source -> recordingPanner -> recordingGain -> recordingGainPanorama
+                  const recordingPanner = audioCtx.createStereoPanner();
+                  const recordingGain = audioCtx.createGain();
+                  source.connect(recordingPanner);
+                  recordingPanner.connect(recordingGain);
+                  recordingGain.connect(sharedAudioSystem.recordingGainPanorama);
+                  recordingPanner.pan.value = recordingSpatial.pan;
+                  recordingGain.gain.value = recordingVolume;
 
                   panner.pan.value = spatial.pan;
                   gain.gain.value = spatialVolume;
@@ -19027,11 +19185,22 @@ function animate() {
                 const gain = audioCtx.createGain();
                 const panner = audioCtx.createStereoPanner();
 
+                // Playback chain: osc -> gain -> panner -> master
                 osc.connect(gain);
                 gain.connect(panner);
                 panner.connect(sharedAudioSystem.masterGain);
-                // Also connect to panoramic recording for stereo dictaphone
-                panner.connect(sharedAudioSystem.recordingGainPanorama);
+
+                // Connect gain to mono recording (no spatial processing)
+                gain.connect(sharedAudioSystem.recordingGain);
+
+                // Recording chain: gain -> recordingPanner -> recordingGain -> recordingGainPanorama
+                const recordingPanner = audioCtx.createStereoPanner();
+                const recordingGain = audioCtx.createGain();
+                gain.connect(recordingPanner);
+                recordingPanner.connect(recordingGain);
+                recordingGain.connect(sharedAudioSystem.recordingGainPanorama);
+                recordingPanner.pan.value = recordingSpatial.pan;
+                recordingGain.gain.value = recordingSpatial.volume;
 
                 panner.pan.value = spatial.pan;
                 osc.frequency.value = 880 * pitchMultiplier; // A5 note with pitch adjustment
@@ -19048,14 +19217,24 @@ function animate() {
                 const filter = audioCtx.createBiquadFilter();
                 const panner = audioCtx.createStereoPanner();
 
-                // Connect oscillators through filter with spatial audio
+                // Playback chain: filter -> gain -> panner -> master
                 osc.connect(filter);
                 osc2.connect(filter);
                 filter.connect(gain);
                 gain.connect(panner);
                 panner.connect(sharedAudioSystem.masterGain);
-                // Also connect to panoramic recording for stereo dictaphone
-                panner.connect(sharedAudioSystem.recordingGainPanorama);
+
+                // Connect gain to mono recording (no spatial processing)
+                gain.connect(sharedAudioSystem.recordingGain);
+
+                // Recording chain: gain -> recordingPanner -> recordingGain -> recordingGainPanorama
+                const recordingPanner = audioCtx.createStereoPanner();
+                const recordingGain = audioCtx.createGain();
+                gain.connect(recordingPanner);
+                recordingPanner.connect(recordingGain);
+                recordingGain.connect(sharedAudioSystem.recordingGainPanorama);
+                recordingPanner.pan.value = recordingSpatial.pan;
+                recordingGain.gain.value = recordingSpatial.volume;
 
                 panner.pan.value = spatial.pan;
 

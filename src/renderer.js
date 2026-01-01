@@ -4305,7 +4305,13 @@ function createCassettePlayer(options = {}) {
     reelRotation: 0,
     // Colors - Classic Sony Walkman WM-10 style: cream/silver body with red accents
     mainColor: options.mainColor || '#d4d0c8', // Cream/silver
-    accentColor: options.accentColor || '#c41e3a' // Red accent
+    accentColor: options.accentColor || '#c41e3a', // Red accent
+    // Custom player colors (for customization panel)
+    screenColor: options.screenColor || '#2d4a3e', // LCD screen background
+    tapeColor: options.tapeColor || '#3a2a1a', // Magnetic tape color
+    prevNextButtonColor: options.prevNextButtonColor || '#a0a0a0', // Prev/Next buttons
+    playPauseButtonColor: options.playPauseButtonColor || '#909090', // Play/Pause button
+    stopButtonColor: options.stopButtonColor || '#a0a0a0' // Stop button
   };
 
   // Materials
@@ -4458,10 +4464,11 @@ function createCassettePlayer(options = {}) {
   // Tape path between reels (horizontal line)
   const tapeGeometry = new THREE.BoxGeometry(reelSpacing * 1.6, 0.003, 0.001);
   const tapeMaterial = new THREE.MeshStandardMaterial({
-    color: 0x3a2a1a, // Brown tape color
+    color: new THREE.Color(group.userData.tapeColor), // Customizable tape color
     roughness: 0.8
   });
   const tape = new THREE.Mesh(tapeGeometry, tapeMaterial);
+  tape.name = 'tape'; // Name for color updates
   tape.position.set(0, -reelRadius * 0.7, 0.002);
   reelGroup.add(tape);
 
@@ -4488,7 +4495,7 @@ function createCassettePlayer(options = {}) {
   const screenHeight = 0.012;
   const screenBackGeometry = new THREE.PlaneGeometry(screenWidth, screenHeight);
   const screenBackMaterial = new THREE.MeshStandardMaterial({
-    color: 0x2d4a3e,
+    color: new THREE.Color(group.userData.screenColor), // Customizable screen color
     roughness: 0.8,
     metalness: 0.0
   });
@@ -4543,9 +4550,9 @@ function createCassettePlayer(options = {}) {
   const buttonsGroup = new THREE.Group();
   buttonsGroup.name = 'buttons';
 
-  // Button material - silver slider style
+  // Button material - silver slider style (for prev/next)
   const buttonMaterial = new THREE.MeshStandardMaterial({
-    color: 0xa0a0a0,
+    color: new THREE.Color(group.userData.prevNextButtonColor), // Customizable prev/next button color
     roughness: 0.3,
     metalness: 0.5
   });
@@ -4555,7 +4562,7 @@ function createCassettePlayer(options = {}) {
 
   // Play button (with small red accent)
   const playButtonMaterial = new THREE.MeshStandardMaterial({
-    color: 0x909090,
+    color: new THREE.Color(group.userData.playPauseButtonColor), // Customizable play/pause button color
     roughness: 0.3,
     metalness: 0.5
   });
@@ -4573,8 +4580,15 @@ function createCassettePlayer(options = {}) {
   playDot.userData.buttonType = 'play';
   buttonsGroup.add(playDot);
 
+  // Stop button material
+  const stopButtonMaterial = new THREE.MeshStandardMaterial({
+    color: new THREE.Color(group.userData.stopButtonColor), // Customizable stop button color
+    roughness: 0.3,
+    metalness: 0.5
+  });
+
   // Stop button
-  const stopButton = new THREE.Mesh(sliderButtonGeometry, buttonMaterial);
+  const stopButton = new THREE.Mesh(sliderButtonGeometry, stopButtonMaterial);
   stopButton.position.set(-buttonSpacing * 0.5, buttonY + 0.002, buttonZ);
   stopButton.name = 'stopButton';
   stopButton.userData.buttonType = 'stop';
@@ -4712,7 +4726,13 @@ function createBigCassettePlayer(options = {}) {
     reelRotation: 0,
     // Colors - Sony Walkman style: blue body with silver accents
     mainColor: options.mainColor || '#1e3a5f', // Classic Sony blue
-    accentColor: options.accentColor || '#c0c0c0' // Silver accents
+    accentColor: options.accentColor || '#c0c0c0', // Silver accents
+    // Custom player colors (for customization panel)
+    screenColor: options.screenColor || '#2d4a3e', // LCD screen background
+    tapeColor: options.tapeColor || '#3a2a1a', // Magnetic tape color
+    prevNextButtonColor: options.prevNextButtonColor || '#808080', // Prev/Next buttons
+    playPauseButtonColor: options.playPauseButtonColor || '#ff6600', // Play/Pause button (orange)
+    stopButtonColor: options.stopButtonColor || '#606060' // Stop button
   };
 
   const bodyMaterial = new THREE.MeshStandardMaterial({
@@ -4834,10 +4854,11 @@ function createBigCassettePlayer(options = {}) {
   // Tape between reels
   const tapeGeometry = new THREE.BoxGeometry(0.09, 0.003, 0.002);
   const tapeMaterial = new THREE.MeshStandardMaterial({
-    color: 0x3a2a1a, // Brown tape color
+    color: new THREE.Color(group.userData.tapeColor), // Customizable tape color
     roughness: 0.8
   });
   const tape = new THREE.Mesh(tapeGeometry, tapeMaterial);
+  tape.name = 'tape'; // Name for color updates
   tape.position.set(0, 0.022, 0);
   reelGroup.add(tape);
 
@@ -4848,7 +4869,7 @@ function createBigCassettePlayer(options = {}) {
   const screenHeight = 0.028;
   const screenGeometry = new THREE.PlaneGeometry(screenWidth, screenHeight);
   const screenBackMaterial = new THREE.MeshStandardMaterial({
-    color: 0x2d4a3e, // Dark green LCD background
+    color: new THREE.Color(group.userData.screenColor), // Customizable screen color
     roughness: 0.8,
     metalness: 0.0
   });
@@ -4902,19 +4923,19 @@ function createBigCassettePlayer(options = {}) {
 
   const buttonGeometry = new THREE.BoxGeometry(buttonWidth, buttonHeight, buttonDepth);
 
-  // Button materials - Walkman style (silver/gray buttons)
+  // Button materials - Walkman style (customizable colors)
   const buttonMaterial = new THREE.MeshStandardMaterial({
-    color: 0x808080,
+    color: new THREE.Color(group.userData.prevNextButtonColor), // Customizable prev/next button color
     roughness: 0.4,
     metalness: 0.5
   });
   const playButtonMaterial = new THREE.MeshStandardMaterial({
-    color: 0xff6600, // Orange play button (Sony style)
+    color: new THREE.Color(group.userData.playPauseButtonColor), // Customizable play button color
     roughness: 0.4,
     metalness: 0.3
   });
   const stopButtonMaterial = new THREE.MeshStandardMaterial({
-    color: 0x606060,
+    color: new THREE.Color(group.userData.stopButtonColor), // Customizable stop button color
     roughness: 0.4,
     metalness: 0.5
   });
@@ -6800,13 +6821,48 @@ function updateObjectColor(object, colorType, colorValue) {
       typeSpecificData.inkColor = object.userData.inkColor;
       typeSpecificData.colorHex = object.userData.colorHex;
       break;
+    case 'cassette-player':
+    case 'big-cassette-player':
+      // Preserve playback state
+      typeSpecificData.isPlaying = object.userData.isPlaying;
+      typeSpecificData.currentTrackIndex = object.userData.currentTrackIndex;
+      typeSpecificData.currentTime = object.userData.currentTime;
+      // Preserve music folder data
+      typeSpecificData.musicFolderPath = object.userData.musicFolderPath;
+      typeSpecificData.audioFiles = object.userData.audioFiles;
+      // Preserve audio effects settings
+      typeSpecificData.tapeHissLevel = object.userData.tapeHissLevel;
+      typeSpecificData.wowFlutterLevel = object.userData.wowFlutterLevel;
+      typeSpecificData.saturationLevel = object.userData.saturationLevel;
+      typeSpecificData.lowCutoff = object.userData.lowCutoff;
+      typeSpecificData.highCutoff = object.userData.highCutoff;
+      typeSpecificData.volume = object.userData.volume;
+      // Preserve custom player colors
+      typeSpecificData.screenColor = object.userData.screenColor;
+      typeSpecificData.tapeColor = object.userData.tapeColor;
+      typeSpecificData.prevNextButtonColor = object.userData.prevNextButtonColor;
+      typeSpecificData.playPauseButtonColor = object.userData.playPauseButtonColor;
+      typeSpecificData.stopButtonColor = object.userData.stopButtonColor;
+      break;
   }
 
   // Create new object with updated colors
-  const newObject = creator({
+  // For cassette players, include the custom color options
+  const creatorOptions = {
     mainColor: object.userData.mainColor,
     accentColor: object.userData.accentColor
-  });
+  };
+
+  // Add cassette player-specific colors
+  if (type === 'cassette-player' || type === 'big-cassette-player') {
+    creatorOptions.screenColor = object.userData.screenColor;
+    creatorOptions.tapeColor = object.userData.tapeColor;
+    creatorOptions.prevNextButtonColor = object.userData.prevNextButtonColor;
+    creatorOptions.playPauseButtonColor = object.userData.playPauseButtonColor;
+    creatorOptions.stopButtonColor = object.userData.stopButtonColor;
+  }
+
+  const newObject = creator(creatorOptions);
 
   // Restore position, rotation, scale and other properties
   newObject.position.set(position.x, position.y, position.z);
@@ -10817,8 +10873,44 @@ function updateCustomizationPanel(object) {
       const folderDisplay = object.userData.musicFolderPath
         ? object.userData.musicFolderPath.split('/').pop() || object.userData.musicFolderPath.split('\\').pop()
         : 'No folder selected';
+      // Get current player colors with defaults
+      const screenColor = object.userData.screenColor || '#2d4a3e';
+      const tapeColor = object.userData.tapeColor || '#3a2a1a';
+      const prevNextBtnColor = object.userData.prevNextButtonColor || (object.userData.type === 'big-cassette-player' ? '#808080' : '#a0a0a0');
+      const playPauseBtnColor = object.userData.playPauseButtonColor || (object.userData.type === 'big-cassette-player' ? '#ff6600' : '#909090');
+      const stopBtnColor = object.userData.stopButtonColor || (object.userData.type === 'big-cassette-player' ? '#606060' : '#a0a0a0');
       dynamicOptions.innerHTML = `
+        <!-- Player Colors Accordion -->
         <div class="customization-group" style="margin-top: 20px; padding-top: 15px; border-top: 1px solid rgba(255,255,255,0.1);">
+          <div id="player-colors-toggle" style="display: flex; align-items: center; justify-content: space-between; padding: 10px 12px; background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.1); border-radius: 8px; cursor: pointer;">
+            <span style="color: rgba(255,255,255,0.8); font-size: 12px;">🎨 Player Colors</span>
+            <span id="player-colors-arrow" style="color: rgba(255,255,255,0.5); font-size: 12px;">▼</span>
+          </div>
+          <div id="player-colors-content" style="display: none; padding: 12px; background: rgba(0,0,0,0.2); border: 1px solid rgba(255,255,255,0.1); border-top: none; border-radius: 0 0 8px 8px;">
+            <div style="margin-bottom: 12px;">
+              <label style="display: block; color: rgba(255,255,255,0.7); font-size: 11px; margin-bottom: 6px;">Screen Color</label>
+              <input type="color" id="player-screen-color" value="${screenColor}" style="width: 100%; height: 32px; border: none; border-radius: 6px; cursor: pointer; background: rgba(0,0,0,0.3);">
+            </div>
+            <div style="margin-bottom: 12px;">
+              <label style="display: block; color: rgba(255,255,255,0.7); font-size: 11px; margin-bottom: 6px;">Tape Color</label>
+              <input type="color" id="player-tape-color" value="${tapeColor}" style="width: 100%; height: 32px; border: none; border-radius: 6px; cursor: pointer; background: rgba(0,0,0,0.3);">
+            </div>
+            <div style="margin-bottom: 12px;">
+              <label style="display: block; color: rgba(255,255,255,0.7); font-size: 11px; margin-bottom: 6px;">Prev/Next Buttons</label>
+              <input type="color" id="player-prevnext-color" value="${prevNextBtnColor}" style="width: 100%; height: 32px; border: none; border-radius: 6px; cursor: pointer; background: rgba(0,0,0,0.3);">
+            </div>
+            <div style="margin-bottom: 12px;">
+              <label style="display: block; color: rgba(255,255,255,0.7); font-size: 11px; margin-bottom: 6px;">Play/Pause Button</label>
+              <input type="color" id="player-playpause-color" value="${playPauseBtnColor}" style="width: 100%; height: 32px; border: none; border-radius: 6px; cursor: pointer; background: rgba(0,0,0,0.3);">
+            </div>
+            <div>
+              <label style="display: block; color: rgba(255,255,255,0.7); font-size: 11px; margin-bottom: 6px;">Stop Button</label>
+              <input type="color" id="player-stop-color" value="${stopBtnColor}" style="width: 100%; height: 32px; border: none; border-radius: 6px; cursor: pointer; background: rgba(0,0,0,0.3);">
+            </div>
+          </div>
+        </div>
+
+        <div class="customization-group" style="margin-top: 15px;">
           <label>Music Folder</label>
           <div style="display: flex; flex-direction: column; gap: 10px; margin-top: 8px;">
             <div style="color: rgba(255,255,255,0.5); font-size: 12px; word-break: break-all;">
@@ -11577,6 +11669,62 @@ function setupLaptopCustomizationHandlers(object) {
   }, 0);
 }
 
+// Helper function to update player colors without recreating the object
+function updatePlayerColors(object) {
+  if (!object) return;
+
+  const type = object.userData.type;
+  if (type !== 'cassette-player' && type !== 'big-cassette-player') return;
+
+  // Update screen color
+  const screen = object.getObjectByName('screen');
+  if (screen && screen.material && object.userData.screenColor) {
+    screen.material.color.set(new THREE.Color(object.userData.screenColor));
+    screen.material.needsUpdate = true;
+  }
+
+  // Update tape color (tape is inside the reels group)
+  const reels = object.getObjectByName('reels');
+  if (reels) {
+    const tape = reels.getObjectByName('tape');
+    if (tape && tape.material && object.userData.tapeColor) {
+      tape.material.color.set(new THREE.Color(object.userData.tapeColor));
+      tape.material.needsUpdate = true;
+    }
+  }
+
+  // Update button colors
+  const buttons = object.getObjectByName('buttons');
+  if (buttons) {
+    // Update play button
+    const playButton = buttons.getObjectByName('playButton');
+    if (playButton && playButton.material && object.userData.playPauseButtonColor) {
+      playButton.material.color.set(new THREE.Color(object.userData.playPauseButtonColor));
+      playButton.material.needsUpdate = true;
+    }
+
+    // Update stop button
+    const stopButton = buttons.getObjectByName('stopButton');
+    if (stopButton && stopButton.material && object.userData.stopButtonColor) {
+      stopButton.material.color.set(new THREE.Color(object.userData.stopButtonColor));
+      stopButton.material.needsUpdate = true;
+    }
+
+    // Update prev/next buttons
+    const prevButton = buttons.getObjectByName('prevButton');
+    if (prevButton && prevButton.material && object.userData.prevNextButtonColor) {
+      prevButton.material.color.set(new THREE.Color(object.userData.prevNextButtonColor));
+      prevButton.material.needsUpdate = true;
+    }
+
+    const nextButton = buttons.getObjectByName('nextButton');
+    if (nextButton && nextButton.material && object.userData.prevNextButtonColor) {
+      nextButton.material.color.set(new THREE.Color(object.userData.prevNextButtonColor));
+      nextButton.material.needsUpdate = true;
+    }
+  }
+}
+
 function setupCassetteCustomizationHandlers(object) {
   setTimeout(() => {
     // Music folder selection
@@ -11662,6 +11810,66 @@ function setupCassetteCustomizationHandlers(object) {
         saveState();
       });
       addScrollToSlider(volumeSlider);
+    }
+
+    // Player colors accordion toggle
+    const playerColorsToggle = document.getElementById('player-colors-toggle');
+    const playerColorsContent = document.getElementById('player-colors-content');
+    const playerColorsArrow = document.getElementById('player-colors-arrow');
+    if (playerColorsToggle && playerColorsContent) {
+      playerColorsToggle.addEventListener('click', () => {
+        const isOpen = playerColorsContent.style.display !== 'none';
+        playerColorsContent.style.display = isOpen ? 'none' : 'block';
+        playerColorsArrow.textContent = isOpen ? '▼' : '▲';
+        playerColorsToggle.style.borderRadius = isOpen ? '8px' : '8px 8px 0 0';
+      });
+    }
+
+    // Player color inputs
+    const screenColorInput = document.getElementById('player-screen-color');
+    const tapeColorInput = document.getElementById('player-tape-color');
+    const prevNextColorInput = document.getElementById('player-prevnext-color');
+    const playPauseColorInput = document.getElementById('player-playpause-color');
+    const stopColorInput = document.getElementById('player-stop-color');
+
+    if (screenColorInput) {
+      screenColorInput.addEventListener('input', (e) => {
+        object.userData.screenColor = e.target.value;
+        updatePlayerColors(object);
+        saveState();
+      });
+    }
+
+    if (tapeColorInput) {
+      tapeColorInput.addEventListener('input', (e) => {
+        object.userData.tapeColor = e.target.value;
+        updatePlayerColors(object);
+        saveState();
+      });
+    }
+
+    if (prevNextColorInput) {
+      prevNextColorInput.addEventListener('input', (e) => {
+        object.userData.prevNextButtonColor = e.target.value;
+        updatePlayerColors(object);
+        saveState();
+      });
+    }
+
+    if (playPauseColorInput) {
+      playPauseColorInput.addEventListener('input', (e) => {
+        object.userData.playPauseButtonColor = e.target.value;
+        updatePlayerColors(object);
+        saveState();
+      });
+    }
+
+    if (stopColorInput) {
+      stopColorInput.addEventListener('input', (e) => {
+        object.userData.stopButtonColor = e.target.value;
+        updatePlayerColors(object);
+        saveState();
+      });
     }
 
     // Tape effects accordion toggle
@@ -18480,6 +18688,12 @@ async function saveStateImmediate() {
           data.saturationLevel = obj.userData.saturationLevel;
           data.lowCutoff = obj.userData.lowCutoff;
           data.highCutoff = obj.userData.highCutoff;
+          // Save custom player colors
+          data.screenColor = obj.userData.screenColor;
+          data.tapeColor = obj.userData.tapeColor;
+          data.prevNextButtonColor = obj.userData.prevNextButtonColor;
+          data.playPauseButtonColor = obj.userData.playPauseButtonColor;
+          data.stopButtonColor = obj.userData.stopButtonColor;
           // Save playback position and state for resume after reload
           // Get current time from player's audio element if playing (per-player audio state)
           if (obj.userData.audioElement) {
@@ -18582,14 +18796,26 @@ async function loadState() {
       // Load objects
       if (result.state.objects) {
         result.state.objects.forEach(objData => {
-          const obj = addObjectToDesk(objData.type, {
+          // Build options object with common properties
+          const loadOptions = {
             x: objData.x,
             z: objData.z,
             rotationY: objData.rotationY,
             scale: objData.scale,
             mainColor: objData.mainColor,
             accentColor: objData.accentColor
-          });
+          };
+
+          // Add cassette player-specific color options
+          if (objData.type === 'cassette-player' || objData.type === 'big-cassette-player') {
+            if (objData.screenColor) loadOptions.screenColor = objData.screenColor;
+            if (objData.tapeColor) loadOptions.tapeColor = objData.tapeColor;
+            if (objData.prevNextButtonColor) loadOptions.prevNextButtonColor = objData.prevNextButtonColor;
+            if (objData.playPauseButtonColor) loadOptions.playPauseButtonColor = objData.playPauseButtonColor;
+            if (objData.stopButtonColor) loadOptions.stopButtonColor = objData.stopButtonColor;
+          }
+
+          const obj = addObjectToDesk(objData.type, loadOptions);
 
           // Restore type-specific data
           if (obj) {
@@ -18970,6 +19196,12 @@ async function loadState() {
                 if (objData.saturationLevel !== undefined) obj.userData.saturationLevel = objData.saturationLevel;
                 if (objData.lowCutoff !== undefined) obj.userData.lowCutoff = objData.lowCutoff;
                 if (objData.highCutoff !== undefined) obj.userData.highCutoff = objData.highCutoff;
+                // Restore custom player colors (userData is already set from loadOptions, but ensure consistency)
+                if (objData.screenColor) obj.userData.screenColor = objData.screenColor;
+                if (objData.tapeColor) obj.userData.tapeColor = objData.tapeColor;
+                if (objData.prevNextButtonColor) obj.userData.prevNextButtonColor = objData.prevNextButtonColor;
+                if (objData.playPauseButtonColor) obj.userData.playPauseButtonColor = objData.playPauseButtonColor;
+                if (objData.stopButtonColor) obj.userData.stopButtonColor = objData.stopButtonColor;
                 break;
               case 'dictaphone':
                 // Restore recordings folder path and next recording number

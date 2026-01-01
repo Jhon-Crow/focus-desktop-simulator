@@ -5295,7 +5295,10 @@ let dictaphoneState = {
   destinationNode: null,
   microphoneGainNode: null,
   virtualAudioGainNode: null,
-  sampleRate: 48000
+  sampleRate: 48000,
+  // For volume level visualization
+  analyserNode: null,
+  microphoneSource: null
 };
 
 // Pure JavaScript WAV encoder - converts AudioBuffer to WAV format
@@ -5463,6 +5466,8 @@ function createDictaphone(options = {}) {
     recordingsFolderPath: options.recordingsFolderPath || null,
     // Recording format: 'wav' (default), 'mp3', or 'webm'
     recordingFormat: options.recordingFormat || 'wav',
+    // Recording volume: 0-200% (default 100%)
+    recordingVolume: options.recordingVolume !== undefined ? options.recordingVolume : 100,
     // Colors - all black minimalist design
     mainColor: options.mainColor || '#1a1a1a', // Black
     accentColor: options.accentColor || '#2a2a2a' // Dark gray accent
@@ -5682,14 +5687,25 @@ async function startDictaphoneRecording(object) {
       });
       dictaphoneState.microphoneStream = micStream;
 
-      // Connect microphone to destination
+      // Connect microphone to destination with volume control
       const micSource = audioCtx.createMediaStreamSource(micStream);
+      dictaphoneState.microphoneSource = micSource;
       dictaphoneState.microphoneGainNode = audioCtx.createGain();
-      dictaphoneState.microphoneGainNode.gain.value = 1.0;
-      micSource.connect(dictaphoneState.microphoneGainNode);
+      // Apply recording volume setting (0-200%)
+      const volumeMultiplier = (object.userData.recordingVolume || 100) / 100;
+      dictaphoneState.microphoneGainNode.gain.value = volumeMultiplier;
+
+      // Create analyser node for volume level visualization
+      dictaphoneState.analyserNode = audioCtx.createAnalyser();
+      dictaphoneState.analyserNode.fftSize = 256;
+      dictaphoneState.analyserNode.smoothingTimeConstant = 0.3;
+
+      // Chain: micSource -> analyserNode -> microphoneGainNode -> destinationNode
+      micSource.connect(dictaphoneState.analyserNode);
+      dictaphoneState.analyserNode.connect(dictaphoneState.microphoneGainNode);
       dictaphoneState.microphoneGainNode.connect(dictaphoneState.destinationNode);
 
-      console.log('Microphone connected for recording');
+      console.log('Microphone connected for recording with volume:', volumeMultiplier);
     } catch (micError) {
       console.warn('Could not access microphone:', micError);
       // Continue without microphone - will record only virtual sounds
@@ -5797,6 +5813,22 @@ async function stopDictaphoneRecording(object) {
     if (dictaphoneState.microphoneStream) {
       dictaphoneState.microphoneStream.getTracks().forEach(track => track.stop());
       dictaphoneState.microphoneStream = null;
+    }
+
+    // Disconnect analyser node
+    if (dictaphoneState.analyserNode) {
+      try {
+        dictaphoneState.analyserNode.disconnect();
+      } catch (e) {}
+      dictaphoneState.analyserNode = null;
+    }
+
+    // Disconnect microphone source
+    if (dictaphoneState.microphoneSource) {
+      try {
+        dictaphoneState.microphoneSource.disconnect();
+      } catch (e) {}
+      dictaphoneState.microphoneSource = null;
     }
 
     // Disconnect virtual audio
@@ -5966,6 +5998,37 @@ function updateDictaphoneLed(object, isRecording) {
     }
   } catch (error) {
     console.error('Error updating dictaphone LED:', error);
+  }
+}
+
+// Get current audio level from dictaphone analyser (returns 0-100)
+// This is used for the volume level indicator in the UI
+function getDictaphoneAudioLevel() {
+  if (!dictaphoneState.isRecording || !dictaphoneState.analyserNode) {
+    return 0;
+  }
+
+  try {
+    const analyser = dictaphoneState.analyserNode;
+    const dataArray = new Uint8Array(analyser.frequencyBinCount);
+    analyser.getByteTimeDomainData(dataArray);
+
+    // Calculate RMS (Root Mean Square) for accurate volume level
+    let sum = 0;
+    for (let i = 0; i < dataArray.length; i++) {
+      const sample = (dataArray[i] - 128) / 128; // Normalize to -1 to 1
+      sum += sample * sample;
+    }
+    const rms = Math.sqrt(sum / dataArray.length);
+
+    // Convert RMS to percentage (0-100) with some amplification for visibility
+    // RMS typically ranges from 0 to ~0.5 for typical audio
+    const level = Math.min(100, rms * 200);
+
+    return level;
+  } catch (error) {
+    console.warn('Error getting audio level:', error);
+    return 0;
   }
 }
 
@@ -10348,8 +10411,35 @@ function updateCustomizationPanel(object) {
       // Determine if WAV/MP3 buttons should be disabled
       const wavMp3Disabled = !ffmpegAvailable;
       const disabledStyle = 'opacity: 0.4; cursor: not-allowed;';
+      // Get recording volume (default 100%)
+      const recordingVolume = object.userData.recordingVolume !== undefined ? object.userData.recordingVolume : 100;
       dynamicOptions.innerHTML = `
         <div class="customization-group" style="margin-top: 20px; padding-top: 15px; border-top: 1px solid rgba(255,255,255,0.1);">
+          <label>Recording Volume: <span id="dictaphone-volume-display">${recordingVolume}%</span></label>
+          <input type="range" id="dictaphone-volume-slider" min="0" max="200" value="${recordingVolume}" step="5"
+            style="width: 100%; height: 6px; margin-top: 8px;">
+          <div style="display: flex; justify-content: space-between; color: rgba(255,255,255,0.4); font-size: 10px; margin-top: 4px;">
+            <span>0%</span>
+            <span>100%</span>
+            <span>200%</span>
+          </div>
+        </div>
+
+        <div class="customization-group" style="margin-top: 15px; padding-top: 15px; border-top: 1px solid rgba(255,255,255,0.1);">
+          <label>Audio Level</label>
+          <div style="margin-top: 8px;">
+            <div style="background: rgba(0,0,0,0.3); border-radius: 4px; height: 24px; overflow: hidden; position: relative;">
+              <div id="dictaphone-level-bar" style="height: 100%; width: 0%; background: linear-gradient(90deg, #22c55e 0%, #22c55e 60%, #eab308 80%, #ef4444 100%); transition: width 0.05s ease-out;"></div>
+              <div style="position: absolute; top: 0; left: 0; right: 0; bottom: 0; display: flex; align-items: center; justify-content: center;">
+                <span id="dictaphone-level-text" style="color: rgba(255,255,255,0.7); font-size: 11px; text-shadow: 0 1px 2px rgba(0,0,0,0.5);">
+                  ${object.userData.isRecording ? 'Recording...' : 'Not recording'}
+                </span>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="customization-group" style="margin-top: 15px; padding-top: 15px; border-top: 1px solid rgba(255,255,255,0.1);">
           <label>Recording Format</label>
           <div id="dictaphone-format-buttons" style="display: flex; gap: 8px; margin-top: 8px;">
             <button data-format="wav" ${wavMp3Disabled ? 'disabled' : ''} style="flex: 1; padding: 10px; background: ${recordingFormat === 'wav' ? 'rgba(79, 70, 229, 0.3)' : 'rgba(255,255,255,0.1)'}; border: 1px solid ${recordingFormat === 'wav' ? 'rgba(79, 70, 229, 0.6)' : 'rgba(255,255,255,0.2)'}; border-radius: 8px; color: #fff; cursor: pointer; font-size: 12px; ${wavMp3Disabled ? disabledStyle : ''}">
@@ -11177,6 +11267,39 @@ function setupCassetteCustomizationHandlers(object) {
 
 function setupDictaphoneCustomizationHandlers(object) {
   setTimeout(() => {
+    // Volume slider
+    const volumeSlider = document.getElementById('dictaphone-volume-slider');
+    const volumeDisplay = document.getElementById('dictaphone-volume-display');
+
+    if (volumeSlider) {
+      volumeSlider.addEventListener('input', (e) => {
+        const volume = parseInt(e.target.value);
+        object.userData.recordingVolume = volume;
+        if (volumeDisplay) {
+          volumeDisplay.textContent = `${volume}%`;
+        }
+
+        // Update gain node in real-time if recording
+        if (dictaphoneState.isRecording && dictaphoneState.microphoneGainNode) {
+          dictaphoneState.microphoneGainNode.gain.value = volume / 100;
+        }
+
+        saveState();
+      });
+
+      // Add scroll wheel support for volume slider
+      addScrollToSlider(volumeSlider, (value) => {
+        object.userData.recordingVolume = value;
+        if (volumeDisplay) {
+          volumeDisplay.textContent = `${value}%`;
+        }
+        if (dictaphoneState.isRecording && dictaphoneState.microphoneGainNode) {
+          dictaphoneState.microphoneGainNode.gain.value = value / 100;
+        }
+        saveState();
+      });
+    }
+
     // Format selection buttons
     const formatButtons = document.querySelectorAll('#dictaphone-format-buttons button');
     formatButtons.forEach(btn => {
@@ -17698,6 +17821,10 @@ async function saveStateImmediate() {
           if (obj.userData.recordingFormat) {
             data.recordingFormat = obj.userData.recordingFormat;
           }
+          // Save recording volume (0-200%)
+          if (obj.userData.recordingVolume !== undefined) {
+            data.recordingVolume = obj.userData.recordingVolume;
+          }
           break;
       }
 
@@ -18172,6 +18299,10 @@ async function loadState() {
                 if (objData.recordingFormat) {
                   obj.userData.recordingFormat = objData.recordingFormat;
                 }
+                // Restore recording volume (0-200%)
+                if (objData.recordingVolume !== undefined) {
+                  obj.userData.recordingVolume = objData.recordingVolume;
+                }
                 break;
             }
 
@@ -18465,6 +18596,7 @@ function animate() {
     }
 
     // Animate dictaphone LED when recording (subtle pulsing glow)
+    // Also update volume level indicator in the UI
     if (obj.userData.type === 'dictaphone') {
       try {
         if (dictaphoneState.isRecording && dictaphoneState.currentRecorderId === obj.userData.id) {
@@ -18484,6 +18616,32 @@ function animate() {
             if (typeof ledLight.intensity === 'number') {
               ledLight.intensity = 0.3 * pulse;
             }
+          }
+
+          // Update volume level indicator in the UI (with volume adjustment)
+          const levelBar = document.getElementById('dictaphone-level-bar');
+          const levelText = document.getElementById('dictaphone-level-text');
+          if (levelBar) {
+            // Get the raw audio level (0-100) from the analyser
+            const rawLevel = getDictaphoneAudioLevel();
+            // Apply volume adjustment to the displayed level
+            const volumeMultiplier = (obj.userData.recordingVolume || 100) / 100;
+            const adjustedLevel = Math.min(100, rawLevel * volumeMultiplier);
+            levelBar.style.width = `${adjustedLevel}%`;
+
+            if (levelText) {
+              levelText.textContent = `Recording... ${Math.round(adjustedLevel)}%`;
+            }
+          }
+        } else {
+          // Reset level bar when not recording
+          const levelBar = document.getElementById('dictaphone-level-bar');
+          const levelText = document.getElementById('dictaphone-level-text');
+          if (levelBar && levelBar.style.width !== '0%') {
+            levelBar.style.width = '0%';
+          }
+          if (levelText && levelText.textContent !== 'Not recording') {
+            levelText.textContent = 'Not recording';
           }
         }
       } catch (error) {

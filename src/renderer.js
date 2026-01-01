@@ -4017,18 +4017,17 @@ function calculateSpatialAudio(object, referenceObject = null) {
   // For reference objects other than camera, we don't apply rotation transform
   let localX = relativeX;
   if (!referenceObject && cameraLookState) {
-    // Rotate the relative position by the negative of camera yaw
-    // This transforms from world space to camera's local space
-    // cos(-yaw) = cos(yaw), sin(-yaw) = -sin(yaw)
+    // Calculate the component of the object's position along the camera's right axis
+    // Camera forward direction: (sin(yaw), 0, cos(yaw))
+    // Camera right direction: (cos(yaw), 0, -sin(yaw))
+    // The dot product of relative position with camera's right gives the local X coordinate
     const yaw = cameraLookState.yaw;
     const cosYaw = Math.cos(yaw);
     const sinYaw = Math.sin(yaw);
 
-    // Rotation matrix for -yaw (to get local coordinates):
-    // localX = relativeX * cos(yaw) + relativeZ * sin(yaw)
-    // localZ = -relativeX * sin(yaw) + relativeZ * cos(yaw)
-    // We only need localX for panning
-    localX = relativeX * cosYaw + relativeZ * sinYaw;
+    // Project relative position onto camera's right direction:
+    // localX = relativeX * cos(yaw) + relativeZ * (-sin(yaw))
+    localX = relativeX * cosYaw - relativeZ * sinYaw;
   }
 
   // Pan range: -1 (full left) to 1 (full right)

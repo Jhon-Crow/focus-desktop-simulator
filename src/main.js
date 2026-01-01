@@ -5,6 +5,7 @@ const fs = require('fs');
 const os = require('os');
 
 let mainWindow;
+let ffmpegAvailable = false; // Global FFmpeg availability status
 
 function createWindow() {
   // Get primary display dimensions for fullscreen window mode
@@ -47,7 +48,82 @@ function createWindow() {
   });
 }
 
-app.whenReady().then(createWindow);
+// ============================================================================
+// FFMPEG INSTALLATION
+// ============================================================================
+
+// Try to install FFmpeg automatically based on platform
+async function tryInstallFfmpeg() {
+  return new Promise((resolve) => {
+    const platform = process.platform;
+    console.log('Attempting to auto-install FFmpeg on platform:', platform);
+
+    let installCommand = null;
+
+    if (platform === 'win32') {
+      // Windows: Try winget first, then choco
+      // Note: winget requires admin rights, so this may not work
+      installCommand = 'winget install --id=Gyan.FFmpeg -e --accept-source-agreements --accept-package-agreements';
+    } else if (platform === 'darwin') {
+      // macOS: Try brew
+      installCommand = 'brew install ffmpeg';
+    } else if (platform === 'linux') {
+      // Linux: Try apt-get (works for Debian/Ubuntu)
+      // Use sudo with DEBIAN_FRONTEND=noninteractive for non-interactive install
+      installCommand = 'sudo DEBIAN_FRONTEND=noninteractive apt-get install -y ffmpeg';
+    }
+
+    if (!installCommand) {
+      console.log('No auto-install method available for platform:', platform);
+      resolve(false);
+      return;
+    }
+
+    console.log('Running FFmpeg install command:', installCommand);
+
+    exec(installCommand, { timeout: 300000 }, (error, stdout, stderr) => {
+      if (error) {
+        console.log('FFmpeg auto-install failed:', error.message);
+        console.log('stderr:', stderr);
+        resolve(false);
+      } else {
+        console.log('FFmpeg auto-install completed');
+        console.log('stdout:', stdout);
+        resolve(true);
+      }
+    });
+  });
+}
+
+// Initialize FFmpeg status at app startup
+async function initializeFfmpeg() {
+  console.log('Checking FFmpeg availability at startup...');
+  ffmpegAvailable = await checkFfmpegAvailable();
+  console.log('Initial FFmpeg status:', ffmpegAvailable ? 'available' : 'not available');
+
+  if (!ffmpegAvailable) {
+    console.log('FFmpeg not found, attempting auto-installation...');
+    const installSuccess = await tryInstallFfmpeg();
+
+    if (installSuccess) {
+      // Re-check after installation
+      ffmpegAvailable = await checkFfmpegAvailable();
+      console.log('FFmpeg status after install attempt:', ffmpegAvailable ? 'available' : 'still not available');
+    }
+  }
+
+  // Send status to renderer when window is ready
+  if (mainWindow && mainWindow.webContents) {
+    mainWindow.webContents.on('did-finish-load', () => {
+      mainWindow.webContents.send('ffmpeg-status', ffmpegAvailable);
+    });
+  }
+}
+
+app.whenReady().then(async () => {
+  createWindow();
+  await initializeFfmpeg();
+});
 
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') {
@@ -163,6 +239,13 @@ function checkFfmpegAvailable() {
     }, 3000);
   });
 }
+
+// IPC handler to get current FFmpeg status
+ipcMain.handle('get-ffmpeg-status', async () => {
+  // Re-check in case FFmpeg was installed after app start
+  ffmpegAvailable = await checkFfmpegAvailable();
+  return { available: ffmpegAvailable };
+});
 
 // Transcode audio file to WAV PCM format using FFmpeg
 function transcodeToWavWithFfmpeg(inputPath, outputPath, maxDurationSeconds = 10) {

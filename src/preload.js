@@ -6,6 +6,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // Separate handlers for large data (PDF, cover images) to avoid lag
   saveObjectData: (objectId, dataType, dataUrl) => ipcRenderer.invoke('save-object-data', objectId, dataType, dataUrl),
   loadObjectData: (objectId, dataType) => ipcRenderer.invoke('load-object-data', objectId, dataType),
+  // FFmpeg status - check if FFmpeg is available
+  getFfmpegStatus: () => ipcRenderer.invoke('get-ffmpeg-status'),
+  // Listen for FFmpeg status updates from main process
+  onFfmpegStatus: (callback) => ipcRenderer.on('ffmpeg-status', (event, available) => callback(available)),
   // Audio transcoding using FFmpeg (for files that browser can't decode)
   transcodeAudio: (audioDataBase64, fileName) => ipcRenderer.invoke('transcode-audio', audioDataBase64, fileName),
   // Cassette player - music folder selection and audio file reading

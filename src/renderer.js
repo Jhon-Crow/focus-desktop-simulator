@@ -3991,18 +3991,22 @@ function calculateSpatialAudio(object, referenceObject = null) {
   // Calculate distance for volume attenuation
   const distance = Math.sqrt(relativeX * relativeX + relativeZ * relativeZ);
 
-  // Desk width is ~10 units, so objects at edges are ~5 units from center
-  // Maximum audible range set to desk diagonal (~8-10 units)
-  const maxDistance = 10;
-  const minDistance = 0.5; // Objects closer than this are at full volume
+  // Desk width is 10 units, depth is 7 units
+  // Use shorter max distance for more aggressive falloff
+  // Table width should feel "far" - noticeable volume difference
+  const maxDistance = 6; // Reduced from 10 to make distance more noticeable
+  const minDistance = 0.3; // Objects closer than this are at full volume
 
-  // Calculate volume based on distance (linear falloff for a small desk environment)
+  // Calculate volume based on distance using inverse square law for more realistic falloff
+  // This creates more dramatic difference between close and far sounds
   let volume = 1;
   if (distance > minDistance) {
-    // Linear falloff from minDistance to maxDistance
-    volume = 1 - Math.min(1, (distance - minDistance) / (maxDistance - minDistance));
-    // Keep some minimum volume so objects are always audible
-    volume = Math.max(0.2, volume);
+    // Use inverse square falloff for more realistic sound attenuation
+    // Formula: volume = 1 / (1 + k * distance^2), where k controls falloff speed
+    const falloffFactor = 0.15; // Higher = faster falloff
+    volume = 1 / (1 + falloffFactor * Math.pow(distance - minDistance, 2));
+    // Very low minimum volume - objects at table edges should be quite quiet
+    volume = Math.max(0.05, volume);
   }
 
   // Calculate panning based on x-position relative to reference

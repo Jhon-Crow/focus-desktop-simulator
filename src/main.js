@@ -354,6 +354,46 @@ ipcMain.handle('transcode-audio', async (event, audioDataBase64, fileName) => {
 // Supported audio extensions for the cassette player
 const AUDIO_EXTENSIONS = ['.mp3', '.wav', '.ogg', '.flac', '.aac', '.m4a', '.webm', '.opus'];
 
+// Recursively find all audio files in a folder and its subfolders
+function findAudioFilesRecursively(folderPath, basePath = null) {
+  if (!basePath) basePath = folderPath;
+
+  const audioFiles = [];
+
+  try {
+    const entries = fs.readdirSync(folderPath, { withFileTypes: true });
+
+    for (const entry of entries) {
+      const fullPath = path.join(folderPath, entry.name);
+
+      if (entry.isDirectory()) {
+        // Recursively scan subdirectories
+        const subFiles = findAudioFilesRecursively(fullPath, basePath);
+        audioFiles.push(...subFiles);
+      } else if (entry.isFile()) {
+        const ext = path.extname(entry.name).toLowerCase();
+        if (AUDIO_EXTENSIONS.includes(ext)) {
+          // Calculate relative path from base folder for display
+          const relativePath = path.relative(basePath, folderPath);
+          const displayName = relativePath
+            ? `${relativePath}/${path.basename(entry.name, ext)}`
+            : path.basename(entry.name, ext);
+
+          audioFiles.push({
+            name: displayName,
+            fullName: entry.name,
+            path: fullPath
+          });
+        }
+      }
+    }
+  } catch (err) {
+    console.error('Error reading folder:', folderPath, err.message);
+  }
+
+  return audioFiles;
+}
+
 // Open folder selection dialog and return audio files in the folder
 ipcMain.handle('select-music-folder', async () => {
   try {
@@ -368,18 +408,8 @@ ipcMain.handle('select-music-folder', async () => {
 
     const folderPath = result.filePaths[0];
 
-    // Read all audio files from the folder
-    const files = fs.readdirSync(folderPath);
-    const audioFiles = files
-      .filter(file => {
-        const ext = path.extname(file).toLowerCase();
-        return AUDIO_EXTENSIONS.includes(ext);
-      })
-      .map(file => ({
-        name: path.basename(file, path.extname(file)), // Name without extension
-        fullName: file,
-        path: path.join(folderPath, file)
-      }))
+    // Read all audio files from the folder and its subfolders recursively
+    const audioFiles = findAudioFilesRecursively(folderPath)
       .sort((a, b) => a.name.localeCompare(b.name)); // Sort alphabetically
 
     return {
@@ -430,24 +460,15 @@ ipcMain.handle('read-audio-file', async (event, filePath) => {
   }
 });
 
-// Refresh music folder - re-scan for audio files
+// Refresh music folder - re-scan for audio files (including subfolders)
 ipcMain.handle('refresh-music-folder', async (event, folderPath) => {
   try {
     if (!fs.existsSync(folderPath)) {
       return { success: false, error: 'Folder not found' };
     }
 
-    const files = fs.readdirSync(folderPath);
-    const audioFiles = files
-      .filter(file => {
-        const ext = path.extname(file).toLowerCase();
-        return AUDIO_EXTENSIONS.includes(ext);
-      })
-      .map(file => ({
-        name: path.basename(file, path.extname(file)),
-        fullName: file,
-        path: path.join(folderPath, file)
-      }))
+    // Read all audio files from the folder and its subfolders recursively
+    const audioFiles = findAudioFilesRecursively(folderPath)
       .sort((a, b) => a.name.localeCompare(b.name));
 
     return {

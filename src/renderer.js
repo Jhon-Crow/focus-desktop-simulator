@@ -3956,7 +3956,7 @@ let sharedAudioSystem = {
 // SPATIAL AUDIO SYSTEM
 // ============================================================================
 // Calculates stereo panning and volume based on object position relative to camera
-// Uses simple 2D panning model based on x-position relative to camera
+// Takes camera rotation into account for accurate left/right positioning
 
 /**
  * Calculate spatial audio parameters (pan and volume) for an object
@@ -3984,11 +3984,11 @@ function calculateSpatialAudio(object, referenceObject = null) {
     return { pan: 0, volume: 1 };
   }
 
-  // Calculate relative position from reference to object
+  // Calculate relative position from reference to object (in world coordinates)
   const relativeX = objectPos.x - refPos.x;
   const relativeZ = objectPos.z - refPos.z;
 
-  // Calculate distance for volume attenuation
+  // Calculate distance for volume attenuation (unchanged by rotation)
   const distance = Math.sqrt(relativeX * relativeX + relativeZ * relativeZ);
 
   // Desk width is 10 units, depth is 7 units
@@ -4009,11 +4009,32 @@ function calculateSpatialAudio(object, referenceObject = null) {
     volume = Math.max(0.05, volume);
   }
 
-  // Calculate panning based on x-position relative to reference
-  // Desk width is ~10 units, so max offset is ~5 units
+  // Calculate panning based on position relative to camera's viewing direction
+  // When the camera rotates, the sound panorama should change accordingly
+  // Transform world-space relative position to camera-local space using yaw rotation
+
+  // Get the camera's yaw angle (horizontal rotation)
+  // For reference objects other than camera, we don't apply rotation transform
+  let localX = relativeX;
+  if (!referenceObject && cameraLookState) {
+    // Rotate the relative position by the negative of camera yaw
+    // This transforms from world space to camera's local space
+    // cos(-yaw) = cos(yaw), sin(-yaw) = -sin(yaw)
+    const yaw = cameraLookState.yaw;
+    const cosYaw = Math.cos(yaw);
+    const sinYaw = Math.sin(yaw);
+
+    // Rotation matrix for -yaw (to get local coordinates):
+    // localX = relativeX * cos(yaw) + relativeZ * sin(yaw)
+    // localZ = -relativeX * sin(yaw) + relativeZ * cos(yaw)
+    // We only need localX for panning
+    localX = relativeX * cosYaw + relativeZ * sinYaw;
+  }
+
   // Pan range: -1 (full left) to 1 (full right)
+  // Desk width is ~10 units, so max offset is ~5 units
   const panRange = 5; // Units from center for full pan
-  let pan = relativeX / panRange;
+  let pan = localX / panRange;
   pan = Math.max(-1, Math.min(1, pan)); // Clamp to [-1, 1]
 
   return { pan, volume };

@@ -1808,7 +1808,9 @@ const OBJECT_PHYSICS = {
   'trophy': { weight: 0.9, stability: 0.6, height: 0.4, baseOffset: 0, friction: 0.5 },        // Metal/marble base
   'hourglass': { weight: 0.5, stability: 0.45, height: 0.35, baseOffset: 0.015, friction: 0.4 },// Smooth glass/wood
   'metronome': { weight: 0.7, stability: 0.7, height: 0.45, baseOffset: 0, friction: 0.55 },   // Wood, moderate grip
-  'paper': { weight: 0.05, stability: 0.98, height: 0.01, baseOffset: 0, friction: 0.8 }       // Paper, very grippy
+  'paper': { weight: 0.05, stability: 0.98, height: 0.01, baseOffset: 0, friction: 0.8 },      // Paper, very grippy
+  'cassette-player': { weight: 0.3, stability: 0.85, height: 0.08, baseOffset: 0, friction: 0.6 },  // Mini Walkman - compact plastic, moderate grip
+  'big-cassette-player': { weight: 0.6, stability: 0.9, height: 0.12, baseOffset: 0, friction: 0.65 } // Big Walkman - larger plastic, good grip
 };
 
 // Adjust object Y position when scaling to keep bottom on desk surface
@@ -11589,12 +11591,25 @@ function setupCassetteCustomizationHandlers(object) {
         try {
           const result = await window.electronAPI.selectMusicFolder();
           if (result.success && !result.canceled) {
+            // Remember if player was playing before folder change
+            const wasPlaying = object.userData.isPlaying;
+
+            // Stop current playback before changing folder
+            if (wasPlaying) {
+              stopPlayerAudio(object);
+            }
+
             object.userData.musicFolderPath = result.folderPath;
             object.userData.audioFiles = result.audioFiles;
             object.userData.currentTrackIndex = 0;
 
             if (result.audioFiles.length > 0) {
               updateCassetteScreen(object, result.audioFiles[0].name);
+
+              // If player was playing, start playing the first track from new folder
+              if (wasPlaying) {
+                playCassetteTrack(object, 0, 0);
+              }
             } else {
               updateCassetteScreen(object, 'NO TRACKS');
             }

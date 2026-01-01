@@ -5432,7 +5432,7 @@ function createDictaphone(options = {}) {
     recordingNumber: options.recordingNumber || 1,
     // Folder for saving recordings
     recordingsFolderPath: options.recordingsFolderPath || null,
-    // Recording format: 'wav' (default) or 'mp3'
+    // Recording format: 'wav' (default), 'mp3', or 'webm'
     recordingFormat: options.recordingFormat || 'wav',
     // Colors - all black minimalist design
     mainColor: options.mainColor || '#1a1a1a', // Black
@@ -5833,46 +5833,20 @@ async function saveDictaphoneRecording(object) {
     const folderPath = object.userData.recordingsFolderPath;
     const recordingNumber = object.userData.recordingNumber || 1;
 
-    let audioDataBase64;
-    let dataFormat = 'webm'; // Track what format we're actually sending
-
-    // Try browser-based conversion for WAV (no FFmpeg needed)
-    if (format === 'wav') {
-      console.log('Attempting browser-based WebM to WAV conversion...');
-      try {
-        const audioCtx = dictaphoneState.audioContext || getSharedAudioContext();
-        const wavBlob = await convertWebmToWav(webmBlob, audioCtx);
-        console.log('Browser WAV conversion successful, size:', wavBlob.size, 'bytes');
-
-        // Convert WAV blob to base64
-        const arrayBuffer = await wavBlob.arrayBuffer();
-        const uint8Array = new Uint8Array(arrayBuffer);
-        let binary = '';
-        for (let i = 0; i < uint8Array.byteLength; i++) {
-          binary += String.fromCharCode(uint8Array[i]);
-        }
-        audioDataBase64 = btoa(binary);
-        dataFormat = 'wav';
-        console.log('WAV converted and encoded, length:', audioDataBase64.length, 'characters');
-      } catch (wavError) {
-        console.warn('Browser WAV conversion failed:', wavError.message);
-        console.log('Falling back to WebM data for FFmpeg conversion...');
-        // Fall through to send WebM data
-      }
+    // Always send WebM data to main process
+    // Browser-based WebM to WAV conversion is unreliable (decodeAudioData doesn't support WebM/Opus in Chromium)
+    // FFmpeg handles all conversions (WAV, MP3) reliably
+    // WebM format saves directly without conversion
+    console.log('Converting WebM blob to base64...');
+    const arrayBuffer = await webmBlob.arrayBuffer();
+    const uint8Array = new Uint8Array(arrayBuffer);
+    let binary = '';
+    for (let i = 0; i < uint8Array.byteLength; i++) {
+      binary += String.fromCharCode(uint8Array[i]);
     }
-
-    // If WAV conversion failed or format is MP3, send WebM for FFmpeg processing
-    if (dataFormat === 'webm') {
-      console.log('Converting WebM blob to base64...');
-      const arrayBuffer = await webmBlob.arrayBuffer();
-      const uint8Array = new Uint8Array(arrayBuffer);
-      let binary = '';
-      for (let i = 0; i < uint8Array.byteLength; i++) {
-        binary += String.fromCharCode(uint8Array[i]);
-      }
-      audioDataBase64 = btoa(binary);
-      console.log('WebM base64 encoded, length:', audioDataBase64.length, 'characters');
-    }
+    const audioDataBase64 = btoa(binary);
+    const dataFormat = 'webm';
+    console.log('WebM base64 encoded, length:', audioDataBase64.length, 'characters');
 
     console.log('Calling saveRecording IPC:');
     console.log('  folderPath:', folderPath);
@@ -10347,9 +10321,12 @@ function updateCustomizationPanel(object) {
             <button data-format="mp3" style="flex: 1; padding: 10px; background: ${recordingFormat === 'mp3' ? 'rgba(79, 70, 229, 0.3)' : 'rgba(255,255,255,0.1)'}; border: 1px solid ${recordingFormat === 'mp3' ? 'rgba(79, 70, 229, 0.6)' : 'rgba(255,255,255,0.2)'}; border-radius: 8px; color: #fff; cursor: pointer; font-size: 12px;">
               MP3
             </button>
+            <button data-format="webm" style="flex: 1; padding: 10px; background: ${recordingFormat === 'webm' ? 'rgba(79, 70, 229, 0.3)' : 'rgba(255,255,255,0.1)'}; border: 1px solid ${recordingFormat === 'webm' ? 'rgba(79, 70, 229, 0.6)' : 'rgba(255,255,255,0.2)'}; border-radius: 8px; color: #fff; cursor: pointer; font-size: 12px;">
+              WebM
+            </button>
           </div>
           <div style="color: rgba(255,255,255,0.4); font-size: 10px; margin-top: 6px;">
-            WAV: lossless quality, larger files. MP3: compressed, smaller files.
+            WAV/MP3: Requires FFmpeg. WebM: Works without FFmpeg.
           </div>
         </div>
 
@@ -10383,7 +10360,8 @@ function updateCustomizationPanel(object) {
         <div style="margin-top: 15px; color: rgba(255,255,255,0.4); font-size: 11px;">
           Click the power button to start/stop recording.<br>
           Records both microphone input and virtual room sounds.<br>
-          Requires FFmpeg to be installed for WAV/MP3 encoding.
+          <strong>WAV/MP3:</strong> Requires <a href="https://ffmpeg.org/download.html" target="_blank" style="color: rgba(79, 70, 229, 0.8);">FFmpeg</a> to be installed.<br>
+          <strong>WebM:</strong> Works without any additional software.
         </div>
       `;
       setupDictaphoneCustomizationHandlers(object);

@@ -496,8 +496,11 @@ async function convertToMp3(inputPath, outputPath) {
 }
 
 // Save recording to file
-// Audio data can be in WebM format (needs FFmpeg) or WAV format (browser-converted)
+// Audio data is always in WebM format from MediaRecorder
+// format: 'wav', 'mp3', or 'webm' - the desired output format
 // dataFormat: 'webm' (default) or 'wav' - indicates what format the input data is in
+// - WebM format: saves directly without conversion (no FFmpeg required)
+// - WAV/MP3 format: requires FFmpeg for conversion from WebM
 ipcMain.handle('save-recording', async (event, folderPath, recordingNumber, audioDataBase64, format = 'wav', dataFormat = 'webm') => {
   console.log('=== save-recording IPC START ===');
   console.log('  folderPath:', folderPath);
@@ -530,7 +533,21 @@ ipcMain.handle('save-recording', async (event, folderPath, recordingNumber, audi
       };
     }
 
-    // For MP3 or if data is WebM, we need FFmpeg
+    // If user explicitly selected WebM format, save directly without FFmpeg
+    if (format === 'webm') {
+      const fileName = `Запись ${recordingNumber}.webm`;
+      const filePath = path.join(folderPath, fileName);
+      fs.writeFileSync(filePath, audioBuffer);
+      console.log('WebM file saved directly (no conversion needed):', filePath);
+      return {
+        success: true,
+        filePath: filePath,
+        fileName: fileName,
+        actualFormat: 'webm'
+      };
+    }
+
+    // For WAV or MP3, we need FFmpeg to convert from WebM
     // Write to temp file
     const tempDir = os.tmpdir();
     const timestamp = Date.now();

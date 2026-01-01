@@ -5040,7 +5040,8 @@ async function playCassetteTrack(object, trackIndex, startTime = 0) {
     const volume = object.userData.volume || 0.7;
 
     // Adjust effect levels
-    nodes.noiseGain.gain.value = 0.015 * hissLevel;
+    // Noise gain is scaled by both hissLevel and volume so white noise respects the main volume
+    nodes.noiseGain.gain.value = 0.015 * hissLevel * volume;
     nodes.wowLFOGain.gain.value = 0.001 * wowFlutterLevel;
     nodes.flutterLFOGain.gain.value = 0.0005 * wowFlutterLevel;
     nodes.saturation.curve = createSaturationCurve(saturationLevel);
@@ -5199,10 +5200,11 @@ function toggleCassettePlayback(object) {
   if (object.userData.audioElement.paused) {
     object.userData.audioElement.play();
     object.userData.isPlaying = true;
-    // Resume tape hiss when resuming playback
+    // Resume tape hiss when resuming playback (scaled by volume)
     if (object.userData.effectNodes && object.userData.effectNodes.noiseGain) {
       const hissLevel = object.userData.tapeHissLevel || 0.3;
-      object.userData.effectNodes.noiseGain.gain.value = 0.015 * hissLevel;
+      const volume = object.userData.volume || 0.7;
+      object.userData.effectNodes.noiseGain.gain.value = 0.015 * hissLevel * volume;
     }
   } else {
     object.userData.audioElement.pause();
@@ -11133,6 +11135,9 @@ function setupCassetteCustomizationHandlers(object) {
         // Update live playback volume for this player (per-player audio state)
         if (object.userData.effectNodes) {
           object.userData.effectNodes.mainGain.gain.value = object.userData.volume;
+          // Also update white noise volume proportionally
+          const hissLevel = object.userData.tapeHissLevel || 0.3;
+          object.userData.effectNodes.noiseGain.gain.value = 0.015 * hissLevel * object.userData.volume;
         }
         saveState();
       });
@@ -11160,9 +11165,10 @@ function setupCassetteCustomizationHandlers(object) {
         object.userData.tapeHissLevel = parseInt(e.target.value) / 100;
         hissDisplay.textContent = e.target.value + '%';
 
-        // Update live playback for this player (per-player audio state)
+        // Update live playback for this player (per-player audio state, scaled by volume)
         if (object.userData.effectNodes) {
-          object.userData.effectNodes.noiseGain.gain.value = 0.015 * object.userData.tapeHissLevel;
+          const volume = object.userData.volume || 0.7;
+          object.userData.effectNodes.noiseGain.gain.value = 0.015 * object.userData.tapeHissLevel * volume;
         }
         saveState();
       });

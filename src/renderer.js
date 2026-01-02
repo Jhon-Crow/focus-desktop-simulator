@@ -660,8 +660,13 @@ let penDrawingMode = {
   lastIntersectionPoint: null, // Last raycaster intersection point with drawable surface
   middleMouseDownTime: null,  // Timestamp when MMB was pressed (for hold detection)
   pendingPen: null,           // Pen object waiting for hold timeout
-  holdTimeout: null           // Timeout ID for hold detection
+  pendingDrawableObject: null, // Notebook/paper object waiting for hold timeout
+  holdTimeout: null,          // Timeout ID for hold detection
+  showRay: false              // Whether to show the drawing ray for debugging
 };
+
+// Ray visualization helper for debugging
+let drawingRayHelper = null;
 
 // Laptop control state
 let laptopControlState = {
@@ -686,6 +691,21 @@ let bookReadingState = {
   panOffsetZ: 0,      // Pan offset forward/backward
   // Cached book world position to avoid recalculating on every keypress
   bookWorldPos: null
+};
+
+// Inspection + drawing mode state (for notebooks/paper)
+let inspectionDrawingState = {
+  active: false,
+  drawableObject: null, // The notebook/paper being inspected and drawn on
+  originalCameraPos: null,
+  originalCameraYaw: null,
+  originalCameraPitch: null,
+  // Zoom and pan controls (same as reading mode)
+  zoomDistance: 0.85,
+  panOffsetX: 0,
+  panOffsetZ: 0,
+  // Cached object world position
+  objectWorldPos: null
 };
 
 // Cassette player mode state (similar to book reading mode)
@@ -6800,8 +6820,9 @@ function enterPenDrawingModeWithPen(pen) {
   // Tilt pen to drawing angle
   makePenDrawingAngle(pen);
 
-  // Use the pen's line width setting
+  // Use the pen's line width and showRay settings
   penDrawingMode.lineWidth = pen.userData.lineWidth || 2;
+  penDrawingMode.showRay = pen.userData.showDrawingRay || false;
 
   // If user was dragging this pen, stop dragging
   if (isDragging && selectedObject === pen) {
@@ -6846,6 +6867,12 @@ function exitPenDrawingMode() {
   penDrawingMode.drawingPath = [];
   penDrawingMode.isStrokeActive = false;
 
+  // Remove ray visualization helper
+  if (drawingRayHelper) {
+    scene.remove(drawingRayHelper);
+    drawingRayHelper = null;
+  }
+
   // Hide drawing mode indicator
   showDrawingModeIndicator(false);
 
@@ -6886,7 +6913,14 @@ function showDrawingModeIndicator(show) {
 
 // Find notebook or paper under the pen position using ray from pen base through tip
 function findDrawableObjectUnderPen() {
-  if (!penDrawingMode.heldPen) return null;
+  if (!penDrawingMode.heldPen) {
+    // Remove ray helper if pen is not held
+    if (drawingRayHelper) {
+      scene.remove(drawingRayHelper);
+      drawingRayHelper = null;
+    }
+    return null;
+  }
 
   // Get pen base (holder end) and tip positions in world coordinates
   const pen = penDrawingMode.heldPen;
@@ -6905,6 +6939,29 @@ function findDrawableObjectUnderPen() {
   // Create a ray from base through tip
   const rayOrigin = penBase.clone();
   const rayDirection = new THREE.Vector3().subVectors(penTip, penBase).normalize();
+
+  // Update or create ray visualization if debug mode is enabled
+  if (penDrawingMode.showRay) {
+    const rayLength = 2.0; // Length of the visualization ray
+    const rayEnd = rayOrigin.clone().add(rayDirection.clone().multiplyScalar(rayLength));
+
+    if (!drawingRayHelper) {
+      // Create an ArrowHelper to visualize the ray
+      drawingRayHelper = new THREE.ArrowHelper(rayDirection, rayOrigin, rayLength, 0xff00ff, 0.05, 0.03);
+      scene.add(drawingRayHelper);
+    } else {
+      // Update existing helper
+      drawingRayHelper.position.copy(rayOrigin);
+      drawingRayHelper.setDirection(rayDirection);
+      drawingRayHelper.setLength(rayLength, 0.05, 0.03);
+    }
+  } else {
+    // Remove ray helper if debug mode is disabled
+    if (drawingRayHelper) {
+      scene.remove(drawingRayHelper);
+      drawingRayHelper = null;
+    }
+  }
 
   // Use a Raycaster to find intersections with drawable objects
   const tempRaycaster = new THREE.Raycaster(rayOrigin, rayDirection);
@@ -9094,6 +9151,29 @@ function setupEventListeners() {
 
     // Arrow keys for book - page navigation in reading mode, or when aimed at book
     if ((e.key === 'ArrowLeft' || e.key === 'ArrowRight' || e.key === 'ArrowUp' || e.key === 'ArrowDown') && !e.altKey && !e.ctrlKey) {
+      // In inspection+drawing mode, arrow keys pan the view
+      if (inspectionDrawingState.active && inspectionDrawingState.objectWorldPos) {
+        e.preventDefault();
+        const objectWorldPos = inspectionDrawingState.objectWorldPos;
+        const moveSpeed = 0.1;
+        if (e.key === 'ArrowLeft') inspectionDrawingState.panOffsetX -= moveSpeed;
+        if (e.key === 'ArrowRight') inspectionDrawingState.panOffsetX += moveSpeed;
+        if (e.key === 'ArrowUp') inspectionDrawingState.panOffsetZ -= moveSpeed;
+        if (e.key === 'ArrowDown') inspectionDrawingState.panOffsetZ += moveSpeed;
+
+        // Clamp pan offsets to reasonable limits
+        inspectionDrawingState.panOffsetX = Math.max(-1.5, Math.min(1.5, inspectionDrawingState.panOffsetX));
+        inspectionDrawingState.panOffsetZ = Math.max(-1.5, Math.min(1.5, inspectionDrawingState.panOffsetZ));
+
+        // Update camera position
+        camera.position.set(
+          objectWorldPos.x + inspectionDrawingState.panOffsetX,
+          objectWorldPos.y + inspectionDrawingState.zoomDistance,
+          objectWorldPos.z + 0.65 + inspectionDrawingState.panOffsetZ
+        );
+        return;
+      }
+
       // In reading mode, ArrowLeft/Right turn pages, ArrowUp/Down pan vertically
       if (bookReadingState.active && bookReadingState.book) {
         e.preventDefault();
@@ -9195,6 +9275,31 @@ function setupEventListeners() {
     if (wasdKey === 'KeyW' || wasdKey === 'KeyA' || wasdKey === 'KeyS' || wasdKey === 'KeyD') {
       // Don't process if typing in an input field
       if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
+
+      // In inspection+drawing mode, WASD is used for panning the view
+      if (inspectionDrawingState.active && inspectionDrawingState.objectWorldPos) {
+        e.preventDefault();
+        const panSpeed = 0.1;
+        const objectWorldPos = inspectionDrawingState.objectWorldPos;
+
+        // W/S for forward/backward panning, A/D for left/right panning
+        if (wasdKey === 'KeyW') inspectionDrawingState.panOffsetZ -= panSpeed;
+        if (wasdKey === 'KeyS') inspectionDrawingState.panOffsetZ += panSpeed;
+        if (wasdKey === 'KeyA') inspectionDrawingState.panOffsetX -= panSpeed;
+        if (wasdKey === 'KeyD') inspectionDrawingState.panOffsetX += panSpeed;
+
+        // Clamp pan offsets to reasonable limits
+        inspectionDrawingState.panOffsetX = Math.max(-1.5, Math.min(1.5, inspectionDrawingState.panOffsetX));
+        inspectionDrawingState.panOffsetZ = Math.max(-1.5, Math.min(1.5, inspectionDrawingState.panOffsetZ));
+
+        // Update camera position
+        camera.position.set(
+          objectWorldPos.x + inspectionDrawingState.panOffsetX,
+          objectWorldPos.y + inspectionDrawingState.zoomDistance,
+          objectWorldPos.z + 0.65 + inspectionDrawingState.panOffsetZ
+        );
+        return;
+      }
 
       // In reading mode, WASD is used for panning the view
       if (bookReadingState.active && bookReadingState.book && bookReadingState.bookWorldPos) {
@@ -9647,7 +9752,7 @@ function onMouseDown(event) {
   if (event.button === 1) {
     event.preventDefault();
 
-    // If drawing mode is active, MMB hold exits it
+    // If drawing mode is active, MMB hold toggles it off
     if (penDrawingMode.active) {
       penDrawingMode.middleMouseDownTime = Date.now();
       penDrawingMode.holdTimeout = setTimeout(() => {
@@ -9687,13 +9792,25 @@ function onMouseDown(event) {
       }
 
       if (deskObjects.includes(object)) {
-        // If hovering over a pen, set up hold timeout to enter drawing mode
+        // If hovering over a pen, set up hold timeout to toggle drawing mode
         if (object.userData.type === 'pen') {
           penDrawingMode.middleMouseDownTime = Date.now();
           penDrawingMode.pendingPen = object;
           penDrawingMode.holdTimeout = setTimeout(() => {
             // Hold for 300ms - enter drawing mode
             enterPenDrawingModeWithPen(object);
+            penDrawingMode.holdTimeout = null; // Mark as already handled
+          }, 300);
+          return;
+        }
+
+        // If hovering over notebook/paper, set up hold timeout to enter inspection+drawing mode
+        if (object.userData.type === 'notebook' || object.userData.type === 'paper') {
+          penDrawingMode.middleMouseDownTime = Date.now();
+          penDrawingMode.pendingDrawableObject = object;
+          penDrawingMode.holdTimeout = setTimeout(() => {
+            // Hold for 300ms - enter inspection+drawing mode
+            enterInspectionDrawingMode(object);
             penDrawingMode.holdTimeout = null; // Mark as already handled
           }, 300);
           return;
@@ -9760,6 +9877,28 @@ function onMouseDown(event) {
   // If in book reading mode, LMB click exits reading mode
   if (bookReadingState.active) {
     exitBookReadingMode();
+    return;
+  }
+
+  // If in inspection+drawing mode, LMB exits the mode (unless actively drawing)
+  if (inspectionDrawingState.active) {
+    // If we have a pen in drawing mode, start drawing instead of exiting
+    if (penDrawingMode.active && penDrawingMode.heldPen) {
+      // Check if there's a drawable surface under the pen
+      const target = findDrawableObjectUnderPen();
+      if (target) {
+        // Start a new stroke
+        penDrawingMode.isStrokeActive = true;
+        penDrawingMode.drawingPath = [];
+        // Add first point
+        const penWorldPos = new THREE.Vector3();
+        penDrawingMode.heldPen.getWorldPosition(penWorldPos);
+        addDrawingPoint(penWorldPos);
+      }
+      return;
+    }
+    // Otherwise, exit inspection mode
+    exitInspectionDrawingMode();
     return;
   }
 
@@ -10778,6 +10917,25 @@ function calculatePullResistance(draggedObject, currentX, currentZ, targetX, tar
 function onMouseWheel(event) {
   updateMousePosition(event);
 
+  // If in inspection+drawing mode: scroll zooms in/out on the object (no rotation)
+  if (inspectionDrawingState.active && inspectionDrawingState.objectWorldPos) {
+    event.preventDefault();
+
+    // Zoom: scroll up = zoom in (closer), scroll down = zoom out (further)
+    const zoomDelta = event.deltaY > 0 ? 0.08 : -0.08;
+    inspectionDrawingState.zoomDistance = Math.max(0.3, Math.min(2.0, inspectionDrawingState.zoomDistance + zoomDelta));
+
+    // Update camera position using cached object position
+    const objectWorldPos = inspectionDrawingState.objectWorldPos;
+
+    camera.position.set(
+      objectWorldPos.x + inspectionDrawingState.panOffsetX,
+      objectWorldPos.y + inspectionDrawingState.zoomDistance,
+      objectWorldPos.z + 0.65 + inspectionDrawingState.panOffsetZ
+    );
+    return;
+  }
+
   // If in book reading mode: scroll zooms in/out on the book (no rotation)
   if (bookReadingState.active && bookReadingState.book && bookReadingState.bookWorldPos) {
     event.preventDefault();
@@ -11483,13 +11641,24 @@ function updateCustomizationPanel(object) {
           </div>
         </div>
         <div class="customization-group" style="margin-top: 15px;">
+          <label style="display: flex; align-items: center; gap: 10px; cursor: pointer;">
+            <input type="checkbox" id="pen-show-ray" ${object.userData.showDrawingRay ? 'checked' : ''} style="width: 18px; height: 18px; accent-color: #4f46e5;">
+            Show Drawing Ray (Debug)
+          </label>
+          <div style="font-size: 11px; color: rgba(255,255,255,0.5); margin-top: 8px; line-height: 1.5;">
+            When checked, visualizes the ray used to calculate drawing position on surfaces.
+          </div>
+        </div>
+        <div class="customization-group" style="margin-top: 15px;">
           <div style="padding: 12px; background: rgba(79, 70, 229, 0.2); border-radius: 8px; border: 1px solid rgba(79, 70, 229, 0.3);">
             <div style="font-size: 13px; color: rgba(255,255,255,0.9); margin-bottom: 8px;">🖊️ Drawing Mode</div>
             <div style="font-size: 11px; color: rgba(255,255,255,0.6); line-height: 1.5;">
               1. Pick up the pen (LMB)<br>
-              2. Press MMB to enter drawing mode<br>
+              2. Hold MMB on pen to enter drawing mode<br>
               3. Move pen over notebook/paper and hold LMB to draw<br>
-              4. Press MMB again to exit and save
+              4. Hold MMB again to exit and save<br>
+              <br>
+              💡 You can also hold MMB on a notebook/paper to enter inspection mode with zoom and panning.
             </div>
           </div>
         </div>
@@ -12812,6 +12981,16 @@ function setupPenCustomizationHandlers(object) {
         saveState();
         // Refresh the customization panel to hide the clear button
         updateCustomizationPanel(object);
+      });
+    }
+
+    // Show drawing ray checkbox
+    const showRayCheckbox = document.getElementById('pen-show-ray');
+    if (showRayCheckbox) {
+      showRayCheckbox.addEventListener('change', (e) => {
+        object.userData.showDrawingRay = e.target.checked;
+        penDrawingMode.showRay = e.target.checked;
+        saveState();
       });
     }
   }, 0);
@@ -17783,6 +17962,106 @@ function exitBookReadingMode() {
 
   bookReadingState.book = null;
   bookReadingState.bookWorldPos = null;
+}
+
+// ============================================================================
+// INSPECTION + DRAWING MODE (for notebooks/paper)
+// ============================================================================
+
+function enterInspectionDrawingMode(drawableObject) {
+  if (inspectionDrawingState.active) return;
+
+  inspectionDrawingState.active = true;
+  inspectionDrawingState.drawableObject = drawableObject;
+
+  // Reset zoom and pan offsets
+  inspectionDrawingState.zoomDistance = 0.85;
+  inspectionDrawingState.panOffsetX = 0;
+  inspectionDrawingState.panOffsetZ = 0;
+
+  // Store original camera state
+  inspectionDrawingState.originalCameraPos = camera.position.clone();
+  inspectionDrawingState.originalCameraYaw = cameraLookState.yaw;
+  inspectionDrawingState.originalCameraPitch = cameraLookState.pitch;
+
+  // Get object position in world coordinates and cache it
+  const objectWorldPos = new THREE.Vector3();
+  drawableObject.getWorldPosition(objectWorldPos);
+  inspectionDrawingState.objectWorldPos = objectWorldPos;
+
+  // Calculate target camera position - at comfortable viewing height above the object
+  const targetCameraPos = new THREE.Vector3(
+    objectWorldPos.x,
+    objectWorldPos.y + inspectionDrawingState.zoomDistance,
+    objectWorldPos.z + 0.65
+  );
+
+  // Animate camera to inspection position
+  const startPos = camera.position.clone();
+  const startTime = Date.now();
+  const duration = 400;
+
+  function animateToInspection() {
+    const elapsed = Date.now() - startTime;
+    const progress = Math.min(elapsed / duration, 1);
+    const eased = 1 - Math.pow(1 - progress, 3); // Ease out cubic
+
+    camera.position.lerpVectors(startPos, targetCameraPos, eased);
+
+    // Point camera down at object
+    const lookAtY = objectWorldPos.y + 0.03;
+    const verticalDist = camera.position.y - lookAtY;
+    const horizontalDist = Math.abs(camera.position.z - objectWorldPos.z);
+    const targetPitch = -Math.atan2(verticalDist, horizontalDist);
+    cameraLookState.pitch = inspectionDrawingState.originalCameraPitch + (targetPitch - inspectionDrawingState.originalCameraPitch) * eased;
+    updateCameraLook();
+
+    if (progress < 1) {
+      requestAnimationFrame(animateToInspection);
+    }
+  }
+
+  animateToInspection();
+}
+
+function exitInspectionDrawingMode() {
+  if (!inspectionDrawingState.active) return;
+
+  inspectionDrawingState.active = false;
+
+  // Animate camera back to original position
+  if (inspectionDrawingState.originalCameraPos) {
+    const startPos = camera.position.clone();
+    const targetPos = inspectionDrawingState.originalCameraPos;
+    const startPitch = cameraLookState.pitch;
+    const targetPitch = inspectionDrawingState.originalCameraPitch;
+    const startYaw = cameraLookState.yaw;
+    const targetYaw = inspectionDrawingState.originalCameraYaw;
+    const startTime = Date.now();
+    const duration = 300;
+
+    function animateFromInspection() {
+      const elapsed = Date.now() - startTime;
+      const progress = Math.min(elapsed / duration, 1);
+      const eased = 1 - Math.pow(1 - progress, 3);
+
+      camera.position.lerpVectors(startPos, targetPos, eased);
+
+      // Restore camera look direction
+      cameraLookState.pitch = startPitch + (targetPitch - startPitch) * eased;
+      cameraLookState.yaw = startYaw + (targetYaw - startYaw) * eased;
+      updateCameraLook();
+
+      if (progress < 1) {
+        requestAnimationFrame(animateFromInspection);
+      }
+    }
+
+    animateFromInspection();
+  }
+
+  inspectionDrawingState.drawableObject = null;
+  inspectionDrawingState.objectWorldPos = null;
 }
 
 // ============================================================================

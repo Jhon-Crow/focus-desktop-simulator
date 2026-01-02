@@ -7020,11 +7020,11 @@ function updateFallingObjects() {
     const floorHitY = floorY + objectHeight * 0.5;
 
     if (obj.position.y <= floorHitY) {
-      // Check if bouncing
-      if (!obj.userData.hasBounced && Math.abs(obj.userData.fallVelocityY) > 0.05) {
-        // Bounce
+      // Check if bouncing (small bounce, only if velocity is high enough)
+      if (!obj.userData.hasBounced && Math.abs(obj.userData.fallVelocityY) > 0.2) {
+        // Small bounce - reduce bounce factor from 0.3 to 0.1 to prevent bouncing too high
         obj.position.y = floorHitY;
-        obj.userData.fallVelocityY = -obj.userData.fallVelocityY * 0.3;
+        obj.userData.fallVelocityY = -obj.userData.fallVelocityY * 0.1;
         obj.userData.hasBounced = true;
       } else {
         // Settle on floor

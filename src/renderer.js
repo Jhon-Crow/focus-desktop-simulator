@@ -7210,14 +7210,15 @@ function applyDrawingTextureToObject(drawableObject) {
 function addDrawingPoint(worldPos) {
   if (!penDrawingMode.active || !penDrawingMode.heldPen) return;
 
-  // Use crosshair raycast to find drawable object and intersection point
-  // This is simpler and more direct than using pen ray
+  // Use the worldPos parameter directly - it's the exact crosshair intersection point
+  // This ensures drawing happens exactly where the crosshair aims
   const mousePos = pointerLockState.isLocked ? new THREE.Vector2(0, 0) : mouse;
   raycaster.setFromCamera(mousePos, camera);
 
-  // Raycast to drawable objects
+  // Raycast to drawable objects, excluding the pen to prevent blocking
   const drawableObjects = deskObjects.filter(obj =>
-    obj.userData.type === 'notebook' || obj.userData.type === 'paper'
+    (obj.userData.type === 'notebook' || obj.userData.type === 'paper') &&
+    obj !== penDrawingMode.heldPen
   );
   const intersects = raycaster.intersectObjects(drawableObjects, true);
 
@@ -7231,8 +7232,8 @@ function addDrawingPoint(worldPos) {
 
   if (!deskObjects.includes(target)) return;
 
-  // Get intersection point on the drawable surface
-  const intersectionPoint = intersects[0].point.clone();
+  // Use the provided worldPos (crosshair intersection) for accurate drawing
+  const intersectionPoint = worldPos.clone();
 
   // Set as current target if not set
   if (penDrawingMode.targetObject !== target) {
@@ -9957,7 +9958,9 @@ function onMouseDown(event) {
       // Check if hovering over notebook/paper to enter inspection+drawing mode
       updateMousePosition(event);
       raycaster.setFromCamera(mouse, camera);
-      const intersects = raycaster.intersectObjects(deskObjects, true);
+      // Exclude the pen from raycasting to prevent it from blocking the drawable surface
+      const objectsToCheck = deskObjects.filter(obj => obj !== penDrawingMode.heldPen);
+      const intersects = raycaster.intersectObjects(objectsToCheck, true);
 
       if (intersects.length > 0) {
         const clickedMesh = intersects[0].object;
@@ -10536,8 +10539,10 @@ function onMouseMove(event) {
       raycaster.setFromCamera(mousePos, camera);
 
       // First try to raycast to drawable surfaces for more accurate positioning
+      // Exclude the pen itself to prevent self-blocking
       const drawableObjects = deskObjects.filter(obj =>
-        obj.userData.type === 'notebook' || obj.userData.type === 'paper'
+        (obj.userData.type === 'notebook' || obj.userData.type === 'paper') &&
+        obj !== penDrawingMode.heldPen
       );
       const drawableIntersects = raycaster.intersectObjects(drawableObjects, true);
 

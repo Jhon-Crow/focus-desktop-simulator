@@ -8501,7 +8501,8 @@ function findSupportingY(object, x, z) {
 
     const otherPhysics = getObjectPhysics(other);
     const otherRadius = getStackingRadius(other);
-    const otherTop = other.position.y + otherPhysics.height;
+    const otherScale = other.userData.scale || other.scale.x || 1.0;
+    const otherTop = other.position.y + otherPhysics.height * otherScale;
 
     // Check horizontal overlap
     const dx = x - other.position.x;
@@ -10239,6 +10240,17 @@ function onMouseDown(event) {
   raycaster.setFromCamera(mouse, camera);
   const intersects = raycaster.intersectObjects(deskObjects, true);
 
+  // Close customization panel when clicking anywhere (both on objects or empty space)
+  // This ensures edit mode exits when clicking outside the panel
+  const panel = document.getElementById('customization-panel');
+  if (panel && panel.classList.contains('open')) {
+    panel.classList.remove('open');
+    selectedObject = null;
+    // Clear dynamic options
+    const dynamicOptions = document.getElementById('object-specific-options');
+    if (dynamicOptions) dynamicOptions.innerHTML = '';
+  }
+
   if (intersects.length > 0) {
     // Find the root object
     let object = intersects[0].object;
@@ -10400,19 +10412,6 @@ function onMouseDown(event) {
         object.userData.isPullingOut = false;
         object.userData.targetY = object.userData.originalY + CONFIG.physics.liftHeight;
       }
-
-      // Close customization panel when starting drag
-      document.getElementById('customization-panel').classList.remove('open');
-    }
-  } else {
-    // LMB clicked on empty space - close customization panel (exit edit mode)
-    const panel = document.getElementById('customization-panel');
-    if (panel && panel.classList.contains('open')) {
-      panel.classList.remove('open');
-      selectedObject = null;
-      // Clear dynamic options
-      const dynamicOptions = document.getElementById('object-specific-options');
-      if (dynamicOptions) dynamicOptions.innerHTML = '';
     }
   }
 }
@@ -11049,7 +11048,8 @@ function calculateDragStackingY(draggedObject, posX, posZ) {
 
     if (horizontalDist < overlapThreshold) {
       // Calculate the top surface of the object below
-      const objTopY = obj.position.y + otherPhysics.height;
+      const otherScale = obj.userData.scale || obj.scale.x || 1.0;
+      const objTopY = obj.position.y + otherPhysics.height * otherScale;
       overlappingObjects.push({ obj, topY: objTopY });
     }
   });
@@ -11127,7 +11127,8 @@ function calculateStackingY(droppedObject) {
 
     if (horizontalDist < overlapThreshold) {
       // Calculate the top surface of the object below
-      const objTopY = obj.position.y + otherPhysics.height;
+      const otherScale = obj.userData.scale || obj.scale.x || 1.0;
+      const objTopY = obj.position.y + otherPhysics.height * otherScale;
       overlappingObjects.push({ obj, topY: objTopY });
     }
   });
@@ -11190,7 +11191,8 @@ function calculatePullResistance(draggedObject, currentX, currentZ, targetX, tar
 
     if (horizontalDist < overlapThreshold) {
       // Check if dragged object is UNDER this object (based on Y positions)
-      const draggedTop = draggedObject.position.y + draggedPhysics.height;
+      const draggedScale = draggedObject.userData.scale || draggedObject.scale.x || 1.0;
+      const draggedTop = draggedObject.position.y + draggedPhysics.height * draggedScale;
       const objBottom = obj.position.y;
 
       // If the object above us has its bottom at or above our top, we're under it

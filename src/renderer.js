@@ -2237,7 +2237,7 @@ function createFloor() {
   scene.add(floor);
 }
 
-// Flash the floor red when deleting objects
+// Flash the floor with bright pink glow when deleting objects
 function flashFloorRed() {
   if (!fallenObjectsState.floorMesh || fallenObjectsState.isFlashing) return;
 
@@ -2245,10 +2245,17 @@ function flashFloorRed() {
   const floor = fallenObjectsState.floorMesh;
   const originalEmissive = floor.material.emissive.getHex();
   const originalEmissiveIntensity = floor.material.emissiveIntensity;
+  const originalColor = floor.material.color.getHex();
 
-  // Set to bright red emissive
-  floor.material.emissive.setHex(0xff0000);
-  floor.material.emissiveIntensity = 2.0;
+  // Bright pink flash color (derived from floor's blue-gray 0x2d3748 -> saturated hot pink)
+  const flashColor = 0xff1493; // Deep pink / hot pink
+
+  // Darken the floor during flash (make it almost black to contrast with bright glow)
+  floor.material.color.setHex(0x0a0a12);
+
+  // Set to bright pink emissive with very high intensity for dramatic glow
+  floor.material.emissive.setHex(flashColor);
+  floor.material.emissiveIntensity = 8.0; // Much brighter glow
 
   // Flash effect - fade out
   const startTime = Date.now();
@@ -2258,13 +2265,25 @@ function flashFloorRed() {
     const elapsed = Date.now() - startTime;
     const progress = Math.min(elapsed / duration, 1);
 
-    // Ease out the intensity
-    floor.material.emissiveIntensity = 2.0 * (1 - progress);
+    // Ease out the intensity with a fast initial burst
+    const easedProgress = 1 - Math.pow(1 - progress, 2);
+    floor.material.emissiveIntensity = 8.0 * (1 - easedProgress);
+
+    // Gradually restore floor color
+    const r1 = 0x0a, g1 = 0x0a, b1 = 0x12; // Dark flash color
+    const r2 = (originalColor >> 16) & 0xff;
+    const g2 = (originalColor >> 8) & 0xff;
+    const b2 = originalColor & 0xff;
+    const r = Math.round(r1 + (r2 - r1) * easedProgress);
+    const g = Math.round(g1 + (g2 - g1) * easedProgress);
+    const b = Math.round(b1 + (b2 - b1) * easedProgress);
+    floor.material.color.setHex((r << 16) | (g << 8) | b);
 
     if (progress < 1) {
       requestAnimationFrame(animateFlash);
     } else {
       // Reset to original
+      floor.material.color.setHex(originalColor);
       floor.material.emissive.setHex(originalEmissive);
       floor.material.emissiveIntensity = originalEmissiveIntensity;
       fallenObjectsState.isFlashing = false;

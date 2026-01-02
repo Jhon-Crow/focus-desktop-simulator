@@ -14042,38 +14042,97 @@ function openMarkdownEditor(laptop) {
 
   function parseMarkdown(text) {
     // Simple markdown parser
-    let html = text
-      // Escape HTML
-      .replace(/&/g, '&amp;')
-      .replace(/</g, '&lt;')
-      .replace(/>/g, '&gt;')
+    const lines = text.split('\n');
+
+    // Helper function to apply inline formatting (bold, italic, code, links)
+    function applyInlineFormatting(text) {
+      return text
+        // Bold and Italic
+        .replace(/\*\*\*(.+?)\*\*\*/g, '<strong><em>$1</em></strong>')
+        .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
+        .replace(/\*(.+?)\*/g, '<em>$1</em>')
+        // Inline code
+        .replace(/`([^`]+)`/g, '<code>$1</code>')
+        // Links
+        .replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2">$1</a>');
+    }
+
+    // Process line by line to maintain line tracking for checkboxes
+    let htmlLines = [];
+    for (let i = 0; i < lines.length; i++) {
+      let line = lines[i];
+      let processedLine = line;
+
+      // Escape HTML first
+      processedLine = processedLine
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;');
+
+      // Check for checkbox lines
+      if (/^- \[x\] (.*)$/i.test(line)) {
+        const content = applyInlineFormatting(processedLine.replace(/^- \[x\] /i, ''));
+        htmlLines.push(`<li class="checkbox checked" data-line="${i}"><input type="checkbox" checked data-line="${i}"> ${content}</li>`);
+      }
+      else if (/^- \[ \] (.*)$/.test(line)) {
+        const content = applyInlineFormatting(processedLine.replace(/^- \[ \] /, ''));
+        htmlLines.push(`<li class="checkbox" data-line="${i}"><input type="checkbox" data-line="${i}"> ${content}</li>`);
+      }
+      // Check for plain list items
+      else if (/^- (.*)$/.test(line)) {
+        const content = applyInlineFormatting(processedLine.replace(/^- /, ''));
+        htmlLines.push(`<li>${content}</li>`);
+      }
       // Headers
-      .replace(/^### (.*)$/gm, '<h3>$1</h3>')
-      .replace(/^## (.*)$/gm, '<h2>$1</h2>')
-      .replace(/^# (.*)$/gm, '<h1>$1</h1>')
-      // Bold and Italic
-      .replace(/\*\*\*(.+?)\*\*\*/g, '<strong><em>$1</em></strong>')
-      .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
-      .replace(/\*(.+?)\*/g, '<em>$1</em>')
-      // Inline code
-      .replace(/`([^`]+)`/g, '<code>$1</code>')
-      // Code blocks
-      .replace(/```([\s\S]*?)```/g, '<pre><code>$1</code></pre>')
+      else if (/^### (.*)$/.test(line)) {
+        const content = applyInlineFormatting(processedLine.replace(/^### /, ''));
+        htmlLines.push(`<h3>${content}</h3>`);
+      }
+      else if (/^## (.*)$/.test(line)) {
+        const content = applyInlineFormatting(processedLine.replace(/^## /, ''));
+        htmlLines.push(`<h2>${content}</h2>`);
+      }
+      else if (/^# (.*)$/.test(line)) {
+        const content = applyInlineFormatting(processedLine.replace(/^# /, ''));
+        htmlLines.push(`<h1>${content}</h1>`);
+      }
       // Blockquotes
-      .replace(/^&gt; (.*)$/gm, '<blockquote>$1</blockquote>')
-      // Checkbox lists - checked (must come before regular lists)
-      .replace(/^- \[x\] (.*)$/gm, '<li class="checkbox checked"><input type="checkbox" checked disabled> $1</li>')
-      .replace(/^- \[X\] (.*)$/gm, '<li class="checkbox checked"><input type="checkbox" checked disabled> $1</li>')
-      // Checkbox lists - unchecked
-      .replace(/^- \[ \] (.*)$/gm, '<li class="checkbox"><input type="checkbox" disabled> $1</li>')
-      // Unordered lists (plain)
-      .replace(/^- (.*)$/gm, '<li>$1</li>')
-      // Links
-      .replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2">$1</a>')
+      else if (/^> (.*)$/.test(line)) {
+        const content = applyInlineFormatting(processedLine.replace(/^&gt; /, ''));
+        htmlLines.push(`<blockquote>${content}</blockquote>`);
+      }
       // Horizontal rule
-      .replace(/^---$/gm, '<hr>')
-      // Line breaks
-      .replace(/\n/g, '<br>');
+      else if (/^---$/.test(line)) {
+        htmlLines.push('<hr>');
+      }
+      // Code blocks (multiline handling)
+      else if (/^```/.test(line)) {
+        let codeBlock = [line];
+        i++;
+        while (i < lines.length && !/```$/.test(lines[i])) {
+          codeBlock.push(lines[i]);
+          i++;
+        }
+        if (i < lines.length) {
+          codeBlock.push(lines[i]);
+        }
+        const codeContent = codeBlock.slice(1, -1).join('\n')
+          .replace(/&/g, '&amp;')
+          .replace(/</g, '&lt;')
+          .replace(/>/g, '&gt;');
+        htmlLines.push(`<pre><code>${codeContent}</code></pre>`);
+      }
+      // Regular paragraph
+      else if (processedLine.trim() !== '') {
+        htmlLines.push(applyInlineFormatting(processedLine));
+      }
+      // Empty line
+      else {
+        htmlLines.push('');
+      }
+    }
+
+    let html = htmlLines.join('<br>');
 
     // Wrap consecutive li elements in ul
     html = html.replace(/(<li[^>]*>.*?<\/li>(<br>)?)+/g, (match) => {
@@ -14085,6 +14144,37 @@ function openMarkdownEditor(laptop) {
 
   sourceTextarea.addEventListener('input', updatePreview);
   updatePreview();
+
+  // Handle checkbox clicks in preview to toggle checkbox state
+  preview.addEventListener('click', (e) => {
+    if (e.target.type === 'checkbox' && e.target.hasAttribute('data-line')) {
+      const lineIndex = parseInt(e.target.getAttribute('data-line'), 10);
+      const lines = sourceTextarea.value.split('\n');
+
+      if (lineIndex >= 0 && lineIndex < lines.length) {
+        const line = lines[lineIndex];
+
+        // Toggle checkbox state in source text
+        if (/^- \[x\] /i.test(line)) {
+          // Change checked to unchecked
+          lines[lineIndex] = line.replace(/^- \[x\] /i, '- [ ] ');
+        } else if (/^- \[ \] /.test(line)) {
+          // Change unchecked to checked
+          lines[lineIndex] = line.replace(/^- \[ \] /, '- [x] ');
+        }
+
+        // Update the source textarea
+        sourceTextarea.value = lines.join('\n');
+
+        // Update preview
+        updatePreview();
+
+        // Save the changes to userData
+        laptop.userData.editorContent = sourceTextarea.value;
+        saveState();
+      }
+    }
+  });
 
   // Focus the textarea immediately so user can start typing
   setTimeout(() => {

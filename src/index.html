@@ -914,6 +914,40 @@
       color: rgba(255, 255, 255, 0.7);
     }
 
+    /* Loading spinner for pointer lock instructions */
+    #pointer-lock-instructions .spinner {
+      display: none;
+      width: 30px;
+      height: 30px;
+      border: 3px solid rgba(79, 70, 229, 0.3);
+      border-top-color: #4f46e5;
+      border-radius: 50%;
+      animation: spin 1s linear infinite;
+      margin: 0 auto 15px auto;
+    }
+
+    #pointer-lock-instructions.loading .spinner {
+      display: block;
+    }
+
+    #pointer-lock-instructions.loading h3 {
+      display: none;
+    }
+
+    #pointer-lock-instructions .loading-text {
+      display: none;
+      font-size: 14px;
+      color: rgba(255, 255, 255, 0.8);
+    }
+
+    #pointer-lock-instructions.loading .loading-text {
+      display: block;
+    }
+
+    #pointer-lock-instructions.loading p {
+      display: none;
+    }
+
     /* Audio loading overlay */
     #audio-loading-overlay {
       position: fixed;
@@ -1429,6 +1463,8 @@
 
   <!-- Pointer lock instructions -->
   <div id="pointer-lock-instructions">
+    <div class="spinner"></div>
+    <div class="loading-text">Initializing...</div>
     <h3>Click to Lock Mouse</h3>
     <p>Press ESC to unlock</p>
   </div>

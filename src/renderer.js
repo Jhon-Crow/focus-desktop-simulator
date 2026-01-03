@@ -7567,8 +7567,10 @@ function startTippingAtEdge(object, edgeDirection) {
   object.userData.tipEdgeDirection = edgeDirection;
 
   // Store the object's CURRENT position (don't reset it)
+  // This is crucial for stacked objects that start at elevated Y positions
   object.userData.tipStartX = object.position.x;
   object.userData.tipStartZ = object.position.z;
+  object.userData.tipStartY = object.position.y;  // Store starting Y for stacked objects
 
   // Store the edge pivot point
   if (edgeDirection === 'posX') {
@@ -7627,6 +7629,7 @@ function startStackTippingAtEdge(baseObject, edgeDirection, stackCoG) {
         stackedObj.userData.tipEdgeDirection = edgeDirection;
         stackedObj.userData.tipStartX = stackedObj.position.x;
         stackedObj.userData.tipStartZ = stackedObj.position.z;
+        stackedObj.userData.tipStartY = stackedObj.position.y;  // Store starting Y for stacked objects
         // Link to base object so they tip in sync
         stackedObj.userData.tippingWithBase = baseObject.userData.id;
 
@@ -7673,6 +7676,12 @@ function updateTippingObjects() {
     const startX = obj.userData.tipStartX;
     const startZ = obj.userData.tipStartZ;
 
+    // Get the starting Y position (for stacked objects this is above desk level)
+    // Fall back to desk surface + half height if not set (for backwards compatibility)
+    const baseY = obj.userData.tipStartY !== undefined ?
+                  obj.userData.tipStartY :
+                  (deskSurfaceY + halfHeight);
+
     if (edgeDir === 'posX' || edgeDir === 'negX') {
       // Tipping over X edge - rotate around Z axis
       // posX means tipping to the right (positive X direction) - top falls AWAY from desk
@@ -7681,10 +7690,11 @@ function updateTippingObjects() {
       obj.rotation.z = rotationSign * tipAngle;
 
       // As object tips, center moves outward (away from desk)
-      // Y position: starts at desk height, goes down as it tips
+      // Y position: starts at initial height, goes down as it tips
       // X position: starts at initial X, moves outward by halfHeight * sin(angle)
       obj.position.x = startX + (-rotationSign) * halfHeight * sinAngle;
-      obj.position.y = deskSurfaceY + halfHeight * cosAngle;
+      // Y drops from starting position as object tips (cosAngle goes from 1 to 0)
+      obj.position.y = baseY - halfHeight * (1 - cosAngle);
     } else {
       // Tipping over Z edge - rotate around X axis
       // posZ means tipping away in positive Z direction - top falls AWAY from desk
@@ -7694,7 +7704,8 @@ function updateTippingObjects() {
 
       // As object tips, center moves outward (away from desk)
       obj.position.z = startZ + rotationSign * halfHeight * sinAngle;
-      obj.position.y = deskSurfaceY + halfHeight * cosAngle;
+      // Y drops from starting position as object tips
+      obj.position.y = baseY - halfHeight * (1 - cosAngle);
     }
 
     // Check collision with other desk objects during tipping to prevent passing through
@@ -7757,12 +7768,14 @@ function updateTippingObjects() {
         const verticalOverlap = objBottom < otherTop && objTop > otherBottom;
 
         if (verticalOverlap) {
-          // Collision detected - push objects apart and slow tipping
-          const pushBackFactor = 0.12;  // Stronger pushback for tipping collisions
+          // Collision detected - push objects apart and slow/stop tipping
+          // Calculate overlap to ensure complete separation
+          const overlap = minDist - dist;
           const normalX = dx / dist;
           const normalZ = dz / dist;
 
-          // Push the tipping object away from the collision
+          // Push the tipping object away by the full overlap amount to prevent passing through
+          const pushBackFactor = Math.max(0.15, overlap * 0.8);
           obj.position.x += normalX * pushBackFactor;
           obj.position.z += normalZ * pushBackFactor;
 
@@ -7777,9 +7790,9 @@ function updateTippingObjects() {
           const weightRatio = otherWeight / (myWeight + otherWeight);
 
           // Slow down tipping based on weight ratio
-          // If other object is much heavier, slow down more (could even stop)
-          const slowFactor = 0.6 - (weightRatio * 0.4); // Range: 0.2 to 0.6
-          obj.userData.tipAngularVelocity *= Math.max(0.2, slowFactor);
+          // If other object is much heavier, slow down significantly (almost stop)
+          const slowFactor = 0.5 - (weightRatio * 0.45); // Range: 0.05 to 0.5
+          obj.userData.tipAngularVelocity *= Math.max(0.05, slowFactor);
 
           // If the other object is also tipping, push it too (equal and opposite reaction)
           if (otherObj.userData.isTippingAtEdge) {
@@ -7787,7 +7800,18 @@ function updateTippingObjects() {
             otherObj.position.z -= normalZ * pushBackFactor * 0.7;
             otherObj.userData.tipStartX -= normalX * pushBackFactor * 0.35;
             otherObj.userData.tipStartZ -= normalZ * pushBackFactor * 0.35;
-            otherObj.userData.tipAngularVelocity *= Math.max(0.2, 1 - weightRatio * 0.4);
+            otherObj.userData.tipAngularVelocity *= Math.max(0.05, 1 - weightRatio * 0.45);
+          } else if (!otherObj.userData.isTippingAtEdge && !otherObj.userData.isLifted) {
+            // The other object is stationary on the table
+            // If the tipping object is blocked by it, the tipping should push the stationary object
+            // or stop entirely if the stationary object is too heavy
+            initPhysicsForObject(otherObj);
+            const otherVel = physicsState.velocities.get(otherObj.userData.id);
+            if (otherVel && weightRatio < 0.7) {
+              // Tipping object can push the stationary object slightly
+              otherVel.x -= normalX * 0.02 * (1 - weightRatio);
+              otherVel.z -= normalZ * 0.02 * (1 - weightRatio);
+            }
           }
         }
       }
@@ -9991,13 +10015,9 @@ function checkAndDropUnsupportedObjects(pulledObject) {
         obj.userData.originalY = newY;
         obj.userData.targetY = newY;
 
-        // Give a small velocity for smooth falling animation
-        const vel = physicsState.velocities.get(obj.userData.id);
-        if (vel) {
-          // Add slight random horizontal drift during fall
-          vel.x += (Math.random() - 0.5) * 0.01;
-          vel.z += (Math.random() - 0.5) * 0.01;
-        }
+        // The Y position transition handles the visual falling animation
+        // Don't give horizontal velocity to avoid pushing nearby objects
+        // The object will smoothly drop to its new Y position via targetY
       }
     }
   });
@@ -10603,41 +10623,49 @@ function updatePhysics() {
         // Relative velocity along collision normal
         const dvn = dvx * nx + dvz * nz;
 
-        // Only resolve if objects are moving towards each other
-        if (dvn > 0) {
-          // Weighted elastic collision based on object weights
-          const totalWeight = physicsA.weight + physicsB.weight;
-          const weightA = physicsA.weight / totalWeight;
-          const weightB = physicsB.weight / totalWeight;
+        // Check if either object has significant velocity to trigger physics
+        const speedA = Math.sqrt(velA.x * velA.x + velA.z * velA.z);
+        const speedB = Math.sqrt(velB.x * velB.x + velB.z * velB.z);
+        const minSpeedThreshold = 0.005;  // Minimum speed to trigger collision physics
 
-          velA.x -= dvn * nx * weightB;
-          velA.z -= dvn * nz * weightB;
-          velB.x += dvn * nx * weightA;
-          velB.z += dvn * nz * weightA;
+        // Only process collision if at least one object has significant velocity
+        if (speedA > minSpeedThreshold || speedB > minSpeedThreshold) {
+          // Only resolve if objects are moving towards each other
+          if (dvn > 0) {
+            // Weighted elastic collision based on object weights
+            const totalWeight = physicsA.weight + physicsB.weight;
+            const weightA = physicsA.weight / totalWeight;
+            const weightB = physicsB.weight / totalWeight;
 
-          // Add tilt from collision
-          const impactSpeed = Math.sqrt(dvx * dvx + dvz * dvz);
-          const tiltVelA = physicsState.tiltVelocities.get(objA.userData.id);
-          const tiltVelB = physicsState.tiltVelocities.get(objB.userData.id);
+            velA.x -= dvn * nx * weightB;
+            velA.z -= dvn * nz * weightB;
+            velB.x += dvn * nx * weightA;
+            velB.z += dvn * nz * weightA;
 
-          if (tiltVelA) {
-            const tiltAmountA = impactSpeed * physicsState.tiltForce * (1 - physicsA.stability) * weightB;
-            tiltVelA.x -= nx * tiltAmountA;
-            tiltVelA.z -= nz * tiltAmountA;
+            // Add tilt from collision
+            const impactSpeed = Math.sqrt(dvx * dvx + dvz * dvz);
+            const tiltVelA = physicsState.tiltVelocities.get(objA.userData.id);
+            const tiltVelB = physicsState.tiltVelocities.get(objB.userData.id);
+
+            if (tiltVelA) {
+              const tiltAmountA = impactSpeed * physicsState.tiltForce * (1 - physicsA.stability) * weightB;
+              tiltVelA.x -= nx * tiltAmountA;
+              tiltVelA.z -= nz * tiltAmountA;
+            }
+            if (tiltVelB) {
+              const tiltAmountB = impactSpeed * physicsState.tiltForce * (1 - physicsB.stability) * weightA;
+              tiltVelB.x += nx * tiltAmountB;
+              tiltVelB.z += nz * tiltAmountB;
+            }
           }
-          if (tiltVelB) {
-            const tiltAmountB = impactSpeed * physicsState.tiltForce * (1 - physicsB.stability) * weightA;
-            tiltVelB.x += nx * tiltAmountB;
-            tiltVelB.z += nz * tiltAmountB;
-          }
+
+          // Separate objects only when there's actual collision motion
+          const overlap = minDist - dist;
+          objA.position.x -= (nx * overlap * 0.25);
+          objA.position.z -= (nz * overlap * 0.25);
+          objB.position.x += (nx * overlap * 0.25);
+          objB.position.z += (nz * overlap * 0.25);
         }
-
-        // Separate objects
-        const overlap = minDist - dist;
-        objA.position.x -= (nx * overlap * 0.25);
-        objA.position.z -= (nz * overlap * 0.25);
-        objB.position.x += (nx * overlap * 0.25);
-        objB.position.z += (nz * overlap * 0.25);
       }
     }
   }
@@ -11833,6 +11861,11 @@ function setupPointerLock(container) {
         return;  // Don't request lock yet, wait for loading to complete
       }
 
+      // Show loading indicator immediately when user clicks
+      // This provides visual feedback during the delay before pointer lock activates
+      instructions.classList.add('loading');
+      instructions.classList.add('visible');
+
       container.requestPointerLock = container.requestPointerLock ||
                                      container.mozRequestPointerLock ||
                                      container.webkitRequestPointerLock;
@@ -11858,6 +11891,7 @@ function setupPointerLock(container) {
       pointerLockState.showInstructions = false;
       crosshair.classList.add('visible');
       instructions.classList.remove('visible');
+      instructions.classList.remove('loading');  // Remove loading state when pointer lock activates
 
       // Log pointer lock activated
       activityLog.add('MODE', 'Pointer lock activated (FPS camera mode)', {

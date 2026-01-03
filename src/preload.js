@@ -12,8 +12,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
   onFfmpegStatus: (callback) => ipcRenderer.on('ffmpeg-status', (event, available) => callback(available)),
   // Audio transcoding using FFmpeg (for files that browser can't decode)
   transcodeAudio: (audioDataBase64, fileName) => ipcRenderer.invoke('transcode-audio', audioDataBase64, fileName),
-  // Cassette player - music folder selection and audio file reading
+  // Cassette player - music folder/file selection and audio file reading
   selectMusicFolder: () => ipcRenderer.invoke('select-music-folder'),
+  selectMusicFile: () => ipcRenderer.invoke('select-music-file'),
   readAudioFile: (filePath) => ipcRenderer.invoke('read-audio-file', filePath),
   refreshMusicFolder: (folderPath) => ipcRenderer.invoke('refresh-music-folder', folderPath),
   // Dictaphone - recording folder selection and saving

@@ -6889,29 +6889,36 @@ function updateTippingObjects() {
     // Calculate the pivot offset (how far the center is from the edge)
     // This is approximately half the object's footprint radius
     const pivotRadius = getStackingRadius(obj) * 0.5;
+    const halfHeight = objectHeight * 0.5;
 
     // Rotate object around the pivot point at the edge
+    // The center follows a circular arc around the desk edge
     const edgeDir = obj.userData.tipEdgeDirection;
-    let rotationAxis, rotationSign;
+    const tipAngle = obj.userData.tipAngle;
+    const cosAngle = Math.cos(tipAngle);
+    const sinAngle = Math.sin(tipAngle);
 
     if (edgeDir === 'posX' || edgeDir === 'negX') {
       // Tipping over X edge - rotate around Z axis
-      rotationSign = edgeDir === 'posX' ? 1 : -1;
-      obj.rotation.z = rotationSign * obj.userData.tipAngle;
+      const rotationSign = edgeDir === 'posX' ? 1 : -1;
+      obj.rotation.z = rotationSign * tipAngle;
 
       // Update position to pivot around the edge
+      // The center traces an arc as the object tips
+      // At angle 0: center is at (pivotX + pivotRadius, deskY + halfHeight)
+      // At angle π/2: center is at (pivotX + halfHeight, deskY - pivotRadius)
       const pivotX = obj.userData.tipPivotX;
-      obj.position.x = pivotX + rotationSign * (pivotRadius * Math.cos(obj.userData.tipAngle) - pivotRadius);
-      obj.position.y = deskSurfaceY + objectHeight * 0.5 - pivotRadius * Math.sin(obj.userData.tipAngle);
+      obj.position.x = pivotX + rotationSign * (pivotRadius * cosAngle + halfHeight * sinAngle);
+      obj.position.y = deskSurfaceY + halfHeight * cosAngle - pivotRadius * sinAngle;
     } else {
       // Tipping over Z edge - rotate around X axis
-      rotationSign = edgeDir === 'posZ' ? -1 : 1;
-      obj.rotation.x = rotationSign * obj.userData.tipAngle;
+      const rotationSign = edgeDir === 'posZ' ? -1 : 1;
+      obj.rotation.x = rotationSign * tipAngle;
 
       // Update position to pivot around the edge
       const pivotZ = obj.userData.tipPivotZ;
-      obj.position.z = pivotZ + (-rotationSign) * (pivotRadius * Math.cos(obj.userData.tipAngle) - pivotRadius);
-      obj.position.y = deskSurfaceY + objectHeight * 0.5 - pivotRadius * Math.sin(obj.userData.tipAngle);
+      obj.position.z = pivotZ + (-rotationSign) * (pivotRadius * cosAngle + halfHeight * sinAngle);
+      obj.position.y = deskSurfaceY + halfHeight * cosAngle - pivotRadius * sinAngle;
     }
 
     // Check if tipped past the critical angle (past ~90 degrees) - start falling
@@ -7020,15 +7027,19 @@ function updateFallingObjects() {
     const floorHitY = floorY + objectHeight * 0.5;
 
     if (obj.position.y <= floorHitY) {
-      // Check if bouncing (small bounce, only if velocity is high enough)
-      if (!obj.userData.hasBounced && Math.abs(obj.userData.fallVelocityY) > 0.2) {
-        // Small bounce - reduce bounce factor from 0.3 to 0.1 to prevent bouncing too high
-        obj.position.y = floorHitY;
-        obj.userData.fallVelocityY = -obj.userData.fallVelocityY * 0.1;
+      // Clamp position to floor level immediately
+      obj.position.y = floorHitY;
+
+      // Check if this is the first impact (tiny bounce) or subsequent (settle)
+      if (!obj.userData.hasBounced && Math.abs(obj.userData.fallVelocityY) > 0.25) {
+        // First impact with enough velocity - do a tiny bounce (5%)
+        // This gives a subtle landing effect without excessive bouncing
+        obj.userData.fallVelocityY = Math.abs(obj.userData.fallVelocityY) * 0.05;
         obj.userData.hasBounced = true;
       } else {
-        // Settle on floor
-        obj.position.y = floorHitY;
+        // Either already bounced, or velocity too low for noticeable bounce
+        // Settle on floor immediately
+        obj.userData.fallVelocityY = 0;
         obj.userData.isFallingOffTable = false;
         obj.userData.isOnFloor = true;
         obj.userData.floorLandTime = Date.now();

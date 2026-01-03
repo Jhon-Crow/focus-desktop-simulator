@@ -11079,6 +11079,108 @@ function setupEventListeners() {
     }
   });
 
+  // Window Settings - Fullscreen Borderless Mode
+  const fullscreenBorderlessCheckbox = document.getElementById('fullscreen-borderless-checkbox');
+  if (fullscreenBorderlessCheckbox) {
+    fullscreenBorderlessCheckbox.addEventListener('change', async (e) => {
+      const enabled = e.target.checked;
+      activityLog.add('USER_ACTION', 'Fullscreen borderless mode toggled', { enabled });
+
+      try {
+        const result = await window.electronAPI.setFullscreenBorderless(enabled);
+
+        if (result.success) {
+          console.log('Fullscreen borderless mode:', enabled);
+          activityLog.add('WINDOW', 'Fullscreen borderless mode changed', { enabled });
+          // Save state to persist setting across restarts
+          saveState();
+        } else {
+          console.error('Failed to set fullscreen borderless:', result.error);
+          activityLog.add('ERROR', 'Failed to set fullscreen borderless', { error: result.error });
+          // Revert checkbox if failed
+          e.target.checked = !enabled;
+          alert('Failed to set fullscreen mode: ' + result.error);
+        }
+      } catch (error) {
+        console.error('Error setting fullscreen borderless:', error);
+        activityLog.add('ERROR', 'Error setting fullscreen borderless', { error: error.message });
+        // Revert checkbox if error
+        e.target.checked = !enabled;
+        alert('Error setting fullscreen mode: ' + error.message);
+      }
+    });
+  }
+
+  // Window Settings - Ignore System Shortcuts
+  const ignoreShortcutsCheckbox = document.getElementById('ignore-shortcuts-checkbox');
+  if (ignoreShortcutsCheckbox) {
+    ignoreShortcutsCheckbox.addEventListener('change', async (e) => {
+      const enabled = e.target.checked;
+      activityLog.add('USER_ACTION', 'Ignore system shortcuts toggled', { enabled });
+
+      try {
+        const result = await window.electronAPI.setIgnoreShortcuts(enabled);
+
+        if (result.success) {
+          console.log('Ignore system shortcuts:', enabled);
+          activityLog.add('WINDOW', 'Ignore system shortcuts changed', { enabled });
+          // Save state to persist setting across restarts
+          saveState();
+        } else {
+          console.error('Failed to set ignore shortcuts:', result.error);
+          activityLog.add('ERROR', 'Failed to set ignore shortcuts', { error: result.error });
+          // Revert checkbox if failed
+          e.target.checked = !enabled;
+          alert('Failed to set ignore shortcuts: ' + result.error);
+        }
+      } catch (error) {
+        console.error('Error setting ignore shortcuts:', error);
+        activityLog.add('ERROR', 'Error setting ignore shortcuts', { error: error.message });
+        // Revert checkbox if error
+        e.target.checked = !enabled;
+        alert('Error setting ignore shortcuts: ' + error.message);
+      }
+    });
+  }
+
+  // Window Settings - Mute Other Applications
+  const muteOtherAppsCheckbox = document.getElementById('mute-other-apps-checkbox');
+  if (muteOtherAppsCheckbox) {
+    muteOtherAppsCheckbox.addEventListener('change', async (e) => {
+      const enabled = e.target.checked;
+      activityLog.add('USER_ACTION', 'Mute other applications toggled', { enabled });
+
+      try {
+        const result = await window.electronAPI.setMuteOtherApps(enabled);
+
+        if (result.success) {
+          console.log('Mute other applications:', enabled);
+          activityLog.add('WINDOW', 'Mute other applications changed', { enabled });
+          // Save state to persist setting across restarts
+          saveState();
+        } else {
+          console.error('Failed to set mute other apps:', result.error);
+          activityLog.add('ERROR', 'Failed to set mute other apps', { error: result.error });
+          // Revert checkbox if failed
+          e.target.checked = !enabled;
+
+          // Show appropriate error message
+          if (result.unsupported) {
+            alert('This feature is only supported on Windows.');
+          } else {
+            alert('Failed to set mute other apps: ' + result.error);
+          }
+        }
+      } catch (error) {
+        console.error('Error setting mute other apps:', error);
+        activityLog.add('ERROR', 'Error setting mute other apps', { error: error.message });
+        // Revert checkbox if error
+        e.target.checked = !enabled;
+        alert('Error setting mute other apps: ' + error.message);
+      }
+    });
+  }
+
   // Debug collision visualization toggle
   const toggleCollisionBtn = document.getElementById('toggle-collision-debug-btn');
   if (toggleCollisionBtn) {
@@ -22347,6 +22449,12 @@ async function saveStateImmediate() {
       alertPitch: timerState.alertPitch,
       customSoundDataUrl: timerState.customSoundDataUrl,
       useCustomSound: timerState.useCustomSound
+    },
+    // Save window settings
+    windowSettings: {
+      fullscreenBorderless: document.getElementById('fullscreen-borderless-checkbox')?.checked || false,
+      ignoreShortcuts: document.getElementById('ignore-shortcuts-checkbox')?.checked || false,
+      muteOtherApps: document.getElementById('mute-other-apps-checkbox')?.checked || false
     }
   };
 
@@ -22395,6 +22503,47 @@ async function loadState() {
           timerState.customSoundDataUrl = savedTimer.customSoundDataUrl;
           // Pre-decode the audio from data URL
           preloadTimerCustomSound();
+        }
+      }
+
+      // Load window settings and apply them
+      if (result.state.windowSettings) {
+        const savedSettings = result.state.windowSettings;
+
+        // Restore fullscreen borderless checkbox state and apply setting
+        const fullscreenCheckbox = document.getElementById('fullscreen-borderless-checkbox');
+        if (fullscreenCheckbox && savedSettings.fullscreenBorderless !== undefined) {
+          fullscreenCheckbox.checked = savedSettings.fullscreenBorderless;
+          // Apply the setting
+          if (savedSettings.fullscreenBorderless) {
+            window.electronAPI.setFullscreenBorderless(true).catch(err => {
+              console.error('Failed to restore fullscreen borderless:', err);
+            });
+          }
+        }
+
+        // Restore ignore shortcuts checkbox state and apply setting
+        const ignoreShortcutsCheckbox = document.getElementById('ignore-shortcuts-checkbox');
+        if (ignoreShortcutsCheckbox && savedSettings.ignoreShortcuts !== undefined) {
+          ignoreShortcutsCheckbox.checked = savedSettings.ignoreShortcuts;
+          // Apply the setting
+          if (savedSettings.ignoreShortcuts) {
+            window.electronAPI.setIgnoreShortcuts(true).catch(err => {
+              console.error('Failed to restore ignore shortcuts:', err);
+            });
+          }
+        }
+
+        // Restore mute other apps checkbox state and apply setting
+        const muteOtherAppsCheckbox = document.getElementById('mute-other-apps-checkbox');
+        if (muteOtherAppsCheckbox && savedSettings.muteOtherApps !== undefined) {
+          muteOtherAppsCheckbox.checked = savedSettings.muteOtherApps;
+          // Apply the setting
+          if (savedSettings.muteOtherApps) {
+            window.electronAPI.setMuteOtherApps(true).catch(err => {
+              console.error('Failed to restore mute other apps:', err);
+            });
+          }
         }
       }
 

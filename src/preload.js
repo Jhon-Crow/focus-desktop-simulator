@@ -37,5 +37,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
   startLogRecording: (headerContent) => ipcRenderer.invoke('start-log-recording', headerContent),
   appendLogEntry: (logEntry) => ipcRenderer.invoke('append-log-entry', logEntry),
   stopLogRecording: () => ipcRenderer.invoke('stop-log-recording'),
-  isLogRecording: () => ipcRenderer.invoke('is-log-recording')
+  isLogRecording: () => ipcRenderer.invoke('is-log-recording'),
+  // Window settings
+  setFullscreenBorderless: (enabled) => ipcRenderer.invoke('set-fullscreen-borderless', enabled),
+  setIgnoreShortcuts: (enabled) => ipcRenderer.invoke('set-ignore-shortcuts', enabled),
+  setMuteOtherApps: (enabled) => ipcRenderer.invoke('set-mute-other-apps', enabled)
 });

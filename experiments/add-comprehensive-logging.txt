@@ -1,0 +1,33 @@
+Comprehensive Logging Additions for renderer.js
+================================================
+
+Based on the Task agent analysis, I need to add logging to the following locations:
+
+1. OBJECT DRAGGING (onMouseUp - line ~11047)
+   - Add log when object is dropped
+   - Include final position, whether stacked, etc.
+
+2. OBJECT ROTATION (onMouseWheel - line ~11549)
+   - Add log when object is rotated
+   - Include rotation amount and final rotation
+
+3. OBJECT SCALING (onMouseWheel - line ~11516)
+   - Add log when object is scaled
+   - Include scale delta and final scale
+
+4. DRAWING ACTIONS:
+   - enterPenDrawingMode (line ~6925) - mode entered
+   - addDrawingPoint (line ~7345) - drawing points added
+   - endDrawingStroke (line ~7423) - stroke completed
+   - exitPenDrawingMode (line ~6980) - mode exited
+
+5. MODE TRANSITIONS:
+   - enterExamineMode (line ~14034)
+   - exitExamineMode (line ~14080)
+   - enterBookReadingMode (line ~18468)
+   - exitBookReadingMode (line ~18529)
+   - enterPlayerMode (line ~18673)
+   - exitPlayerMode (line ~18758)
+   - Pointer lock (onPointerLockChange - line ~10135)
+
+Let me systematically add these logs...

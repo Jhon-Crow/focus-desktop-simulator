@@ -941,14 +941,24 @@ ipcMain.handle('save-markdown-file', async (event, folderPath, fileName, content
 });
 
 // ============================================================================
-// ACTIVITY LOG - Export Full Log
+// ACTIVITY LOG - Live Log Recording to File
 // ============================================================================
 
-// Save activity log to a file selected by user
-ipcMain.handle('save-activity-log', async (event, logContent) => {
+// Global log file stream for live logging
+let logFileStream = null;
+let logFilePath = null;
+
+// Start live log recording - opens file dialog and creates write stream
+ipcMain.handle('start-log-recording', async (event, headerContent) => {
   try {
+    // If already recording, stop first
+    if (logFileStream) {
+      logFileStream.end();
+      logFileStream = null;
+    }
+
     const result = await dialog.showSaveDialog(mainWindow, {
-      title: 'Save Activity Log',
+      title: 'Select Log File Location',
       defaultPath: `activity-log-${new Date().toISOString().replace(/[:.]/g, '-')}.txt`,
       filters: [
         { name: 'Text Files', extensions: ['txt'] },
@@ -960,16 +970,80 @@ ipcMain.handle('save-activity-log', async (event, logContent) => {
       return { success: true, canceled: true };
     }
 
-    fs.writeFileSync(result.filePath, logContent, 'utf8');
+    logFilePath = result.filePath;
+
+    // Create write stream with append mode
+    logFileStream = fs.createWriteStream(logFilePath, { flags: 'w' });
+
+    // Write header
+    if (headerContent) {
+      logFileStream.write(headerContent + '\n\n');
+    }
+
+    console.log('Log recording started:', logFilePath);
 
     return {
       success: true,
-      filePath: result.filePath
+      filePath: logFilePath
     };
   } catch (error) {
-    console.error('Error saving activity log:', error);
+    console.error('Error starting log recording:', error);
     return { success: false, error: error.message };
   }
+});
+
+// Append log entry to the recording file
+ipcMain.handle('append-log-entry', async (event, logEntry) => {
+  try {
+    if (!logFileStream) {
+      return { success: false, error: 'Log recording not started' };
+    }
+
+    logFileStream.write(logEntry + '\n\n');
+
+    return { success: true };
+  } catch (error) {
+    console.error('Error appending log entry:', error);
+    return { success: false, error: error.message };
+  }
+});
+
+// Stop log recording - closes the write stream
+ipcMain.handle('stop-log-recording', async () => {
+  try {
+    if (logFileStream) {
+      // Write session end marker
+      const endTime = new Date().toISOString();
+      logFileStream.write(`\n${'='.repeat(80)}\n\nSession ended: ${endTime}\n`);
+
+      logFileStream.end();
+
+      const filePath = logFilePath;
+      logFileStream = null;
+      logFilePath = null;
+
+      console.log('Log recording stopped:', filePath);
+
+      return {
+        success: true,
+        filePath: filePath
+      };
+    }
+
+    return { success: true };
+  } catch (error) {
+    console.error('Error stopping log recording:', error);
+    return { success: false, error: error.message };
+  }
+});
+
+// Check if log recording is active
+ipcMain.handle('is-log-recording', async () => {
+  return {
+    success: true,
+    isRecording: logFileStream !== null,
+    filePath: logFilePath
+  };
 });
 
 // ============================================================================

@@ -1151,42 +1151,296 @@ ipcMain.handle('set-fullscreen-borderless', async (event, enabled) => {
   }
 });
 
-// Track if kiosk mode is enabled
-let kioskModeEnabled = false;
+// Track if keyboard hook is enabled
+let keyboardHookEnabled = false;
+let keyboardHookProcess = null;
+
+// PowerShell script for low-level keyboard hook to block system keys
+// This uses SetWindowsHookEx with WH_KEYBOARD_LL to intercept keys before Windows processes them
+function getKeyboardHookScript() {
+  return `
+Add-Type -TypeDefinition @"
+using System;
+using System.Diagnostics;
+using System.Runtime.InteropServices;
+using System.Windows.Forms;
+
+public class KeyboardHook {
+    private const int WH_KEYBOARD_LL = 13;
+    private const int WM_KEYDOWN = 0x0100;
+    private const int WM_SYSKEYDOWN = 0x0104;
+
+    // Key codes
+    private const int VK_TAB = 0x09;
+    private const int VK_ESCAPE = 0x1B;
+    private const int VK_LWIN = 0x5B;
+    private const int VK_RWIN = 0x5C;
+    private const int VK_F4 = 0x73;
+    private const int VK_MENU = 0x12; // Alt key
+
+    private static IntPtr hookId = IntPtr.Zero;
+    private static LowLevelKeyboardProc proc = HookCallback;
+    private static bool altPressed = false;
+
+    public delegate IntPtr LowLevelKeyboardProc(int nCode, IntPtr wParam, IntPtr lParam);
+
+    [DllImport("user32.dll", CharSet = CharSet.Auto, SetLastError = true)]
+    private static extern IntPtr SetWindowsHookEx(int idHook, LowLevelKeyboardProc lpfn, IntPtr hMod, uint dwThreadId);
+
+    [DllImport("user32.dll", CharSet = CharSet.Auto, SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    public static extern bool UnhookWindowsHookEx(IntPtr hhk);
+
+    [DllImport("user32.dll", CharSet = CharSet.Auto, SetLastError = true)]
+    private static extern IntPtr CallNextHookEx(IntPtr hhk, int nCode, IntPtr wParam, IntPtr lParam);
+
+    [DllImport("kernel32.dll", CharSet = CharSet.Auto, SetLastError = true)]
+    private static extern IntPtr GetModuleHandle(string lpModuleName);
+
+    public static void Start() {
+        using (Process curProcess = Process.GetCurrentProcess())
+        using (ProcessModule curModule = curProcess.MainModule) {
+            hookId = SetWindowsHookEx(WH_KEYBOARD_LL, proc, GetModuleHandle(curModule.ModuleName), 0);
+        }
+        Console.WriteLine("HOOK_STARTED");
+        Application.Run();
+    }
+
+    public static void Stop() {
+        if (hookId != IntPtr.Zero) {
+            UnhookWindowsHookEx(hookId);
+            hookId = IntPtr.Zero;
+        }
+        Application.Exit();
+    }
+
+    private static IntPtr HookCallback(int nCode, IntPtr wParam, IntPtr lParam) {
+        if (nCode >= 0) {
+            int vkCode = Marshal.ReadInt32(lParam);
+            bool isKeyDown = (wParam == (IntPtr)WM_KEYDOWN || wParam == (IntPtr)WM_SYSKEYDOWN);
+
+            // Track Alt key state
+            if (vkCode == VK_MENU) {
+                altPressed = isKeyDown;
+            }
+
+            // Block Windows keys
+            if (vkCode == VK_LWIN || vkCode == VK_RWIN) {
+                Console.WriteLine("BLOCKED: Windows key");
+                return (IntPtr)1;
+            }
+
+            // Block Alt+Tab
+            if (altPressed && vkCode == VK_TAB && isKeyDown) {
+                Console.WriteLine("BLOCKED: Alt+Tab");
+                return (IntPtr)1;
+            }
+
+            // Block Alt+F4
+            if (altPressed && vkCode == VK_F4 && isKeyDown) {
+                Console.WriteLine("BLOCKED: Alt+F4");
+                return (IntPtr)1;
+            }
+
+            // Block Alt+Escape
+            if (altPressed && vkCode == VK_ESCAPE && isKeyDown) {
+                Console.WriteLine("BLOCKED: Alt+Escape");
+                return (IntPtr)1;
+            }
+        }
+        return CallNextHookEx(hookId, nCode, wParam, lParam);
+    }
+}
+"@ -ReferencedAssemblies System.Windows.Forms
+
+[KeyboardHook]::Start()
+`;
+}
+
+// Start the keyboard hook process
+function startKeyboardHook() {
+  return new Promise((resolve, reject) => {
+    if (keyboardHookProcess) {
+      console.log('Keyboard hook already running');
+      resolve({ success: true, alreadyRunning: true });
+      return;
+    }
+
+    const tempDir = os.tmpdir();
+    const timestamp = Date.now();
+    const scriptPath = path.join(tempDir, `keyboard-hook-${timestamp}.ps1`);
+
+    try {
+      // Write script to temp file
+      const scriptContent = getKeyboardHookScript();
+      fs.writeFileSync(scriptPath, scriptContent, 'utf8');
+      console.log('Keyboard hook script written to:', scriptPath);
+
+      // Execute the script file - this will run until stopped
+      keyboardHookProcess = spawn('powershell.exe', [
+        '-NoProfile',
+        '-ExecutionPolicy', 'Bypass',
+        '-WindowStyle', 'Hidden',
+        '-File', scriptPath
+      ], {
+        detached: false,
+        stdio: ['pipe', 'pipe', 'pipe']
+      });
+
+      let hookStarted = false;
+
+      keyboardHookProcess.stdout.on('data', (data) => {
+        const output = data.toString();
+        console.log('Keyboard hook output:', output);
+        if (output.includes('HOOK_STARTED') && !hookStarted) {
+          hookStarted = true;
+          keyboardHookEnabled = true;
+          resolve({ success: true });
+        }
+      });
+
+      keyboardHookProcess.stderr.on('data', (data) => {
+        console.error('Keyboard hook error:', data.toString());
+      });
+
+      keyboardHookProcess.on('close', (code) => {
+        console.log('Keyboard hook process exited with code:', code);
+        keyboardHookProcess = null;
+        keyboardHookEnabled = false;
+
+        // Clean up temp file
+        try {
+          fs.unlinkSync(scriptPath);
+        } catch (e) { }
+
+        if (!hookStarted) {
+          reject(new Error('Keyboard hook process ended before starting'));
+        }
+      });
+
+      keyboardHookProcess.on('error', (err) => {
+        console.error('Keyboard hook process error:', err);
+        keyboardHookProcess = null;
+        keyboardHookEnabled = false;
+        reject(err);
+      });
+
+      // Timeout if hook doesn't start in 10 seconds
+      setTimeout(() => {
+        if (!hookStarted) {
+          if (keyboardHookProcess) {
+            keyboardHookProcess.kill();
+            keyboardHookProcess = null;
+          }
+          reject(new Error('Keyboard hook start timeout'));
+        }
+      }, 10000);
+
+    } catch (err) {
+      // Clean up temp file on error
+      try {
+        fs.unlinkSync(scriptPath);
+      } catch (e) { }
+      reject(err);
+    }
+  });
+}
+
+// Stop the keyboard hook process
+function stopKeyboardHook() {
+  return new Promise((resolve) => {
+    if (!keyboardHookProcess) {
+      console.log('Keyboard hook not running');
+      keyboardHookEnabled = false;
+      resolve({ success: true, wasNotRunning: true });
+      return;
+    }
+
+    try {
+      // Kill the PowerShell process
+      keyboardHookProcess.kill('SIGTERM');
+
+      // Give it a moment to clean up
+      setTimeout(() => {
+        if (keyboardHookProcess) {
+          keyboardHookProcess.kill('SIGKILL');
+        }
+        keyboardHookProcess = null;
+        keyboardHookEnabled = false;
+        console.log('Keyboard hook stopped');
+        resolve({ success: true });
+      }, 500);
+    } catch (err) {
+      console.error('Error stopping keyboard hook:', err);
+      keyboardHookProcess = null;
+      keyboardHookEnabled = false;
+      resolve({ success: true, error: err.message });
+    }
+  });
+}
 
 // Toggle ignoring keyboard shortcuts (Alt+F4, Alt+Tab, Windows key, etc.)
-// Uses kiosk mode to properly intercept system-level shortcuts
+// Uses a low-level keyboard hook on Windows to intercept system-level shortcuts
 ipcMain.handle('set-ignore-shortcuts', async (event, enabled) => {
   try {
     if (!mainWindow) {
       return { success: false, error: 'Window not available' };
     }
 
-    if (enabled) {
-      // Enter kiosk mode to block system shortcuts like Alt+Tab and Windows key
-      // Kiosk mode is the only reliable way to intercept OS-level shortcuts in Electron
-      mainWindow.setKiosk(true);
-      kioskModeEnabled = true;
-      // Also register handler for additional shortcuts (Alt+F4, etc.)
-      mainWindow.webContents.on('before-input-event', handleBeforeInputEvent);
-      console.log('Keyboard shortcuts ignored (kiosk mode enabled)');
-    } else {
-      // Exit kiosk mode to restore normal behavior
-      mainWindow.setKiosk(false);
-      kioskModeEnabled = false;
-      // Remove handler
-      mainWindow.webContents.removeListener('before-input-event', handleBeforeInputEvent);
-      console.log('Keyboard shortcuts enabled (kiosk mode disabled)');
+    // On non-Windows platforms, use kiosk mode (limited effectiveness)
+    if (process.platform !== 'win32') {
+      if (enabled) {
+        mainWindow.setKiosk(true);
+        mainWindow.webContents.on('before-input-event', handleBeforeInputEvent);
+        console.log('Keyboard shortcuts ignored (kiosk mode - limited on non-Windows)');
+      } else {
+        mainWindow.setKiosk(false);
+        mainWindow.webContents.removeListener('before-input-event', handleBeforeInputEvent);
+        console.log('Keyboard shortcuts enabled');
+      }
+      return { success: true };
     }
 
-    return { success: true };
+    // On Windows, use low-level keyboard hook
+    if (enabled) {
+      try {
+        // Also enter fullscreen for better effect
+        mainWindow.setFullScreen(true);
+        mainWindow.setMenuBarVisibility(false);
+        mainWindow.setAutoHideMenuBar(true);
+
+        // Block app-level shortcuts
+        mainWindow.webContents.on('before-input-event', handleBeforeInputEvent);
+
+        // Start the keyboard hook to block system shortcuts
+        await startKeyboardHook();
+        console.log('Keyboard shortcuts ignored (low-level hook enabled)');
+        return { success: true };
+      } catch (err) {
+        console.error('Failed to start keyboard hook:', err);
+        // Still return success for partial functionality (fullscreen + app-level blocking)
+        return {
+          success: true,
+          warning: 'System shortcuts (Alt+Tab, Win key) may not be fully blocked: ' + err.message
+        };
+      }
+    } else {
+      // Stop the keyboard hook
+      await stopKeyboardHook();
+
+      // Remove app-level handler
+      mainWindow.webContents.removeListener('before-input-event', handleBeforeInputEvent);
+
+      console.log('Keyboard shortcuts enabled');
+      return { success: true };
+    }
   } catch (error) {
     console.error('Error setting ignore shortcuts:', error);
     return { success: false, error: error.message };
   }
 });
 
-// Handler to block keyboard shortcuts that might still reach the app
+// Handler to block keyboard shortcuts at app level
 function handleBeforeInputEvent(event, input) {
   // Block Alt+F4 (close window)
   if (input.alt && input.key === 'F4') {
@@ -1194,7 +1448,7 @@ function handleBeforeInputEvent(event, input) {
     return;
   }
 
-  // Block Alt+Tab (additional safeguard, kiosk mode handles OS-level)
+  // Block Alt+Tab at app level (backup)
   if (input.alt && input.key === 'Tab') {
     event.preventDefault();
     return;
@@ -1212,39 +1466,27 @@ function handleBeforeInputEvent(event, input) {
     return;
   }
 
-  // Block Ctrl+Alt+Delete behavior on Windows (Escape key exit)
-  if (input.key === 'Escape' && kioskModeEnabled) {
+  // Block Escape key while shortcuts are being ignored
+  if (input.key === 'Escape' && keyboardHookEnabled) {
     event.preventDefault();
     return;
   }
 }
 
+// Clean up keyboard hook when app quits
+app.on('before-quit', async () => {
+  if (keyboardHookProcess) {
+    await stopKeyboardHook();
+  }
+});
+
 // Store muted state for other apps
 let otherAppsMuted = false;
 
-// Toggle muting other applications (Windows-specific feature)
-// Uses Windows Core Audio API via PowerShell to mute all audio sessions except this app
-ipcMain.handle('set-mute-other-apps', async (event, enabled) => {
-  try {
-    // Note: Muting other applications requires platform-specific implementation
-    if (process.platform !== 'win32') {
-      console.log('Mute other apps is only supported on Windows');
-      return {
-        success: false,
-        error: 'This feature is only supported on Windows',
-        unsupported: true
-      };
-    }
-
-    const electronPID = process.pid;
-
-    if (enabled) {
-      console.log('Attempting to mute other applications...');
-
-      // PowerShell script using Windows Core Audio API to mute all apps except this one
-      // This uses the IAudioSessionManager2 interface via COM interop
-      const muteScript = `
-Add-Type -TypeDefinition @'
+// Helper function to generate the PowerShell audio control script content
+function getAudioControlScriptContent() {
+  return `
+Add-Type -TypeDefinition @"
 using System;
 using System.Runtime.InteropServices;
 
@@ -1337,7 +1579,6 @@ public class AudioManager {
                     int pid;
                     ctl2.GetProcessId(out pid);
 
-                    // Skip our own process
                     if (pid == excludePID || pid == 0) continue;
 
                     var vol = ctl as ISimpleAudioVolume;
@@ -1387,177 +1628,163 @@ public class AudioManager {
         }
     }
 }
-'@ -ReferencedAssemblies System.Runtime.InteropServices
-
-[AudioManager]::MuteOtherApps(${electronPID})
+"@ -ReferencedAssemblies System.Runtime.InteropServices
 `;
+}
 
-      return new Promise((resolve) => {
-        exec(`powershell -NoProfile -ExecutionPolicy Bypass -Command "${muteScript.replace(/"/g, '\\"').replace(/\n/g, ' ')}"`,
-          { timeout: 30000 },
-          (error, stdout, stderr) => {
-            if (error) {
-              console.error('PowerShell error:', error);
-              console.error('stderr:', stderr);
-              resolve({
-                success: false,
-                error: 'Failed to mute other applications. PowerShell error.',
-                details: stderr || error.message
-              });
-              return;
-            }
+// Execute PowerShell script from a temporary file (more reliable than inline command)
+function executePowerShellScript(scriptContent) {
+  return new Promise((resolve, reject) => {
+    const tempDir = os.tmpdir();
+    const timestamp = Date.now();
+    const scriptPath = path.join(tempDir, `audio-control-${timestamp}.ps1`);
 
-            const output = stdout.trim();
-            console.log('Mute other apps output:', output);
+    try {
+      // Write script to temp file
+      fs.writeFileSync(scriptPath, scriptContent, 'utf8');
+      console.log('PowerShell script written to:', scriptPath);
 
-            if (output.includes('SUCCESS')) {
-              otherAppsMuted = true;
-              resolve({
-                success: true,
-                message: 'Other applications muted successfully'
-              });
-            } else if (output.includes('ERROR:')) {
-              resolve({
-                success: false,
-                error: output.replace('ERROR: ', ''),
-                details: stderr
-              });
-            } else {
-              // Partial success or unknown state
-              otherAppsMuted = true;
-              resolve({
-                success: true,
-                message: 'Mute command executed'
-              });
-            }
-          }
-        );
+      // Execute the script file
+      const psProcess = spawn('powershell.exe', [
+        '-NoProfile',
+        '-ExecutionPolicy', 'Bypass',
+        '-File', scriptPath
+      ]);
+
+      let stdout = '';
+      let stderr = '';
+
+      psProcess.stdout.on('data', (data) => {
+        stdout += data.toString();
       });
+
+      psProcess.stderr.on('data', (data) => {
+        stderr += data.toString();
+      });
+
+      psProcess.on('close', (code) => {
+        // Clean up temp file
+        try {
+          fs.unlinkSync(scriptPath);
+        } catch (e) {
+          console.warn('Failed to clean up temp script file:', e.message);
+        }
+
+        console.log('PowerShell exit code:', code);
+        console.log('PowerShell stdout:', stdout);
+        if (stderr) console.log('PowerShell stderr:', stderr);
+
+        if (code === 0 || stdout.includes('SUCCESS')) {
+          resolve({ success: true, output: stdout.trim() });
+        } else {
+          resolve({ success: false, output: stdout.trim(), error: stderr || `Exit code: ${code}` });
+        }
+      });
+
+      psProcess.on('error', (err) => {
+        // Clean up temp file
+        try {
+          fs.unlinkSync(scriptPath);
+        } catch (e) { }
+        reject(err);
+      });
+
+      // Timeout after 30 seconds
+      setTimeout(() => {
+        psProcess.kill();
+        reject(new Error('PowerShell script timed out'));
+      }, 30000);
+
+    } catch (err) {
+      // Clean up temp file on error
+      try {
+        fs.unlinkSync(scriptPath);
+      } catch (e) { }
+      reject(err);
+    }
+  });
+}
+
+// Toggle muting other applications (Windows-specific feature)
+// Uses Windows Core Audio API via PowerShell to mute all audio sessions except this app
+ipcMain.handle('set-mute-other-apps', async (event, enabled) => {
+  try {
+    // Note: Muting other applications requires platform-specific implementation
+    if (process.platform !== 'win32') {
+      console.log('Mute other apps is only supported on Windows');
+      return {
+        success: false,
+        error: 'This feature is only supported on Windows',
+        unsupported: true
+      };
+    }
+
+    const electronPID = process.pid;
+    const baseScript = getAudioControlScriptContent();
+
+    if (enabled) {
+      console.log('Attempting to mute other applications (PID to exclude:', electronPID, ')');
+
+      const muteScript = baseScript + `\n[AudioManager]::MuteOtherApps(${electronPID})`;
+
+      try {
+        const result = await executePowerShellScript(muteScript);
+
+        if (result.success && result.output.includes('SUCCESS')) {
+          otherAppsMuted = true;
+          return {
+            success: true,
+            message: 'Other applications muted successfully'
+          };
+        } else if (result.output.includes('ERROR:')) {
+          return {
+            success: false,
+            error: result.output.replace(/.*ERROR:\s*/, ''),
+            details: result.error
+          };
+        } else {
+          // Partial success or unknown state
+          otherAppsMuted = true;
+          return {
+            success: true,
+            message: 'Mute command executed'
+          };
+        }
+      } catch (err) {
+        console.error('PowerShell execution error:', err);
+        return {
+          success: false,
+          error: 'Failed to mute other applications: ' + err.message
+        };
+      }
     } else {
       console.log('Unmuting other applications...');
 
-      // PowerShell script to unmute all apps
-      const unmuteScript = `
-Add-Type -TypeDefinition @'
-using System;
-using System.Runtime.InteropServices;
+      const unmuteScript = baseScript + '\n[AudioManager]::UnmuteAllApps()';
 
-[Guid("BCDE0395-E52F-467C-8E3D-C4579291692E")]
-internal class MMDeviceEnumerator { }
+      try {
+        const result = await executePowerShellScript(unmuteScript);
 
-internal enum EDataFlow { eRender = 0, eCapture = 1, eAll = 2 }
-internal enum ERole { eConsole = 0, eMultimedia = 1, eCommunications = 2 }
-
-[Guid("A95664D2-9614-4F35-A746-DE8DB63617E6"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
-internal interface IMMDeviceEnumerator {
-    int NotImpl1();
-    int GetDefaultAudioEndpoint(EDataFlow dataFlow, ERole role, out IMMDevice ppDevice);
-}
-
-[Guid("D666063F-1587-4E43-81F1-B948E807363F"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
-internal interface IMMDevice {
-    int Activate(ref Guid iid, int dwClsCtx, IntPtr pActivationParams, [MarshalAs(UnmanagedType.IUnknown)] out object ppInterface);
-}
-
-[Guid("77AA99A0-1BD6-484F-8BC7-2C654C9A9B6F"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
-internal interface IAudioSessionManager2 {
-    int NotImpl1();
-    int NotImpl2();
-    int GetSessionEnumerator(out IAudioSessionEnumerator SessionEnum);
-}
-
-[Guid("E2F5BB11-0570-40CA-ACDD-3AA01277DEE8"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
-internal interface IAudioSessionEnumerator {
-    int GetCount(out int SessionCount);
-    int GetSession(int SessionCount, out IAudioSessionControl Session);
-}
-
-[Guid("F4B1A599-7266-4319-A8CA-E70ACB11E8CD"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
-internal interface IAudioSessionControl {
-    int NotImpl1();
-    int GetDisplayName([MarshalAs(UnmanagedType.LPWStr)] out string pRetVal);
-    int SetDisplayName([MarshalAs(UnmanagedType.LPWStr)] string Value, [MarshalAs(UnmanagedType.LPStruct)] Guid EventContext);
-    int GetIconPath([MarshalAs(UnmanagedType.LPWStr)] out string pRetVal);
-    int SetIconPath([MarshalAs(UnmanagedType.LPWStr)] string Value, [MarshalAs(UnmanagedType.LPStruct)] Guid EventContext);
-    int GetGroupingParam(out Guid pRetVal);
-    int SetGroupingParam([MarshalAs(UnmanagedType.LPStruct)] Guid Override, [MarshalAs(UnmanagedType.LPStruct)] Guid EventContext);
-    int NotImpl2();
-    int NotImpl3();
-}
-
-[Guid("87CE5498-68D6-44E5-9215-6DA47EF883D8"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
-internal interface ISimpleAudioVolume {
-    int SetMasterVolume(float fLevel, ref Guid EventContext);
-    int GetMasterVolume(out float pfLevel);
-    int SetMute(bool bMute, ref Guid EventContext);
-    int GetMute(out bool pbMute);
-}
-
-public class AudioManager {
-    public static void UnmuteAllApps() {
-        try {
-            var enumerator = (IMMDeviceEnumerator)(new MMDeviceEnumerator());
-            IMMDevice device;
-            enumerator.GetDefaultAudioEndpoint(EDataFlow.eRender, ERole.eMultimedia, out device);
-
-            Guid IID_IAudioSessionManager2 = typeof(IAudioSessionManager2).GUID;
-            object o;
-            device.Activate(ref IID_IAudioSessionManager2, 0, IntPtr.Zero, out o);
-            var mgr = (IAudioSessionManager2)o;
-
-            IAudioSessionEnumerator sessionEnumerator;
-            mgr.GetSessionEnumerator(out sessionEnumerator);
-
-            int count;
-            sessionEnumerator.GetCount(out count);
-
-            Guid guid = Guid.Empty;
-
-            for (int i = 0; i < count; i++) {
-                IAudioSessionControl ctl;
-                sessionEnumerator.GetSession(i, out ctl);
-
-                var vol = ctl as ISimpleAudioVolume;
-                if (vol != null) {
-                    vol.SetMute(false, ref guid);
-                }
-            }
-            Console.WriteLine("SUCCESS");
-        } catch (Exception ex) {
-            Console.WriteLine("ERROR: " + ex.Message);
+        if (result.success) {
+          otherAppsMuted = false;
+          return {
+            success: true,
+            message: 'Other applications unmuted'
+          };
+        } else {
+          return {
+            success: false,
+            error: 'Failed to unmute applications',
+            details: result.error
+          };
         }
-    }
-}
-'@ -ReferencedAssemblies System.Runtime.InteropServices
-
-[AudioManager]::UnmuteAllApps()
-`;
-
-      return new Promise((resolve) => {
-        exec(`powershell -NoProfile -ExecutionPolicy Bypass -Command "${unmuteScript.replace(/"/g, '\\"').replace(/\n/g, ' ')}"`,
-          { timeout: 30000 },
-          (error, stdout, stderr) => {
-            if (error) {
-              console.error('PowerShell error:', error);
-              resolve({
-                success: false,
-                error: 'Failed to unmute applications',
-                details: stderr || error.message
-              });
-              return;
-            }
-
-            const output = stdout.trim();
-            console.log('Unmute output:', output);
-
-            otherAppsMuted = false;
-            resolve({
-              success: true,
-              message: 'Other applications unmuted'
-            });
-          }
-        );
-      });
+      } catch (err) {
+        console.error('PowerShell execution error:', err);
+        return {
+          success: false,
+          error: 'Failed to unmute applications: ' + err.message
+        };
+      }
     }
   } catch (error) {
     console.error('Error setting mute other apps:', error);

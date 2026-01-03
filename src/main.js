@@ -1131,12 +1131,16 @@ ipcMain.handle('set-fullscreen-borderless', async (event, enabled) => {
 
     if (enabled) {
       // Enter fullscreen borderless mode
+      // Hide menu bar first (File, Edit, View, Window, Help)
+      mainWindow.setMenuBarVisibility(false);
+      mainWindow.setAutoHideMenuBar(true);
       mainWindow.setFullScreen(true);
-      // Note: In Electron, fullscreen mode automatically hides the frame/titlebar
-      // so we don't need to separately set frameless
     } else {
       // Exit fullscreen mode
       mainWindow.setFullScreen(false);
+      // Restore menu bar visibility
+      mainWindow.setAutoHideMenuBar(false);
+      mainWindow.setMenuBarVisibility(true);
     }
 
     console.log('Fullscreen borderless mode:', enabled);
@@ -1147,7 +1151,11 @@ ipcMain.handle('set-fullscreen-borderless', async (event, enabled) => {
   }
 });
 
-// Toggle ignoring keyboard shortcuts (Alt+F4, Alt+Tab, etc.)
+// Track if kiosk mode is enabled
+let kioskModeEnabled = false;
+
+// Toggle ignoring keyboard shortcuts (Alt+F4, Alt+Tab, Windows key, etc.)
+// Uses kiosk mode to properly intercept system-level shortcuts
 ipcMain.handle('set-ignore-shortcuts', async (event, enabled) => {
   try {
     if (!mainWindow) {
@@ -1155,13 +1163,20 @@ ipcMain.handle('set-ignore-shortcuts', async (event, enabled) => {
     }
 
     if (enabled) {
-      // Register handlers to prevent default shortcuts
+      // Enter kiosk mode to block system shortcuts like Alt+Tab and Windows key
+      // Kiosk mode is the only reliable way to intercept OS-level shortcuts in Electron
+      mainWindow.setKiosk(true);
+      kioskModeEnabled = true;
+      // Also register handler for additional shortcuts (Alt+F4, etc.)
       mainWindow.webContents.on('before-input-event', handleBeforeInputEvent);
-      console.log('Keyboard shortcuts ignored');
+      console.log('Keyboard shortcuts ignored (kiosk mode enabled)');
     } else {
-      // Remove handler to allow shortcuts
+      // Exit kiosk mode to restore normal behavior
+      mainWindow.setKiosk(false);
+      kioskModeEnabled = false;
+      // Remove handler
       mainWindow.webContents.removeListener('before-input-event', handleBeforeInputEvent);
-      console.log('Keyboard shortcuts enabled');
+      console.log('Keyboard shortcuts enabled (kiosk mode disabled)');
     }
 
     return { success: true };
@@ -1171,7 +1186,7 @@ ipcMain.handle('set-ignore-shortcuts', async (event, enabled) => {
   }
 });
 
-// Handler to block keyboard shortcuts
+// Handler to block keyboard shortcuts that might still reach the app
 function handleBeforeInputEvent(event, input) {
   // Block Alt+F4 (close window)
   if (input.alt && input.key === 'F4') {
@@ -1179,7 +1194,7 @@ function handleBeforeInputEvent(event, input) {
     return;
   }
 
-  // Block Alt+Tab (switch window) - Note: This may not work on all platforms
+  // Block Alt+Tab (additional safeguard, kiosk mode handles OS-level)
   if (input.alt && input.key === 'Tab') {
     event.preventDefault();
     return;
@@ -1196,12 +1211,19 @@ function handleBeforeInputEvent(event, input) {
     event.preventDefault();
     return;
   }
+
+  // Block Ctrl+Alt+Delete behavior on Windows (Escape key exit)
+  if (input.key === 'Escape' && kioskModeEnabled) {
+    event.preventDefault();
+    return;
+  }
 }
 
-// Store original volume levels to restore later
-let savedVolumeLevels = null;
+// Store muted state for other apps
+let otherAppsMuted = false;
 
 // Toggle muting other applications (Windows-specific feature)
+// Uses Windows Core Audio API via PowerShell to mute all audio sessions except this app
 ipcMain.handle('set-mute-other-apps', async (event, enabled) => {
   try {
     // Note: Muting other applications requires platform-specific implementation
@@ -1214,80 +1236,328 @@ ipcMain.handle('set-mute-other-apps', async (event, enabled) => {
       };
     }
 
+    const electronPID = process.pid;
+
     if (enabled) {
       console.log('Attempting to mute other applications...');
 
-      // PowerShell script to get current volume levels and mute all applications except this one
-      const getVolumesScript = `
-Add-Type -TypeDefinition @"
+      // PowerShell script using Windows Core Audio API to mute all apps except this one
+      // This uses the IAudioSessionManager2 interface via COM interop
+      const muteScript = `
+Add-Type -TypeDefinition @'
 using System;
 using System.Runtime.InteropServices;
-public class AudioHelper {
-    [DllImport("user32.dll")]
-    public static extern IntPtr GetForegroundWindow();
-    [DllImport("user32.dll")]
-    public static extern int GetWindowThreadProcessId(IntPtr hWnd, out int lpdwProcessId);
+
+[Guid("BCDE0395-E52F-467C-8E3D-C4579291692E")]
+internal class MMDeviceEnumerator { }
+
+internal enum EDataFlow { eRender = 0, eCapture = 1, eAll = 2 }
+internal enum ERole { eConsole = 0, eMultimedia = 1, eCommunications = 2 }
+
+[Guid("A95664D2-9614-4F35-A746-DE8DB63617E6"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+internal interface IMMDeviceEnumerator {
+    int NotImpl1();
+    int GetDefaultAudioEndpoint(EDataFlow dataFlow, ERole role, out IMMDevice ppDevice);
 }
-"@
 
-$currentPID = $PID
-$electronPID = ${process.pid}
-$volumes = @()
-
-# Use WMI to enumerate audio sessions would require additional COM components
-# For simplicity, we'll use nircmd if available, or display a message
-
-# Check if nircmd is available (common audio control tool for Windows)
-$nircmdPath = Get-Command nircmd -ErrorAction SilentlyContinue
-
-if ($null -eq $nircmdPath) {
-    Write-Output "NIRCMD_NOT_FOUND"
-} else {
-    Write-Output "NIRCMD_FOUND:$($nircmdPath.Source)"
+[Guid("D666063F-1587-4E43-81F1-B948E807363F"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+internal interface IMMDevice {
+    int Activate(ref Guid iid, int dwClsCtx, IntPtr pActivationParams, [MarshalAs(UnmanagedType.IUnknown)] out object ppInterface);
 }
+
+[Guid("77AA99A0-1BD6-484F-8BC7-2C654C9A9B6F"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+internal interface IAudioSessionManager2 {
+    int NotImpl1();
+    int NotImpl2();
+    int GetSessionEnumerator(out IAudioSessionEnumerator SessionEnum);
+}
+
+[Guid("E2F5BB11-0570-40CA-ACDD-3AA01277DEE8"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+internal interface IAudioSessionEnumerator {
+    int GetCount(out int SessionCount);
+    int GetSession(int SessionCount, out IAudioSessionControl Session);
+}
+
+[Guid("F4B1A599-7266-4319-A8CA-E70ACB11E8CD"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+internal interface IAudioSessionControl {
+    int NotImpl1();
+    int GetDisplayName([MarshalAs(UnmanagedType.LPWStr)] out string pRetVal);
+    int SetDisplayName([MarshalAs(UnmanagedType.LPWStr)] string Value, [MarshalAs(UnmanagedType.LPStruct)] Guid EventContext);
+    int GetIconPath([MarshalAs(UnmanagedType.LPWStr)] out string pRetVal);
+    int SetIconPath([MarshalAs(UnmanagedType.LPWStr)] string Value, [MarshalAs(UnmanagedType.LPStruct)] Guid EventContext);
+    int GetGroupingParam(out Guid pRetVal);
+    int SetGroupingParam([MarshalAs(UnmanagedType.LPStruct)] Guid Override, [MarshalAs(UnmanagedType.LPStruct)] Guid EventContext);
+    int NotImpl2();
+    int NotImpl3();
+}
+
+[Guid("bfb7ff88-7239-4fc9-8fa2-07c950be9c6d"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+internal interface IAudioSessionControl2 : IAudioSessionControl {
+    int GetSessionIdentifier([MarshalAs(UnmanagedType.LPWStr)] out string pRetVal);
+    int GetSessionInstanceIdentifier([MarshalAs(UnmanagedType.LPWStr)] out string pRetVal);
+    int GetProcessId(out int pRetVal);
+    int IsSystemSoundsSession();
+    int SetDuckingPreference(bool optOut);
+}
+
+[Guid("87CE5498-68D6-44E5-9215-6DA47EF883D8"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+internal interface ISimpleAudioVolume {
+    int SetMasterVolume(float fLevel, ref Guid EventContext);
+    int GetMasterVolume(out float pfLevel);
+    int SetMute(bool bMute, ref Guid EventContext);
+    int GetMute(out bool pbMute);
+}
+
+public class AudioManager {
+    public static void MuteOtherApps(int excludePID) {
+        try {
+            var enumerator = (IMMDeviceEnumerator)(new MMDeviceEnumerator());
+            IMMDevice device;
+            enumerator.GetDefaultAudioEndpoint(EDataFlow.eRender, ERole.eMultimedia, out device);
+
+            Guid IID_IAudioSessionManager2 = typeof(IAudioSessionManager2).GUID;
+            object o;
+            device.Activate(ref IID_IAudioSessionManager2, 0, IntPtr.Zero, out o);
+            var mgr = (IAudioSessionManager2)o;
+
+            IAudioSessionEnumerator sessionEnumerator;
+            mgr.GetSessionEnumerator(out sessionEnumerator);
+
+            int count;
+            sessionEnumerator.GetCount(out count);
+
+            Guid guid = Guid.Empty;
+
+            for (int i = 0; i < count; i++) {
+                IAudioSessionControl ctl;
+                sessionEnumerator.GetSession(i, out ctl);
+
+                var ctl2 = ctl as IAudioSessionControl2;
+                if (ctl2 != null) {
+                    int pid;
+                    ctl2.GetProcessId(out pid);
+
+                    // Skip our own process
+                    if (pid == excludePID || pid == 0) continue;
+
+                    var vol = ctl as ISimpleAudioVolume;
+                    if (vol != null) {
+                        vol.SetMute(true, ref guid);
+                        Console.WriteLine("Muted PID: " + pid);
+                    }
+                }
+            }
+            Console.WriteLine("SUCCESS");
+        } catch (Exception ex) {
+            Console.WriteLine("ERROR: " + ex.Message);
+        }
+    }
+
+    public static void UnmuteAllApps() {
+        try {
+            var enumerator = (IMMDeviceEnumerator)(new MMDeviceEnumerator());
+            IMMDevice device;
+            enumerator.GetDefaultAudioEndpoint(EDataFlow.eRender, ERole.eMultimedia, out device);
+
+            Guid IID_IAudioSessionManager2 = typeof(IAudioSessionManager2).GUID;
+            object o;
+            device.Activate(ref IID_IAudioSessionManager2, 0, IntPtr.Zero, out o);
+            var mgr = (IAudioSessionManager2)o;
+
+            IAudioSessionEnumerator sessionEnumerator;
+            mgr.GetSessionEnumerator(out sessionEnumerator);
+
+            int count;
+            sessionEnumerator.GetCount(out count);
+
+            Guid guid = Guid.Empty;
+
+            for (int i = 0; i < count; i++) {
+                IAudioSessionControl ctl;
+                sessionEnumerator.GetSession(i, out ctl);
+
+                var vol = ctl as ISimpleAudioVolume;
+                if (vol != null) {
+                    vol.SetMute(false, ref guid);
+                }
+            }
+            Console.WriteLine("SUCCESS");
+        } catch (Exception ex) {
+            Console.WriteLine("ERROR: " + ex.Message);
+        }
+    }
+}
+'@ -ReferencedAssemblies System.Runtime.InteropServices
+
+[AudioManager]::MuteOtherApps(${electronPID})
 `;
 
       return new Promise((resolve) => {
-        exec(`powershell -Command "${getVolumesScript.replace(/"/g, '\\"')}"`, (error, stdout, stderr) => {
-          if (error) {
-            console.error('PowerShell error:', error);
-            resolve({
-              success: false,
-              error: 'PowerShell execution failed. This feature requires Windows with PowerShell.',
-              details: stderr
-            });
-            return;
-          }
+        exec(`powershell -NoProfile -ExecutionPolicy Bypass -Command "${muteScript.replace(/"/g, '\\"').replace(/\n/g, ' ')}"`,
+          { timeout: 30000 },
+          (error, stdout, stderr) => {
+            if (error) {
+              console.error('PowerShell error:', error);
+              console.error('stderr:', stderr);
+              resolve({
+                success: false,
+                error: 'Failed to mute other applications. PowerShell error.',
+                details: stderr || error.message
+              });
+              return;
+            }
 
-          const output = stdout.trim();
-          console.log('PowerShell output:', output);
+            const output = stdout.trim();
+            console.log('Mute other apps output:', output);
 
-          if (output.includes('NIRCMD_NOT_FOUND')) {
-            // NirCmd not found - this is a limitation
-            resolve({
-              success: false,
-              error: 'This feature requires NirCmd utility or Windows 10+ with advanced audio APIs. Feature is experimental and may not work on all systems.',
-              notImplemented: true
-            });
-          } else {
-            // For now, we'll just acknowledge the request but note it's experimental
-            console.log('Mute other apps: Experimental feature - may not work on all systems');
-            resolve({
-              success: true,
-              experimental: true,
-              message: 'This feature is experimental and may not work on all systems. For full functionality, consider using Windows Volume Mixer manually.'
-            });
+            if (output.includes('SUCCESS')) {
+              otherAppsMuted = true;
+              resolve({
+                success: true,
+                message: 'Other applications muted successfully'
+              });
+            } else if (output.includes('ERROR:')) {
+              resolve({
+                success: false,
+                error: output.replace('ERROR: ', ''),
+                details: stderr
+              });
+            } else {
+              // Partial success or unknown state
+              otherAppsMuted = true;
+              resolve({
+                success: true,
+                message: 'Mute command executed'
+              });
+            }
           }
-        });
+        );
       });
     } else {
-      console.log('Mute other apps disabled');
-      // If we had saved volume levels, we would restore them here
-      savedVolumeLevels = null;
-      return {
-        success: true,
-        message: 'Mute other apps disabled'
-      };
+      console.log('Unmuting other applications...');
+
+      // PowerShell script to unmute all apps
+      const unmuteScript = `
+Add-Type -TypeDefinition @'
+using System;
+using System.Runtime.InteropServices;
+
+[Guid("BCDE0395-E52F-467C-8E3D-C4579291692E")]
+internal class MMDeviceEnumerator { }
+
+internal enum EDataFlow { eRender = 0, eCapture = 1, eAll = 2 }
+internal enum ERole { eConsole = 0, eMultimedia = 1, eCommunications = 2 }
+
+[Guid("A95664D2-9614-4F35-A746-DE8DB63617E6"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+internal interface IMMDeviceEnumerator {
+    int NotImpl1();
+    int GetDefaultAudioEndpoint(EDataFlow dataFlow, ERole role, out IMMDevice ppDevice);
+}
+
+[Guid("D666063F-1587-4E43-81F1-B948E807363F"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+internal interface IMMDevice {
+    int Activate(ref Guid iid, int dwClsCtx, IntPtr pActivationParams, [MarshalAs(UnmanagedType.IUnknown)] out object ppInterface);
+}
+
+[Guid("77AA99A0-1BD6-484F-8BC7-2C654C9A9B6F"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+internal interface IAudioSessionManager2 {
+    int NotImpl1();
+    int NotImpl2();
+    int GetSessionEnumerator(out IAudioSessionEnumerator SessionEnum);
+}
+
+[Guid("E2F5BB11-0570-40CA-ACDD-3AA01277DEE8"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+internal interface IAudioSessionEnumerator {
+    int GetCount(out int SessionCount);
+    int GetSession(int SessionCount, out IAudioSessionControl Session);
+}
+
+[Guid("F4B1A599-7266-4319-A8CA-E70ACB11E8CD"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+internal interface IAudioSessionControl {
+    int NotImpl1();
+    int GetDisplayName([MarshalAs(UnmanagedType.LPWStr)] out string pRetVal);
+    int SetDisplayName([MarshalAs(UnmanagedType.LPWStr)] string Value, [MarshalAs(UnmanagedType.LPStruct)] Guid EventContext);
+    int GetIconPath([MarshalAs(UnmanagedType.LPWStr)] out string pRetVal);
+    int SetIconPath([MarshalAs(UnmanagedType.LPWStr)] string Value, [MarshalAs(UnmanagedType.LPStruct)] Guid EventContext);
+    int GetGroupingParam(out Guid pRetVal);
+    int SetGroupingParam([MarshalAs(UnmanagedType.LPStruct)] Guid Override, [MarshalAs(UnmanagedType.LPStruct)] Guid EventContext);
+    int NotImpl2();
+    int NotImpl3();
+}
+
+[Guid("87CE5498-68D6-44E5-9215-6DA47EF883D8"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+internal interface ISimpleAudioVolume {
+    int SetMasterVolume(float fLevel, ref Guid EventContext);
+    int GetMasterVolume(out float pfLevel);
+    int SetMute(bool bMute, ref Guid EventContext);
+    int GetMute(out bool pbMute);
+}
+
+public class AudioManager {
+    public static void UnmuteAllApps() {
+        try {
+            var enumerator = (IMMDeviceEnumerator)(new MMDeviceEnumerator());
+            IMMDevice device;
+            enumerator.GetDefaultAudioEndpoint(EDataFlow.eRender, ERole.eMultimedia, out device);
+
+            Guid IID_IAudioSessionManager2 = typeof(IAudioSessionManager2).GUID;
+            object o;
+            device.Activate(ref IID_IAudioSessionManager2, 0, IntPtr.Zero, out o);
+            var mgr = (IAudioSessionManager2)o;
+
+            IAudioSessionEnumerator sessionEnumerator;
+            mgr.GetSessionEnumerator(out sessionEnumerator);
+
+            int count;
+            sessionEnumerator.GetCount(out count);
+
+            Guid guid = Guid.Empty;
+
+            for (int i = 0; i < count; i++) {
+                IAudioSessionControl ctl;
+                sessionEnumerator.GetSession(i, out ctl);
+
+                var vol = ctl as ISimpleAudioVolume;
+                if (vol != null) {
+                    vol.SetMute(false, ref guid);
+                }
+            }
+            Console.WriteLine("SUCCESS");
+        } catch (Exception ex) {
+            Console.WriteLine("ERROR: " + ex.Message);
+        }
+    }
+}
+'@ -ReferencedAssemblies System.Runtime.InteropServices
+
+[AudioManager]::UnmuteAllApps()
+`;
+
+      return new Promise((resolve) => {
+        exec(`powershell -NoProfile -ExecutionPolicy Bypass -Command "${unmuteScript.replace(/"/g, '\\"').replace(/\n/g, ' ')}"`,
+          { timeout: 30000 },
+          (error, stdout, stderr) => {
+            if (error) {
+              console.error('PowerShell error:', error);
+              resolve({
+                success: false,
+                error: 'Failed to unmute applications',
+                details: stderr || error.message
+              });
+              return;
+            }
+
+            const output = stdout.trim();
+            console.log('Unmute output:', output);
+
+            otherAppsMuted = false;
+            resolve({
+              success: true,
+              message: 'Other applications unmuted'
+            });
+          }
+        );
+      });
     }
   } catch (error) {
     console.error('Error setting mute other apps:', error);

@@ -10471,6 +10471,8 @@ function setupEventListeners() {
         if (result.success) {
           console.log('Fullscreen borderless mode:', enabled);
           activityLog.add('WINDOW', 'Fullscreen borderless mode changed', { enabled });
+          // Save state to persist setting across restarts
+          saveState();
         } else {
           console.error('Failed to set fullscreen borderless:', result.error);
           activityLog.add('ERROR', 'Failed to set fullscreen borderless', { error: result.error });
@@ -10501,6 +10503,8 @@ function setupEventListeners() {
         if (result.success) {
           console.log('Ignore system shortcuts:', enabled);
           activityLog.add('WINDOW', 'Ignore system shortcuts changed', { enabled });
+          // Save state to persist setting across restarts
+          saveState();
         } else {
           console.error('Failed to set ignore shortcuts:', result.error);
           activityLog.add('ERROR', 'Failed to set ignore shortcuts', { error: result.error });
@@ -10531,11 +10535,8 @@ function setupEventListeners() {
         if (result.success) {
           console.log('Mute other applications:', enabled);
           activityLog.add('WINDOW', 'Mute other applications changed', { enabled });
-
-          // Show message if experimental
-          if (result.experimental) {
-            alert('Note: ' + result.message);
-          }
+          // Save state to persist setting across restarts
+          saveState();
         } else {
           console.error('Failed to set mute other apps:', result.error);
           activityLog.add('ERROR', 'Failed to set mute other apps', { error: result.error });
@@ -10545,8 +10546,6 @@ function setupEventListeners() {
           // Show appropriate error message
           if (result.unsupported) {
             alert('This feature is only supported on Windows.');
-          } else if (result.notImplemented) {
-            alert(result.error + '\n\nThis feature is experimental and requires additional system components to work fully.');
           } else {
             alert('Failed to set mute other apps: ' + result.error);
           }

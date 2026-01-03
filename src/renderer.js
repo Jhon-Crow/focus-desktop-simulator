@@ -11627,13 +11627,28 @@ function onMouseUp(event) {
                            selectedObject.position.z < -deskHalfDepth;
 
     if (isOverDeskEdge && CONFIG.falling.enabled) {
-      // Object dropped beyond desk edge - start falling to floor
+      // Object dropped beyond desk edge - start tipping from edge then falling
       // Store the drag velocity for continued horizontal movement during fall
-      selectedObject.userData.fallVelocityX = physicsState.dragVelocity.x * 0.02;
-      selectedObject.userData.fallVelocityZ = physicsState.dragVelocity.z * 0.02;
+      const vel = physicsState.velocities.get(selectedObject.userData.id);
+      if (vel) {
+        vel.x = physicsState.dragVelocity.x * 0.02;
+        vel.z = physicsState.dragVelocity.z * 0.02;
+      }
 
-      // Start the fall animation
-      startFallingOffTable(selectedObject);
+      // Determine which edge the object is over
+      let edgeDirection = null;
+      if (selectedObject.position.x > deskHalfWidth) edgeDirection = 'posX';
+      else if (selectedObject.position.x < -deskHalfWidth) edgeDirection = 'negX';
+      else if (selectedObject.position.z > deskHalfDepth) edgeDirection = 'posZ';
+      else if (selectedObject.position.z < -deskHalfDepth) edgeDirection = 'negZ';
+
+      // Start the tipping animation (object tips over edge before falling)
+      if (edgeDirection) {
+        startTippingAtEdge(selectedObject, edgeDirection);
+      } else {
+        // Fallback: if no clear edge direction, just fall
+        startFallingOffTable(selectedObject);
+      }
 
       // Clear lifting state
       selectedObject.userData.isLifted = false;
@@ -21582,8 +21597,10 @@ function animate() {
         obj.userData.isReturning = false;
       }
     }
-    // Normal lift/drop animation (only when not examining)
-    else if (obj.userData.targetY !== undefined && !obj.userData.isExamining) {
+    // Normal lift/drop animation (only when not examining, falling, tipping, or on floor)
+    else if (obj.userData.targetY !== undefined && !obj.userData.isExamining &&
+             !obj.userData.isFallingOffTable && !obj.userData.isTippingAtEdge &&
+             !obj.userData.isOnFloor && !obj.userData.isFallen) {
       const diff = obj.userData.targetY - obj.position.y;
       if (Math.abs(diff) > 0.001) {
         const speed = obj.userData.isLifted ? CONFIG.physics.liftSpeed : CONFIG.physics.dropSpeed;

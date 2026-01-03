@@ -10755,6 +10755,163 @@ function updatePhysics() {
       }
     }
   }
+
+  // ============================================================================
+  // STACK CENTER OF GRAVITY CHECK FOR STATIONARY OBJECTS
+  // ============================================================================
+  // This check runs for ALL objects on the desk, not just those with velocity.
+  // It ensures that when an object lands on a stack at the edge, the combined
+  // center of gravity is recalculated and the stack tips if the CoG is past the edge.
+  // This fixes the issue where dropping a book on a notebook at the edge
+  // would cause the book to fall through instead of tipping the whole stack.
+  if (CONFIG.falling.enabled) {
+    const deskHalfWidthStatic = CONFIG.desk.width / 2 - 0.2;
+    const deskHalfDepthStatic = CONFIG.desk.depth / 2 - 0.2;
+    const marginStatic = 0.05; // Smaller margin for static check
+
+    deskObjects.forEach(obj => {
+      // Skip objects that are already tipping, falling, fallen, being dragged, or in special modes
+      if (obj.userData.isTippingAtEdge) return;
+      if (obj.userData.isFallingOffTable) return;
+      if (obj.userData.isFallen) return;
+      if (obj.userData.isOnFloor) return;
+      if (obj.userData.isExamining || obj.userData.isReturning) return;
+      if (obj === selectedObject && isDragging) return;
+      if (obj.userData.isLifted) return;
+
+      // Check if this object has objects stacked on top of it
+      // We use a modified stacking check that also considers objects that are settling
+      const objectsOnTop = findObjectsOnTopIncludingSettling(obj);
+      if (objectsOnTop.length === 0) return; // Only check stacks, not single objects
+
+      // Calculate the stack's center of gravity
+      const stackCoG = calculateStackCenterOfGravityWithSettling(obj, objectsOnTop);
+
+      // Check if the stack's CoG is over the edge
+      const cogX = stackCoG.x;
+      const cogZ = stackCoG.z;
+
+      const isStackCoGOverEdge = cogX > deskHalfWidthStatic + marginStatic ||
+                                 cogX < -deskHalfWidthStatic - marginStatic ||
+                                 cogZ > deskHalfDepthStatic + marginStatic ||
+                                 cogZ < -deskHalfDepthStatic - marginStatic;
+
+      if (isStackCoGOverEdge) {
+        // Determine which edge the stack's CoG is over
+        let edgeDirection = null;
+        if (cogX > deskHalfWidthStatic) edgeDirection = 'posX';
+        else if (cogX < -deskHalfWidthStatic) edgeDirection = 'negX';
+        else if (cogZ > deskHalfDepthStatic) edgeDirection = 'posZ';
+        else if (cogZ < -deskHalfDepthStatic) edgeDirection = 'negZ';
+
+        if (edgeDirection) {
+          // Start tipping the entire stack together
+          startStackTippingAtEdge(obj, edgeDirection, stackCoG);
+        }
+      }
+    });
+  }
+}
+
+// Find objects on top of a base object, including objects that are still settling (dropping)
+// This is used for the static CoG check to detect when a dropping object would cause a stack to tip
+function findObjectsOnTopIncludingSettling(baseObject) {
+  if (!baseObject || baseObject.userData.isFallen) return [];
+
+  const basePhysics = getObjectPhysics(baseObject);
+
+  // Objects that don't allow stacking have no objects on top
+  if (basePhysics.noStackingOnTop) return [];
+
+  // Use stacking radius (actual object footprint) for overlap detection
+  const baseRadius = getStackingRadius(baseObject);
+  const baseTop = baseObject.position.y + basePhysics.height;
+  const result = [];
+
+  deskObjects.forEach(obj => {
+    if (obj === baseObject) return;
+    if (obj.userData.isFallen) return;
+    if (obj.userData.isExamining || obj.userData.isReturning) return;
+    // Don't skip isLifted - we want to detect dropping objects too
+
+    const objPhysics = getObjectPhysics(obj);
+    const objRadius = getStackingRadius(obj);
+
+    // For objects that are dropping (have targetY set), use targetY for the stacking check
+    // This allows us to detect stacking before the object fully settles
+    const objTargetY = obj.userData.targetY !== undefined ? obj.userData.targetY : obj.position.y;
+    const objCurrentY = obj.position.y;
+
+    // Check if the object is settling onto the base object
+    // Use a larger tolerance to catch objects that are still dropping
+    const verticalTolerance = 0.3; // Larger tolerance to catch dropping objects
+    const isSettlingOnTop = Math.abs(objTargetY - baseTop) < verticalTolerance;
+    const isCurrentlyNear = Math.abs(objCurrentY - baseTop) < 0.5; // Within reasonable range
+
+    // Object is considered "on top" if its target position is on top of the base
+    // AND it's currently close enough (not way above or below)
+    if (!isSettlingOnTop || !isCurrentlyNear) return;
+
+    // Check horizontal overlap - objects must overlap significantly to be considered stacked
+    const dx = obj.position.x - baseObject.position.x;
+    const dz = obj.position.z - baseObject.position.z;
+    const horizontalDist = Math.sqrt(dx * dx + dz * dz);
+    const overlapThreshold = (baseRadius + objRadius) * 0.9;
+
+    if (horizontalDist < overlapThreshold) {
+      result.push(obj);
+    }
+  });
+
+  return result;
+}
+
+// Calculate stack center of gravity including settling objects
+// Uses the provided list of objects on top (which includes settling objects)
+function calculateStackCenterOfGravityWithSettling(baseObject, objectsOnTop) {
+  const basePhysics = getObjectPhysics(baseObject);
+  const baseWeight = basePhysics.weight;
+
+  // Start with the base object's contribution to CoG
+  let totalWeightedX = baseObject.position.x * baseWeight;
+  let totalWeightedZ = baseObject.position.z * baseWeight;
+  let totalWeight = baseWeight;
+
+  // Add contributions from objects on top (including settling objects)
+  objectsOnTop.forEach(obj => {
+    const physics = getObjectPhysics(obj);
+    const weight = physics.weight;
+    totalWeightedX += obj.position.x * weight;
+    totalWeightedZ += obj.position.z * weight;
+    totalWeight += weight;
+  });
+
+  // Recursively add objects stacked on top of these
+  objectsOnTop.forEach(obj => {
+    const aboveThis = findObjectsOnTopIncludingSettling(obj);
+    aboveThis.forEach(upperObj => {
+      // Avoid double-counting
+      if (!objectsOnTop.includes(upperObj)) {
+        const physics = getObjectPhysics(upperObj);
+        const weight = physics.weight;
+        totalWeightedX += upperObj.position.x * weight;
+        totalWeightedZ += upperObj.position.z * weight;
+        totalWeight += weight;
+      }
+    });
+  });
+
+  // Calculate weighted average position (center of gravity)
+  const cogX = totalWeight > 0 ? totalWeightedX / totalWeight : baseObject.position.x;
+  const cogZ = totalWeight > 0 ? totalWeightedZ / totalWeight : baseObject.position.z;
+
+  return {
+    x: cogX,
+    z: cogZ,
+    totalWeight: totalWeight,
+    hasStack: objectsOnTop.length > 0,
+    stackedObjects: objectsOnTop
+  };
 }
 
 // ============================================================================

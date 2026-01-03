@@ -7394,11 +7394,15 @@ function addObjectToDesk(type, options = {}) {
   }
 
   // Apply scale if specified and adjust Y position to keep object on desk
+  // BUT skip Y adjustment if we have an explicit Y position (stacked objects need their saved Y)
   if (options.scale !== undefined && options.scale > 0) {
     object.scale.set(options.scale, options.scale, options.scale);
     object.userData.scale = options.scale;
-    // Adjust Y position to account for scale change
-    adjustObjectYForScale(object, 1.0, options.scale);
+    // Only adjust Y position if no explicit Y was provided
+    // Stacked objects save their Y position and need it restored exactly
+    if (options.y === undefined) {
+      adjustObjectYForScale(object, 1.0, options.scale);
+    }
   } else if (type === 'magazine' && options.scale === undefined) {
     // Magazines default to 5.0x scale (same as book max scale) for better readability
     const defaultMagazineScale = 5.0;
@@ -7603,6 +7607,38 @@ function startTippingAtEdge(object, edgeDirection) {
   object.userData.isFallen = true;
 }
 
+// Start tipping for an entire stack of objects when the stack's center of gravity is over the edge
+// This enables realistic "arch" physics where stacked objects tip together
+function startStackTippingAtEdge(baseObject, edgeDirection, stackCoG) {
+  // Start tipping the base object first
+  startTippingAtEdge(baseObject, edgeDirection);
+
+  // Also start tipping all stacked objects
+  // They inherit the same tipping state so they move together
+  if (stackCoG.stackedObjects && stackCoG.stackedObjects.length > 0) {
+    stackCoG.stackedObjects.forEach(stackedObj => {
+      if (!stackedObj.userData.isTippingAtEdge && !stackedObj.userData.isFallingOffTable) {
+        // Mark as tipping with same edge direction
+        stackedObj.userData.isTippingAtEdge = true;
+        stackedObj.userData.isFallen = true;
+        stackedObj.userData.tipStartTime = Date.now();
+        stackedObj.userData.tipAngle = 0;
+        stackedObj.userData.tipAngularVelocity = baseObject.userData.tipAngularVelocity || 0.02;
+        stackedObj.userData.tipEdgeDirection = edgeDirection;
+        stackedObj.userData.tipStartX = stackedObj.position.x;
+        stackedObj.userData.tipStartZ = stackedObj.position.z;
+        // Link to base object so they tip in sync
+        stackedObj.userData.tippingWithBase = baseObject.userData.id;
+
+        // Add to tipping objects array
+        if (!fallenObjectsState.tippingObjects.includes(stackedObj)) {
+          fallenObjectsState.tippingObjects.push(stackedObj);
+        }
+      }
+    });
+  }
+}
+
 // Update tipping objects animation (called in animate loop)
 function updateTippingObjects() {
   const deskSurfaceY = getDeskSurfaceY();
@@ -7663,13 +7699,15 @@ function updateTippingObjects() {
 
     // Check collision with other desk objects during tipping to prevent passing through
     // This fixes the bug where objects tip through each other at table edges
+    // Now includes collision with other tipping/fallen objects for realistic physics
     const tippingRadius = getObjectBounds(obj);
     const tippingPhysics = physics;
 
     for (const otherObj of deskObjects) {
       if (otherObj === obj) continue;
       if (otherObj.userData.isExamining || otherObj.userData.isReturning) continue;
-      if (otherObj.userData.isFallen) continue;  // Don't collide with other fallen objects
+      // Skip objects that are on the floor (completely fallen)
+      if (otherObj.userData.isOnFloor) continue;
 
       const otherRadius = getObjectBounds(otherObj);
       const otherPhysics = getObjectPhysics(otherObj);
@@ -7678,14 +7716,21 @@ function updateTippingObjects() {
       const dx = obj.position.x - otherObj.position.x;
       const dz = obj.position.z - otherObj.position.z;
       const dist = Math.sqrt(dx * dx + dz * dz);
-      const minDist = (tippingRadius + otherRadius) * 0.9;  // Use stacking tolerance
+      const minDist = (tippingRadius + otherRadius) * 0.8;  // Tighter tolerance for better collision
 
       if (dist < minDist && dist > 0.01) {
-        // Check vertical overlap
-        if (objectsOverlapVertically(obj, tippingPhysics, otherObj, otherPhysics)) {
-          // Collision detected - stop tipping animation and push object back slightly
-          // This prevents objects from tipping through each other
-          const pushBackFactor = 0.05;
+        // Check vertical overlap using actual Y positions
+        const objBottom = obj.position.y - (physics.height * (obj.scale?.y || 1)) / 2;
+        const objTop = obj.position.y + (physics.height * (obj.scale?.y || 1)) / 2;
+        const otherBottom = otherObj.position.y - (otherPhysics.height * (otherObj.scale?.y || 1)) / 2;
+        const otherTop = otherObj.position.y + (otherPhysics.height * (otherObj.scale?.y || 1)) / 2;
+
+        // Objects overlap vertically if their ranges intersect
+        const verticalOverlap = objBottom < otherTop && objTop > otherBottom;
+
+        if (verticalOverlap) {
+          // Collision detected - push objects apart and slow tipping
+          const pushBackFactor = 0.08;  // Increased pushback
           const normalX = dx / dist;
           const normalZ = dz / dist;
 
@@ -7693,8 +7738,23 @@ function updateTippingObjects() {
           obj.position.x += normalX * pushBackFactor;
           obj.position.z += normalZ * pushBackFactor;
 
-          // Slow down the tipping significantly to make it more realistic
-          obj.userData.tipAngularVelocity *= 0.7;
+          // The amount of slowdown depends on the other object's weight
+          // Heavier objects provide more resistance
+          const myWeight = physics.weight || 0.5;
+          const otherWeight = otherPhysics.weight || 0.5;
+          const weightRatio = otherWeight / (myWeight + otherWeight);
+
+          // Slow down tipping based on weight ratio
+          // If other object is much heavier, slow down more (could even stop)
+          const slowFactor = 0.7 - (weightRatio * 0.4); // Range: 0.3 to 0.7
+          obj.userData.tipAngularVelocity *= Math.max(0.3, slowFactor);
+
+          // If the other object is also tipping, push it too (equal and opposite reaction)
+          if (otherObj.userData.isTippingAtEdge) {
+            otherObj.position.x -= normalX * pushBackFactor * 0.5;
+            otherObj.position.z -= normalZ * pushBackFactor * 0.5;
+            otherObj.userData.tipAngularVelocity *= Math.max(0.3, 1 - weightRatio * 0.4);
+          }
         }
       }
     }
@@ -7797,13 +7857,15 @@ function updateFallingObjects() {
 
     // Check collision with other desk objects during falling to prevent passing through
     // This fixes the bug where objects pass through each other while falling
+    // Now includes collision with tipping/fallen objects for better physics
     const fallingRadius = getObjectBounds(obj);
     const fallingPhysics = getObjectPhysics(obj);
 
     for (const otherObj of deskObjects) {
       if (otherObj === obj) continue;
       if (otherObj.userData.isExamining || otherObj.userData.isReturning) continue;
-      if (otherObj.userData.isFallen) continue;  // Don't collide with other fallen objects
+      // Skip objects that are on the floor (completely fallen)
+      if (otherObj.userData.isOnFloor) continue;
 
       const otherRadius = getObjectBounds(otherObj);
       const otherPhysics = getObjectPhysics(otherObj);
@@ -7812,23 +7874,37 @@ function updateFallingObjects() {
       const dx = obj.position.x - otherObj.position.x;
       const dz = obj.position.z - otherObj.position.z;
       const dist = Math.sqrt(dx * dx + dz * dz);
-      const minDist = (fallingRadius + otherRadius) * 0.8;  // Slightly looser tolerance for falling
+      const minDist = (fallingRadius + otherRadius) * 0.75;  // Tighter tolerance
 
       if (dist < minDist && dist > 0.01) {
-        // Check vertical overlap
-        if (objectsOverlapVertically(obj, fallingPhysics, otherObj, otherPhysics)) {
+        // Check vertical overlap using actual Y positions
+        const objBottom = obj.position.y - (fallingPhysics.height * (obj.scale?.y || 1)) / 2;
+        const objTop = obj.position.y + (fallingPhysics.height * (obj.scale?.y || 1)) / 2;
+        const otherBottom = otherObj.position.y - (otherPhysics.height * (otherObj.scale?.y || 1)) / 2;
+        const otherTop = otherObj.position.y + (otherPhysics.height * (otherObj.scale?.y || 1)) / 2;
+
+        // Objects overlap vertically if their ranges intersect
+        const verticalOverlap = objBottom < otherTop && objTop > otherBottom;
+
+        if (verticalOverlap) {
           // Collision detected - deflect the falling object away
           const normalX = dx / dist;
           const normalZ = dz / dist;
 
-          // Add deflection velocity away from the collision
-          obj.userData.fallVelocityX += normalX * 0.02;
-          obj.userData.fallVelocityZ += normalZ * 0.02;
+          // Add stronger deflection velocity away from the collision
+          obj.userData.fallVelocityX += normalX * 0.04;
+          obj.userData.fallVelocityZ += normalZ * 0.04;
 
           // Separate objects to prevent overlap
-          const separation = (minDist - dist) * 0.5;
+          const separation = (minDist - dist) * 0.6;
           obj.position.x += normalX * separation;
           obj.position.z += normalZ * separation;
+
+          // If colliding with a tipping object, also affect it
+          if (otherObj.userData.isTippingAtEdge) {
+            otherObj.position.x -= normalX * separation * 0.3;
+            otherObj.position.z -= normalZ * separation * 0.3;
+          }
         }
       }
     }
@@ -9686,6 +9762,81 @@ function calculateStackedWeight(baseObject) {
   return totalWeight;
 }
 
+// Calculate the combined center of gravity for a stack of objects
+// Returns { x, z, totalWeight } - the weighted average position and total weight
+// This is used for edge physics - stacks tip based on their combined CoG
+function calculateStackCenterOfGravity(baseObject) {
+  const basePhysics = getObjectPhysics(baseObject);
+  const baseWeight = basePhysics.weight;
+
+  // Start with the base object's contribution to CoG
+  let totalWeightedX = baseObject.position.x * baseWeight;
+  let totalWeightedZ = baseObject.position.z * baseWeight;
+  let totalWeight = baseWeight;
+
+  // Add contributions from all stacked objects
+  const stackedObjects = findAllStackedAbove(baseObject);
+  stackedObjects.forEach(obj => {
+    const physics = getObjectPhysics(obj);
+    const weight = physics.weight;
+    totalWeightedX += obj.position.x * weight;
+    totalWeightedZ += obj.position.z * weight;
+    totalWeight += weight;
+  });
+
+  // Calculate weighted average position (center of gravity)
+  const cogX = totalWeight > 0 ? totalWeightedX / totalWeight : baseObject.position.x;
+  const cogZ = totalWeight > 0 ? totalWeightedZ / totalWeight : baseObject.position.z;
+
+  return {
+    x: cogX,
+    z: cogZ,
+    totalWeight: totalWeight,
+    hasStack: stackedObjects.length > 0,
+    stackedObjects: stackedObjects
+  };
+}
+
+// Check if a stack's center of gravity is over the desk edge
+// Returns { isOverEdge, edgeDirection, overhang } if CoG is past the edge
+function isStackCenterOfGravityOverEdge(baseObject) {
+  const deskHalfWidth = CONFIG.desk.width / 2;
+  const deskHalfDepth = CONFIG.desk.depth / 2;
+  const margin = 0.05; // Small tolerance for edge
+
+  const cog = calculateStackCenterOfGravity(baseObject);
+
+  let isOverEdge = false;
+  let edgeDirection = null;
+  let overhang = 0;
+
+  // Check each edge
+  if (cog.x > deskHalfWidth - margin) {
+    isOverEdge = true;
+    edgeDirection = 'posX';
+    overhang = cog.x - deskHalfWidth;
+  } else if (cog.x < -deskHalfWidth + margin) {
+    isOverEdge = true;
+    edgeDirection = 'negX';
+    overhang = -deskHalfWidth - cog.x;
+  } else if (cog.z > deskHalfDepth - margin) {
+    isOverEdge = true;
+    edgeDirection = 'posZ';
+    overhang = cog.z - deskHalfDepth;
+  } else if (cog.z < -deskHalfDepth + margin) {
+    isOverEdge = true;
+    edgeDirection = 'negZ';
+    overhang = -deskHalfDepth - cog.z;
+  }
+
+  return {
+    isOverEdge,
+    edgeDirection,
+    overhang,
+    cog
+  };
+}
+
 // Get the effective friction coefficient between two stacked objects
 // Uses the minimum friction of the two surfaces in contact
 function getStackingFriction(bottomObject, topObject) {
@@ -10071,24 +10222,35 @@ function updatePhysics() {
       // Check if falling off table is enabled
       if (CONFIG.falling.enabled) {
         // Check if object has crossed desk boundaries - start falling
+        // Use stack center of gravity for stacked objects (enables "arch" physics)
         const margin = 0.1; // Small margin before falling
-        const isOverEdge = obj.position.x > deskHalfWidth + margin ||
-                           obj.position.x < -deskHalfWidth - margin ||
-                           obj.position.z > deskHalfDepth + margin ||
-                           obj.position.z < -deskHalfDepth - margin;
 
-        if (isOverEdge && !obj.userData.isFallingOffTable && !obj.userData.isTippingAtEdge) {
-          // Determine which edge the object is over
+        // Calculate the stack's center of gravity if there are objects stacked on top
+        const stackCoG = calculateStackCenterOfGravity(obj);
+
+        // Check if the STACK's center of gravity is over the edge
+        // This allows heavy bottom objects to stabilize lighter top objects
+        // and creates realistic "arch" physics where balanced stacks stay put
+        const cogX = stackCoG.x;
+        const cogZ = stackCoG.z;
+
+        const isStackCoGOverEdge = cogX > deskHalfWidth + margin ||
+                                   cogX < -deskHalfWidth - margin ||
+                                   cogZ > deskHalfDepth + margin ||
+                                   cogZ < -deskHalfDepth - margin;
+
+        if (isStackCoGOverEdge && !obj.userData.isFallingOffTable && !obj.userData.isTippingAtEdge) {
+          // Determine which edge the stack's CoG is over
           let edgeDirection = null;
-          if (obj.position.x > deskHalfWidth) edgeDirection = 'posX';
-          else if (obj.position.x < -deskHalfWidth) edgeDirection = 'negX';
-          else if (obj.position.z > deskHalfDepth) edgeDirection = 'posZ';
-          else if (obj.position.z < -deskHalfDepth) edgeDirection = 'negZ';
+          if (cogX > deskHalfWidth) edgeDirection = 'posX';
+          else if (cogX < -deskHalfWidth) edgeDirection = 'negX';
+          else if (cogZ > deskHalfDepth) edgeDirection = 'posZ';
+          else if (cogZ < -deskHalfDepth) edgeDirection = 'negZ';
 
           // Apply fall resistance if enabled
           if (CONFIG.falling.resistanceEnabled) {
             const resistanceForce = CONFIG.falling.resistance;
-            // Push back toward center
+            // Push back toward center (use object position, not CoG)
             if (obj.position.x > deskHalfWidth) {
               vel.x -= resistanceForce * 0.1;
               obj.position.x = Math.min(obj.position.x, deskHalfWidth + margin);
@@ -10104,17 +10266,21 @@ function updatePhysics() {
               obj.position.z = Math.max(obj.position.z, -deskHalfDepth - margin);
             }
             // If velocity still pushing over edge, start tipping at edge with physics
-            const stillPushingOver = (obj.position.x > deskHalfWidth && vel.x > resistanceForce * 0.15) ||
-                                     (obj.position.x < -deskHalfWidth && vel.x < -resistanceForce * 0.15) ||
-                                     (obj.position.z > deskHalfDepth && vel.z > resistanceForce * 0.15) ||
-                                     (obj.position.z < -deskHalfDepth && vel.z < -resistanceForce * 0.15);
+            // Re-check the stack CoG after position adjustments
+            const newStackCoG = calculateStackCenterOfGravity(obj);
+            const stillPushingOver = (newStackCoG.x > deskHalfWidth && vel.x > resistanceForce * 0.15) ||
+                                     (newStackCoG.x < -deskHalfWidth && vel.x < -resistanceForce * 0.15) ||
+                                     (newStackCoG.z > deskHalfDepth && vel.z > resistanceForce * 0.15) ||
+                                     (newStackCoG.z < -deskHalfDepth && vel.z < -resistanceForce * 0.15);
             if (stillPushingOver && edgeDirection) {
-              startTippingAtEdge(obj, edgeDirection);
+              // Start tipping the entire stack together
+              startStackTippingAtEdge(obj, edgeDirection, stackCoG);
             }
           } else {
             // No resistance, start tipping immediately
             if (edgeDirection) {
-              startTippingAtEdge(obj, edgeDirection);
+              // Start tipping the entire stack together
+              startStackTippingAtEdge(obj, edgeDirection, stackCoG);
             }
           }
         }
@@ -11612,6 +11778,13 @@ function setupPointerLock(container) {
 
     // Request pointer lock
     if (!pointerLockState.isLocked) {
+      // Show loading indicator if state is still being loaded
+      if (isLoadingState) {
+        instructions.classList.add('loading');
+        instructions.classList.add('visible');
+        return;  // Don't request lock yet, wait for loading to complete
+      }
+
       container.requestPointerLock = container.requestPointerLock ||
                                      container.mozRequestPointerLock ||
                                      container.webkitRequestPointerLock;
@@ -23125,6 +23298,12 @@ async function loadState() {
     addObjectToDesk('lamp', { x: 2, z: -1.2 });
   } finally {
     isLoadingState = false; // Re-enable saving
+
+    // Hide the loading indicator on pointer lock instructions
+    const instructions = document.getElementById('pointer-lock-instructions');
+    if (instructions) {
+      instructions.classList.remove('loading');
+    }
   }
 }
 

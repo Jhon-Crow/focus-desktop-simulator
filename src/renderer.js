@@ -6905,23 +6905,25 @@ function updateTippingObjects() {
 
     if (edgeDir === 'posX' || edgeDir === 'negX') {
       // Tipping over X edge - rotate around Z axis
-      // posX means tipping to the right (positive X direction)
-      const rotationSign = edgeDir === 'posX' ? 1 : -1;
+      // posX means tipping to the right (positive X direction) - top falls AWAY from desk
+      // Negative rotation tips the top away from desk center (toward +X for posX)
+      const rotationSign = edgeDir === 'posX' ? -1 : 1;
       obj.rotation.z = rotationSign * tipAngle;
 
       // As object tips, center moves outward (away from desk)
       // Y position: starts at desk height, goes down as it tips
       // X position: starts at initial X, moves outward by halfHeight * sin(angle)
-      obj.position.x = startX + rotationSign * halfHeight * sinAngle;
+      obj.position.x = startX + (-rotationSign) * halfHeight * sinAngle;
       obj.position.y = deskSurfaceY + halfHeight * cosAngle;
     } else {
       // Tipping over Z edge - rotate around X axis
-      // posZ means tipping away in positive Z direction
-      const rotationSign = edgeDir === 'posZ' ? -1 : 1;
+      // posZ means tipping away in positive Z direction - top falls AWAY from desk
+      // Positive rotation tips the top away from desk center (toward +Z for posZ)
+      const rotationSign = edgeDir === 'posZ' ? 1 : -1;
       obj.rotation.x = rotationSign * tipAngle;
 
       // As object tips, center moves outward (away from desk)
-      obj.position.z = startZ + (-rotationSign) * halfHeight * sinAngle;
+      obj.position.z = startZ + rotationSign * halfHeight * sinAngle;
       obj.position.y = deskSurfaceY + halfHeight * cosAngle;
     }
 

@@ -23040,6 +23040,22 @@ async function saveStateImmediate() {
           break;
       }
 
+      // Save sound-related properties for all object types (generic approach)
+      // This handles custom sounds and volume settings for lamps, clocks, and all other objects
+      const soundProperties = [
+        'customSwitchSound', 'switchSoundVolume',
+        'customTickSound', 'tickSoundVolume', 'tickingEnabled',
+        'customImpactSound', 'impactSoundVolume',
+        'customFrictionSound', 'frictionSoundVolume',
+        'customButtonClickSound', 'buttonClickVolume'
+      ];
+
+      for (const prop of soundProperties) {
+        if (obj.userData[prop] !== undefined) {
+          data[prop] = obj.userData[prop];
+        }
+      }
+
       return data;
     }),
     camera: {
@@ -23604,6 +23620,22 @@ async function loadState() {
             }
             if (objData.objectCollisionHeightMultiplier !== undefined) {
               obj.userData.objectCollisionHeightMultiplier = objData.objectCollisionHeightMultiplier;
+            }
+
+            // Restore sound-related properties for all object types (generic approach)
+            // This handles custom sounds and volume settings for lamps, clocks, and all other objects
+            const soundProperties = [
+              'customSwitchSound', 'switchSoundVolume',
+              'customTickSound', 'tickSoundVolume', 'tickingEnabled',
+              'customImpactSound', 'impactSoundVolume',
+              'customFrictionSound', 'frictionSoundVolume',
+              'customButtonClickSound', 'buttonClickVolume'
+            ];
+
+            for (const prop of soundProperties) {
+              if (objData[prop] !== undefined) {
+                obj.userData[prop] = objData[prop];
+              }
             }
 
             // Restore floor state for fallen objects (Y position already restored in addObjectToDesk)

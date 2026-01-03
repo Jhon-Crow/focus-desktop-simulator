@@ -1157,6 +1157,7 @@ let keyboardHookProcess = null;
 
 // PowerShell script for low-level keyboard hook to block system keys
 // This uses SetWindowsHookEx with WH_KEYBOARD_LL to intercept keys before Windows processes them
+// Uses Application.Run() for proper message loop handling
 function getKeyboardHookScript() {
   return `
 $ErrorActionPreference = "Stop"
@@ -1166,7 +1167,7 @@ try {
 using System;
 using System.Diagnostics;
 using System.Runtime.InteropServices;
-using System.Threading;
+using System.Windows.Forms;
 
 public class KeyboardHook {
     private const int WH_KEYBOARD_LL = 13;
@@ -1183,11 +1184,11 @@ public class KeyboardHook {
     private const int VK_F4 = 0x73;
     private const int VK_LMENU = 0xA4; // Left Alt
     private const int VK_RMENU = 0xA5; // Right Alt
+    private const int VK_MENU = 0x12;  // Generic Alt key
 
     private static IntPtr hookId = IntPtr.Zero;
-    private static LowLevelKeyboardProc procDelegate;
-    private static volatile bool altPressed = false;
-    private static volatile bool running = true;
+    // Static delegate to prevent garbage collection
+    private static LowLevelKeyboardProc procDelegate = HookCallback;
 
     private delegate IntPtr LowLevelKeyboardProc(int nCode, IntPtr wParam, IntPtr lParam);
 
@@ -1205,65 +1206,54 @@ public class KeyboardHook {
     private static extern IntPtr GetModuleHandle(string lpModuleName);
 
     [DllImport("user32.dll")]
-    private static extern bool GetMessage(out MSG lpMsg, IntPtr hWnd, uint wMsgFilterMin, uint wMsgFilterMax);
+    private static extern short GetAsyncKeyState(int vKey);
 
-    [DllImport("user32.dll")]
-    private static extern bool TranslateMessage(ref MSG lpMsg);
-
-    [DllImport("user32.dll")]
-    private static extern IntPtr DispatchMessage(ref MSG lpMsg);
-
+    // KBDLLHOOKSTRUCT for proper data reading
     [StructLayout(LayoutKind.Sequential)]
-    private struct MSG {
-        public IntPtr hwnd;
-        public uint message;
-        public IntPtr wParam;
-        public IntPtr lParam;
-        public uint time;
-        public POINT pt;
-    }
-
-    [StructLayout(LayoutKind.Sequential)]
-    private struct POINT {
-        public int x;
-        public int y;
+    private struct KBDLLHOOKSTRUCT {
+        public int vkCode;
+        public int scanCode;
+        public int flags;
+        public int time;
+        public IntPtr dwExtraInfo;
     }
 
     private static IntPtr HookCallback(int nCode, IntPtr wParam, IntPtr lParam) {
         if (nCode >= 0) {
-            int vkCode = Marshal.ReadInt32(lParam);
+            // Properly read the KBDLLHOOKSTRUCT
+            KBDLLHOOKSTRUCT kbStruct = (KBDLLHOOKSTRUCT)Marshal.PtrToStructure(lParam, typeof(KBDLLHOOKSTRUCT));
+            int vkCode = kbStruct.vkCode;
             int msg = wParam.ToInt32();
             bool isKeyDown = (msg == WM_KEYDOWN || msg == WM_SYSKEYDOWN);
-            bool isKeyUp = (msg == WM_KEYUP || msg == WM_SYSKEYUP);
 
-            // Track Alt key state
-            if (vkCode == VK_LMENU || vkCode == VK_RMENU) {
-                altPressed = isKeyDown;
-            }
+            // Check if Alt is currently pressed using GetAsyncKeyState
+            bool altPressed = (GetAsyncKeyState(VK_LMENU) & 0x8000) != 0 ||
+                              (GetAsyncKeyState(VK_RMENU) & 0x8000) != 0 ||
+                              (GetAsyncKeyState(VK_MENU) & 0x8000) != 0;
 
-            // Block Windows keys (both left and right)
+            // Block Windows keys (both left and right) - block all events (down and up)
             if (vkCode == VK_LWIN || vkCode == VK_RWIN) {
-                Console.WriteLine("BLOCKED: Windows key");
+                Console.WriteLine("BLOCKED: Windows key (vk=" + vkCode + ")");
                 Console.Out.Flush();
                 return (IntPtr)1;
             }
 
-            // Block Alt+Tab (task switcher)
-            if (altPressed && vkCode == VK_TAB) {
+            // Block Alt+Tab (task switcher) - only need to block on key down
+            if (vkCode == VK_TAB && (altPressed || msg == WM_SYSKEYDOWN)) {
                 Console.WriteLine("BLOCKED: Alt+Tab");
                 Console.Out.Flush();
                 return (IntPtr)1;
             }
 
             // Block Alt+F4 (close window)
-            if (altPressed && vkCode == VK_F4) {
+            if (vkCode == VK_F4 && (altPressed || msg == WM_SYSKEYDOWN)) {
                 Console.WriteLine("BLOCKED: Alt+F4");
                 Console.Out.Flush();
                 return (IntPtr)1;
             }
 
             // Block Alt+Escape (window cycling)
-            if (altPressed && vkCode == VK_ESCAPE) {
+            if (vkCode == VK_ESCAPE && (altPressed || msg == WM_SYSKEYDOWN)) {
                 Console.WriteLine("BLOCKED: Alt+Escape");
                 Console.Out.Flush();
                 return (IntPtr)1;
@@ -1273,45 +1263,45 @@ public class KeyboardHook {
     }
 
     public static void Start() {
-        // Keep delegate alive to prevent garbage collection
-        procDelegate = new LowLevelKeyboardProc(HookCallback);
+        try {
+            using (Process curProcess = Process.GetCurrentProcess())
+            using (ProcessModule curModule = curProcess.MainModule) {
+                IntPtr moduleHandle = GetModuleHandle(curModule.ModuleName);
+                hookId = SetWindowsHookEx(WH_KEYBOARD_LL, procDelegate, moduleHandle, 0);
+            }
 
-        using (Process curProcess = Process.GetCurrentProcess())
-        using (ProcessModule curModule = curProcess.MainModule) {
-            hookId = SetWindowsHookEx(WH_KEYBOARD_LL, procDelegate, GetModuleHandle(curModule.ModuleName), 0);
-        }
+            if (hookId == IntPtr.Zero) {
+                int error = Marshal.GetLastWin32Error();
+                Console.WriteLine("HOOK_FAILED: Error code " + error);
+                Console.Out.Flush();
+                return;
+            }
 
-        if (hookId == IntPtr.Zero) {
-            int error = Marshal.GetLastWin32Error();
-            Console.WriteLine("HOOK_FAILED: Error code " + error);
+            Console.WriteLine("HOOK_STARTED");
             Console.Out.Flush();
-            return;
-        }
 
-        Console.WriteLine("HOOK_STARTED");
-        Console.Out.Flush();
+            // Use Application.Run() for proper message loop - this is the recommended approach
+            // for low-level keyboard hooks in managed code
+            Application.Run();
 
-        // Message loop - required for low-level hooks to work
-        MSG msg;
-        while (running && GetMessage(out msg, IntPtr.Zero, 0, 0)) {
-            TranslateMessage(ref msg);
-            DispatchMessage(ref msg);
+            // Cleanup when Application.Exit() is called
+            if (hookId != IntPtr.Zero) {
+                UnhookWindowsHookEx(hookId);
+                hookId = IntPtr.Zero;
+            }
+            Console.WriteLine("HOOK_STOPPED");
+            Console.Out.Flush();
+        } catch (Exception ex) {
+            Console.WriteLine("HOOK_ERROR: " + ex.Message);
+            Console.Out.Flush();
         }
-
-        // Cleanup
-        if (hookId != IntPtr.Zero) {
-            UnhookWindowsHookEx(hookId);
-            hookId = IntPtr.Zero;
-        }
-        Console.WriteLine("HOOK_STOPPED");
-        Console.Out.Flush();
     }
 
     public static void Stop() {
-        running = false;
+        Application.Exit();
     }
 }
-"@ -ReferencedAssemblies System.Core
+"@ -ReferencedAssemblies System.Windows.Forms
 
     Write-Host "Starting keyboard hook..."
     [KeyboardHook]::Start()
@@ -1567,7 +1557,7 @@ app.on('before-quit', async () => {
 let otherAppsMuted = false;
 
 // Helper function to generate the PowerShell audio control script content
-// Uses proper COM interop with Activator.CreateInstance for MMDeviceEnumerator
+// Uses proper COM interop with [ComImport] CoClass pattern for MMDeviceEnumerator
 function getAudioControlScriptContent() {
   return `
 Add-Type -TypeDefinition @"
@@ -1581,6 +1571,11 @@ internal enum ERole { eConsole = 0, eMultimedia = 1, eCommunications = 2 }
 internal interface IMMDeviceEnumerator {
     int NotImpl1();
     int GetDefaultAudioEndpoint(EDataFlow dataFlow, ERole role, out IMMDevice ppDevice);
+}
+
+// CoClass for MMDeviceEnumerator - this is the proper way to instantiate COM objects
+[ComImport, Guid("BCDE0395-E52F-467C-8E3D-C4579291692E")]
+internal class MMDeviceEnumeratorCoClass {
 }
 
 [Guid("D666063F-1587-4E43-81F1-B948E807363F"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
@@ -1616,6 +1611,15 @@ internal interface IAudioSessionControl {
 
 [Guid("bfb7ff88-7239-4fc9-8fa2-07c950be9c6d"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
 internal interface IAudioSessionControl2 : IAudioSessionControl {
+    new int NotImpl1();
+    new int GetDisplayName([MarshalAs(UnmanagedType.LPWStr)] out string pRetVal);
+    new int SetDisplayName([MarshalAs(UnmanagedType.LPWStr)] string Value, [MarshalAs(UnmanagedType.LPStruct)] Guid EventContext);
+    new int GetIconPath([MarshalAs(UnmanagedType.LPWStr)] out string pRetVal);
+    new int SetIconPath([MarshalAs(UnmanagedType.LPWStr)] string Value, [MarshalAs(UnmanagedType.LPStruct)] Guid EventContext);
+    new int GetGroupingParam(out Guid pRetVal);
+    new int SetGroupingParam([MarshalAs(UnmanagedType.LPStruct)] Guid Override, [MarshalAs(UnmanagedType.LPStruct)] Guid EventContext);
+    new int NotImpl2();
+    new int NotImpl3();
     int GetSessionIdentifier([MarshalAs(UnmanagedType.LPWStr)] out string pRetVal);
     int GetSessionInstanceIdentifier([MarshalAs(UnmanagedType.LPWStr)] out string pRetVal);
     int GetProcessId(out int pRetVal);
@@ -1632,30 +1636,37 @@ internal interface ISimpleAudioVolume {
 }
 
 public class AudioManager {
-    // CLSID for MMDeviceEnumerator
-    private static readonly Guid CLSID_MMDeviceEnumerator = new Guid("BCDE0395-E52F-467C-8E3D-C4579291692E");
-
-    private static IMMDeviceEnumerator CreateDeviceEnumerator() {
-        Type comType = Type.GetTypeFromCLSID(CLSID_MMDeviceEnumerator);
-        return (IMMDeviceEnumerator)Activator.CreateInstance(comType);
-    }
-
     public static void MuteOtherApps(int excludePID) {
         try {
-            var enumerator = CreateDeviceEnumerator();
+            // Use proper CoClass instantiation - create instance of CoClass and cast to interface
+            IMMDeviceEnumerator enumerator = (IMMDeviceEnumerator)(new MMDeviceEnumeratorCoClass());
+
             IMMDevice device;
-            enumerator.GetDefaultAudioEndpoint(EDataFlow.eRender, ERole.eMultimedia, out device);
+            int hr = enumerator.GetDefaultAudioEndpoint(EDataFlow.eRender, ERole.eMultimedia, out device);
+            if (hr != 0) {
+                Console.WriteLine("ERROR: GetDefaultAudioEndpoint failed with HRESULT: " + hr);
+                return;
+            }
 
             Guid IID_IAudioSessionManager2 = typeof(IAudioSessionManager2).GUID;
             object o;
-            device.Activate(ref IID_IAudioSessionManager2, 0, IntPtr.Zero, out o);
+            hr = device.Activate(ref IID_IAudioSessionManager2, 0, IntPtr.Zero, out o);
+            if (hr != 0) {
+                Console.WriteLine("ERROR: Activate IAudioSessionManager2 failed with HRESULT: " + hr);
+                return;
+            }
             var mgr = (IAudioSessionManager2)o;
 
             IAudioSessionEnumerator sessionEnumerator;
-            mgr.GetSessionEnumerator(out sessionEnumerator);
+            hr = mgr.GetSessionEnumerator(out sessionEnumerator);
+            if (hr != 0) {
+                Console.WriteLine("ERROR: GetSessionEnumerator failed with HRESULT: " + hr);
+                return;
+            }
 
             int count;
             sessionEnumerator.GetCount(out count);
+            Console.WriteLine("Found " + count + " audio sessions");
 
             Guid guid = Guid.Empty;
             int mutedCount = 0;
@@ -1666,39 +1677,64 @@ public class AudioManager {
 
                 var ctl2 = ctl as IAudioSessionControl2;
                 if (ctl2 != null) {
-                    int pid;
-                    ctl2.GetProcessId(out pid);
+                    int pid = 0;
+                    try {
+                        ctl2.GetProcessId(out pid);
+                    } catch {
+                        continue;
+                    }
 
-                    if (pid == excludePID || pid == 0) continue;
+                    if (pid == excludePID || pid == 0) {
+                        Console.WriteLine("Skipping PID: " + pid + " (our app or system)");
+                        continue;
+                    }
 
                     var vol = ctl as ISimpleAudioVolume;
                     if (vol != null) {
-                        vol.SetMute(true, ref guid);
-                        mutedCount++;
-                        Console.WriteLine("Muted PID: " + pid);
+                        try {
+                            vol.SetMute(true, ref guid);
+                            mutedCount++;
+                            Console.WriteLine("Muted PID: " + pid);
+                        } catch (Exception ex) {
+                            Console.WriteLine("Failed to mute PID " + pid + ": " + ex.Message);
+                        }
                     }
                 }
             }
             Console.WriteLine("Muted " + mutedCount + " applications");
             Console.WriteLine("SUCCESS");
         } catch (Exception ex) {
-            Console.WriteLine("ERROR: " + ex.Message);
+            Console.WriteLine("ERROR: " + ex.GetType().Name + " - " + ex.Message);
         }
     }
 
     public static void UnmuteAllApps() {
         try {
-            var enumerator = CreateDeviceEnumerator();
+            // Use proper CoClass instantiation
+            IMMDeviceEnumerator enumerator = (IMMDeviceEnumerator)(new MMDeviceEnumeratorCoClass());
+
             IMMDevice device;
-            enumerator.GetDefaultAudioEndpoint(EDataFlow.eRender, ERole.eMultimedia, out device);
+            int hr = enumerator.GetDefaultAudioEndpoint(EDataFlow.eRender, ERole.eMultimedia, out device);
+            if (hr != 0) {
+                Console.WriteLine("ERROR: GetDefaultAudioEndpoint failed with HRESULT: " + hr);
+                return;
+            }
 
             Guid IID_IAudioSessionManager2 = typeof(IAudioSessionManager2).GUID;
             object o;
-            device.Activate(ref IID_IAudioSessionManager2, 0, IntPtr.Zero, out o);
+            hr = device.Activate(ref IID_IAudioSessionManager2, 0, IntPtr.Zero, out o);
+            if (hr != 0) {
+                Console.WriteLine("ERROR: Activate IAudioSessionManager2 failed with HRESULT: " + hr);
+                return;
+            }
             var mgr = (IAudioSessionManager2)o;
 
             IAudioSessionEnumerator sessionEnumerator;
-            mgr.GetSessionEnumerator(out sessionEnumerator);
+            hr = mgr.GetSessionEnumerator(out sessionEnumerator);
+            if (hr != 0) {
+                Console.WriteLine("ERROR: GetSessionEnumerator failed with HRESULT: " + hr);
+                return;
+            }
 
             int count;
             sessionEnumerator.GetCount(out count);
@@ -1712,14 +1748,18 @@ public class AudioManager {
 
                 var vol = ctl as ISimpleAudioVolume;
                 if (vol != null) {
-                    vol.SetMute(false, ref guid);
-                    unmutedCount++;
+                    try {
+                        vol.SetMute(false, ref guid);
+                        unmutedCount++;
+                    } catch {
+                        // Ignore unmute errors
+                    }
                 }
             }
             Console.WriteLine("Unmuted " + unmutedCount + " applications");
             Console.WriteLine("SUCCESS");
         } catch (Exception ex) {
-            Console.WriteLine("ERROR: " + ex.Message);
+            Console.WriteLine("ERROR: " + ex.GetType().Name + " - " + ex.Message);
         }
     }
 }

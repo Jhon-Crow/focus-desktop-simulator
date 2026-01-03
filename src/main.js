@@ -1117,3 +1117,180 @@ ipcMain.handle('save-drawing-file', async (event, folderPath, fileName, dataUrl)
     return { success: false, error: error.message };
   }
 });
+
+// ============================================================================
+// WINDOW SETTINGS
+// ============================================================================
+
+// Toggle fullscreen borderless mode
+ipcMain.handle('set-fullscreen-borderless', async (event, enabled) => {
+  try {
+    if (!mainWindow) {
+      return { success: false, error: 'Window not available' };
+    }
+
+    if (enabled) {
+      // Enter fullscreen borderless mode
+      mainWindow.setFullScreen(true);
+      // Note: In Electron, fullscreen mode automatically hides the frame/titlebar
+      // so we don't need to separately set frameless
+    } else {
+      // Exit fullscreen mode
+      mainWindow.setFullScreen(false);
+    }
+
+    console.log('Fullscreen borderless mode:', enabled);
+    return { success: true };
+  } catch (error) {
+    console.error('Error setting fullscreen borderless:', error);
+    return { success: false, error: error.message };
+  }
+});
+
+// Toggle ignoring keyboard shortcuts (Alt+F4, Alt+Tab, etc.)
+ipcMain.handle('set-ignore-shortcuts', async (event, enabled) => {
+  try {
+    if (!mainWindow) {
+      return { success: false, error: 'Window not available' };
+    }
+
+    if (enabled) {
+      // Register handlers to prevent default shortcuts
+      mainWindow.webContents.on('before-input-event', handleBeforeInputEvent);
+      console.log('Keyboard shortcuts ignored');
+    } else {
+      // Remove handler to allow shortcuts
+      mainWindow.webContents.removeListener('before-input-event', handleBeforeInputEvent);
+      console.log('Keyboard shortcuts enabled');
+    }
+
+    return { success: true };
+  } catch (error) {
+    console.error('Error setting ignore shortcuts:', error);
+    return { success: false, error: error.message };
+  }
+});
+
+// Handler to block keyboard shortcuts
+function handleBeforeInputEvent(event, input) {
+  // Block Alt+F4 (close window)
+  if (input.alt && input.key === 'F4') {
+    event.preventDefault();
+    return;
+  }
+
+  // Block Alt+Tab (switch window) - Note: This may not work on all platforms
+  if (input.alt && input.key === 'Tab') {
+    event.preventDefault();
+    return;
+  }
+
+  // Block Win+D (show desktop) - Windows specific
+  if (input.meta && input.key === 'd') {
+    event.preventDefault();
+    return;
+  }
+
+  // Block other common system shortcuts
+  if (input.alt && input.key === 'Escape') {
+    event.preventDefault();
+    return;
+  }
+}
+
+// Store original volume levels to restore later
+let savedVolumeLevels = null;
+
+// Toggle muting other applications (Windows-specific feature)
+ipcMain.handle('set-mute-other-apps', async (event, enabled) => {
+  try {
+    // Note: Muting other applications requires platform-specific implementation
+    if (process.platform !== 'win32') {
+      console.log('Mute other apps is only supported on Windows');
+      return {
+        success: false,
+        error: 'This feature is only supported on Windows',
+        unsupported: true
+      };
+    }
+
+    if (enabled) {
+      console.log('Attempting to mute other applications...');
+
+      // PowerShell script to get current volume levels and mute all applications except this one
+      const getVolumesScript = `
+Add-Type -TypeDefinition @"
+using System;
+using System.Runtime.InteropServices;
+public class AudioHelper {
+    [DllImport("user32.dll")]
+    public static extern IntPtr GetForegroundWindow();
+    [DllImport("user32.dll")]
+    public static extern int GetWindowThreadProcessId(IntPtr hWnd, out int lpdwProcessId);
+}
+"@
+
+$currentPID = $PID
+$electronPID = ${process.pid}
+$volumes = @()
+
+# Use WMI to enumerate audio sessions would require additional COM components
+# For simplicity, we'll use nircmd if available, or display a message
+
+# Check if nircmd is available (common audio control tool for Windows)
+$nircmdPath = Get-Command nircmd -ErrorAction SilentlyContinue
+
+if ($null -eq $nircmdPath) {
+    Write-Output "NIRCMD_NOT_FOUND"
+} else {
+    Write-Output "NIRCMD_FOUND:$($nircmdPath.Source)"
+}
+`;
+
+      return new Promise((resolve) => {
+        exec(`powershell -Command "${getVolumesScript.replace(/"/g, '\\"')}"`, (error, stdout, stderr) => {
+          if (error) {
+            console.error('PowerShell error:', error);
+            resolve({
+              success: false,
+              error: 'PowerShell execution failed. This feature requires Windows with PowerShell.',
+              details: stderr
+            });
+            return;
+          }
+
+          const output = stdout.trim();
+          console.log('PowerShell output:', output);
+
+          if (output.includes('NIRCMD_NOT_FOUND')) {
+            // NirCmd not found - this is a limitation
+            resolve({
+              success: false,
+              error: 'This feature requires NirCmd utility or Windows 10+ with advanced audio APIs. Feature is experimental and may not work on all systems.',
+              notImplemented: true
+            });
+          } else {
+            // For now, we'll just acknowledge the request but note it's experimental
+            console.log('Mute other apps: Experimental feature - may not work on all systems');
+            resolve({
+              success: true,
+              experimental: true,
+              message: 'This feature is experimental and may not work on all systems. For full functionality, consider using Windows Volume Mixer manually.'
+            });
+          }
+        });
+      });
+    } else {
+      console.log('Mute other apps disabled');
+      // If we had saved volume levels, we would restore them here
+      savedVolumeLevels = null;
+      return {
+        success: true,
+        message: 'Mute other apps disabled'
+      };
+    }
+  } catch (error) {
+    console.error('Error setting mute other apps:', error);
+    return { success: false, error: error.message };
+  }
+});

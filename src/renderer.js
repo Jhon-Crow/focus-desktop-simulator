@@ -7700,43 +7700,75 @@ function updateTippingObjects() {
     // Check collision with other desk objects during tipping to prevent passing through
     // This fixes the bug where objects tip through each other at table edges
     // Now includes collision with other tipping/fallen objects for realistic physics
-    const tippingRadius = getObjectBounds(obj);
+    const baseRadius = getObjectBounds(obj);
     const tippingPhysics = physics;
+
+    // When tipping, the object extends further horizontally
+    // At 45 degrees, the effective horizontal reach includes part of the height
+    // Increase collision radius based on tip angle to account for rotated extent
+    const tipExtension = halfHeight * sinAngle * 0.8;  // How far the object extends due to rotation
+    const tippingRadius = baseRadius + tipExtension;
 
     for (const otherObj of deskObjects) {
       if (otherObj === obj) continue;
       if (otherObj.userData.isExamining || otherObj.userData.isReturning) continue;
       // Skip objects that are on the floor (completely fallen)
       if (otherObj.userData.isOnFloor) continue;
+      // Skip objects being lifted/dragged (they shouldn't block tipping)
+      if (otherObj.userData.isLifted) continue;
 
-      const otherRadius = getObjectBounds(otherObj);
+      let otherRadius = getObjectBounds(otherObj);
       const otherPhysics = getObjectPhysics(otherObj);
+
+      // If the other object is also tipping, increase its radius too
+      if (otherObj.userData.isTippingAtEdge && otherObj.userData.tipAngle) {
+        const otherHeight = otherPhysics.height * (otherObj.scale?.y || 1) * 0.5;
+        const otherSinAngle = Math.sin(otherObj.userData.tipAngle);
+        otherRadius += otherHeight * otherSinAngle * 0.8;
+      }
 
       // Check if objects collide (horizontally overlap and vertically overlap)
       const dx = obj.position.x - otherObj.position.x;
       const dz = obj.position.z - otherObj.position.z;
       const dist = Math.sqrt(dx * dx + dz * dz);
-      const minDist = (tippingRadius + otherRadius) * 0.8;  // Tighter tolerance for better collision
+      const minDist = (tippingRadius + otherRadius) * 0.9;  // Slightly tighter for better collision
 
       if (dist < minDist && dist > 0.01) {
         // Check vertical overlap using actual Y positions
-        const objBottom = obj.position.y - (physics.height * (obj.scale?.y || 1)) / 2;
-        const objTop = obj.position.y + (physics.height * (obj.scale?.y || 1)) / 2;
-        const otherBottom = otherObj.position.y - (otherPhysics.height * (otherObj.scale?.y || 1)) / 2;
-        const otherTop = otherObj.position.y + (otherPhysics.height * (otherObj.scale?.y || 1)) / 2;
+        // For tipping objects, the vertical extent is reduced as they tip
+        const objVerticalExtent = halfHeight * cosAngle;  // Effective vertical size when tipping
+        const objBottom = obj.position.y - objVerticalExtent;
+        const objTop = obj.position.y + objVerticalExtent;
+
+        let otherBottom, otherTop;
+        if (otherObj.userData.isTippingAtEdge && otherObj.userData.tipAngle) {
+          // Other object is also tipping - use rotated vertical extent
+          const otherHalfHeight = (otherPhysics.height * (otherObj.scale?.y || 1)) * 0.5;
+          const otherCosAngle = Math.cos(otherObj.userData.tipAngle);
+          const otherVerticalExtent = otherHalfHeight * otherCosAngle;
+          otherBottom = otherObj.position.y - otherVerticalExtent;
+          otherTop = otherObj.position.y + otherVerticalExtent;
+        } else {
+          otherBottom = otherObj.position.y - (otherPhysics.height * (otherObj.scale?.y || 1)) / 2;
+          otherTop = otherObj.position.y + (otherPhysics.height * (otherObj.scale?.y || 1)) / 2;
+        }
 
         // Objects overlap vertically if their ranges intersect
         const verticalOverlap = objBottom < otherTop && objTop > otherBottom;
 
         if (verticalOverlap) {
           // Collision detected - push objects apart and slow tipping
-          const pushBackFactor = 0.08;  // Increased pushback
+          const pushBackFactor = 0.12;  // Stronger pushback for tipping collisions
           const normalX = dx / dist;
           const normalZ = dz / dist;
 
           // Push the tipping object away from the collision
           obj.position.x += normalX * pushBackFactor;
           obj.position.z += normalZ * pushBackFactor;
+
+          // Also update the start position so the object doesn't snap back
+          obj.userData.tipStartX += normalX * pushBackFactor * 0.5;
+          obj.userData.tipStartZ += normalZ * pushBackFactor * 0.5;
 
           // The amount of slowdown depends on the other object's weight
           // Heavier objects provide more resistance
@@ -7746,14 +7778,16 @@ function updateTippingObjects() {
 
           // Slow down tipping based on weight ratio
           // If other object is much heavier, slow down more (could even stop)
-          const slowFactor = 0.7 - (weightRatio * 0.4); // Range: 0.3 to 0.7
-          obj.userData.tipAngularVelocity *= Math.max(0.3, slowFactor);
+          const slowFactor = 0.6 - (weightRatio * 0.4); // Range: 0.2 to 0.6
+          obj.userData.tipAngularVelocity *= Math.max(0.2, slowFactor);
 
           // If the other object is also tipping, push it too (equal and opposite reaction)
           if (otherObj.userData.isTippingAtEdge) {
-            otherObj.position.x -= normalX * pushBackFactor * 0.5;
-            otherObj.position.z -= normalZ * pushBackFactor * 0.5;
-            otherObj.userData.tipAngularVelocity *= Math.max(0.3, 1 - weightRatio * 0.4);
+            otherObj.position.x -= normalX * pushBackFactor * 0.7;
+            otherObj.position.z -= normalZ * pushBackFactor * 0.7;
+            otherObj.userData.tipStartX -= normalX * pushBackFactor * 0.35;
+            otherObj.userData.tipStartZ -= normalZ * pushBackFactor * 0.35;
+            otherObj.userData.tipAngularVelocity *= Math.max(0.2, 1 - weightRatio * 0.4);
           }
         }
       }
@@ -10075,6 +10109,10 @@ function checkExtraCollisionPoints(pointX, pointZ, pointRadius, pointY, targetOb
 function updateDragCollisions() {
   if (!isDragging || !selectedObject) return;
 
+  // Skip collision detection if we're pulling an object out from under a stack
+  // This prevents pushing other objects that were stacked on top
+  if (selectedObject.userData.isPullingOut) return;
+
   const draggedRadius = getObjectBounds(selectedObject);
   const draggedPhysics = getObjectPhysics(selectedObject);
 
@@ -10082,6 +10120,8 @@ function updateDragCollisions() {
     if (obj === selectedObject) return;
     if (obj.userData.isExamining || obj.userData.isReturning) return;
     if (obj.userData.isFallen) return;
+    // Skip tipping objects - they have their own physics and shouldn't be pushed by dragging
+    if (obj.userData.isTippingAtEdge) return;
 
     initPhysicsForObject(obj);
 
@@ -10384,6 +10424,9 @@ function updatePhysics() {
 
   // Check collisions between dragged object and other objects
   if (isDragging && selectedObject) {
+    // Skip collision detection if we're pulling an object out from under a stack
+    if (selectedObject.userData.isPullingOut) return;
+
     const draggedRadius = getObjectBounds(selectedObject);
     const draggedPhysics = getObjectPhysics(selectedObject);
 
@@ -10391,6 +10434,8 @@ function updatePhysics() {
       if (obj === selectedObject) return;
       if (obj.userData.isExamining || obj.userData.isReturning) return;
       if (obj.userData.isFallen) return;
+      // Skip tipping objects - they have their own physics and shouldn't be pushed by dragging
+      if (obj.userData.isTippingAtEdge) return;
 
       initPhysicsForObject(obj);
 
@@ -11763,9 +11808,12 @@ function setupPointerLock(container) {
   const crosshair = document.getElementById('crosshair');
   const instructions = document.getElementById('pointer-lock-instructions');
 
-  // Show initial instructions
+  // Show initial loading state while app initializes
+  // The loading class shows spinner + "Initializing..." instead of "Click to Lock Mouse"
   if (pointerLockState.showInstructions) {
     instructions.classList.add('visible');
+    // Initially show loading state - it will be removed when loadState() completes
+    instructions.classList.add('loading');
   }
 
   // Click to request pointer lock

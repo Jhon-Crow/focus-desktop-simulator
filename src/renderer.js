@@ -216,7 +216,7 @@ function playButtonClickSound(object, buttonType = 'play') {
   // Main gain envelope
   const gainNode = audioCtx.createGain();
   gainNode.gain.setValueAtTime(volume * 0.8, now);
-  gainNode.gain.exponentialDecayTo(0.001, now + 0.04);
+  gainNode.gain.exponentialRampToValueAtTime(0.001, now + 0.04);
 
   // Add a second click component for mechanical feel (spring sound)
   const osc = audioCtx.createOscillator();
@@ -226,7 +226,7 @@ function playButtonClickSound(object, buttonType = 'play') {
 
   const oscGain = audioCtx.createGain();
   oscGain.gain.setValueAtTime(volume * 0.15, now);
-  oscGain.gain.exponentialDecayTo(0.001, now + 0.02);
+  oscGain.gain.exponentialRampToValueAtTime(0.001, now + 0.02);
 
   // Apply spatial audio if object is provided
   let finalNode = gainNode;
@@ -313,7 +313,7 @@ function playLampSwitchSound(object, turningOn = true) {
 
   const clickGain = audioCtx.createGain();
   clickGain.gain.setValueAtTime(volume * 0.6, now);
-  clickGain.gain.exponentialDecayTo(0.001, now + 0.03);
+  clickGain.gain.exponentialRampToValueAtTime(0.001, now + 0.03);
 
   // Add slight electrical buzz when turning on
   if (turningOn) {
@@ -322,9 +322,9 @@ function playLampSwitchSound(object, turningOn = true) {
     buzzOsc.frequency.value = 120; // 60Hz buzz doubled
 
     const buzzGain = audioCtx.createGain();
-    buzzGain.gain.setValueAtTime(0, now);
+    buzzGain.gain.setValueAtTime(0.001, now);
     buzzGain.gain.linearRampToValueAtTime(volume * 0.08, now + 0.01);
-    buzzGain.gain.exponentialDecayTo(0.001, now + 0.15);
+    buzzGain.gain.exponentialRampToValueAtTime(0.001, now + 0.15);
 
     buzzOsc.connect(buzzGain);
     buzzGain.connect(audioCtx.destination);
@@ -365,7 +365,7 @@ function playClockTickSound(object) {
 
   const gainNode = audioCtx.createGain();
   gainNode.gain.setValueAtTime(volume * 0.4, now);
-  gainNode.gain.exponentialDecayTo(0.001, now + 0.015);
+  gainNode.gain.exponentialRampToValueAtTime(0.001, now + 0.015);
 
   // Add noise for mechanical character
   const bufferSize = audioCtx.sampleRate * 0.02;
@@ -386,7 +386,7 @@ function playClockTickSound(object) {
 
   const noiseGain = audioCtx.createGain();
   noiseGain.gain.setValueAtTime(volume * 0.25, now);
-  noiseGain.gain.exponentialDecayTo(0.001, now + 0.01);
+  noiseGain.gain.exponentialRampToValueAtTime(0.001, now + 0.01);
 
   // Apply spatial audio
   let finalDestination = audioCtx.destination;
@@ -477,7 +477,7 @@ function playImpactSound(object, impactForce = 0.5, surfaceType = 'desk') {
 
   const oscGain = audioCtx.createGain();
   oscGain.gain.setValueAtTime(volume * 0.5, now);
-  oscGain.gain.exponentialDecayTo(0.001, now + 0.15);
+  oscGain.gain.exponentialRampToValueAtTime(0.001, now + 0.15);
 
   // Create noise burst for impact texture
   const bufferSize = audioCtx.sampleRate * 0.08;
@@ -504,7 +504,7 @@ function playImpactSound(object, impactForce = 0.5, surfaceType = 'desk') {
 
   const noiseGain = audioCtx.createGain();
   noiseGain.gain.setValueAtTime(volume * 0.4, now);
-  noiseGain.gain.exponentialDecayTo(0.001, now + 0.1);
+  noiseGain.gain.exponentialRampToValueAtTime(0.001, now + 0.1);
 
   osc.connect(oscGain);
   noiseSource.connect(lowpass);
@@ -624,14 +624,6 @@ function cleanupFrictionSounds() {
       stopFrictionSound({ userData: { id: objectId } });
     }
   }
-}
-
-// Helper: Add exponentialDecayTo method if not present
-if (!GainNode.prototype.exponentialDecayTo) {
-  GainNode.prototype.exponentialDecayTo = function(value, endTime) {
-    const audioCtx = this.context;
-    this.gain.setTargetAtTime(value, audioCtx.currentTime, (endTime - audioCtx.currentTime) / 3);
-  };
 }
 
 // ============================================================================
@@ -6272,6 +6264,13 @@ function cassetteStop(object) {
 function handleCassetteButtonClick(object, buttonType) {
   // Play mechanical button click sound
   playButtonClickSound(object, buttonType);
+
+  // Log button click
+  activityLog.add('CLICK', 'Cassette player button clicked', {
+    playerType: object.userData.type,
+    playerId: object.userData.id,
+    buttonType: buttonType
+  });
 
   switch (buttonType) {
     case 'prev':
@@ -16991,6 +16990,12 @@ function setupLampHandlers(object) {
     // Play lamp switch sound
     playLampSwitchSound(object, turningOn);
 
+    // Log lamp toggle click (from modal)
+    activityLog.add('CLICK', 'Lamp switch toggled (modal)', {
+      lampId: object.userData.id,
+      state: turningOn ? 'ON' : 'OFF'
+    });
+
     const bulb = object.getObjectByName('bulb');
     const light = object.getObjectByName('lampLight');
     const spotLight = object.getObjectByName('lampSpotLight');
@@ -18652,6 +18657,12 @@ function performQuickInteraction(object, clickedMesh = null) {
       // Play lamp switch sound
       playLampSwitchSound(object, turningOnLamp);
 
+      // Log lamp toggle click
+      activityLog.add('CLICK', 'Lamp switch toggled', {
+        lampId: object.userData.id,
+        state: turningOnLamp ? 'ON' : 'OFF'
+      });
+
       const bulb = object.getObjectByName('bulb');
       const light = object.getObjectByName('lampLight');
       const spotLight = object.getObjectByName('lampSpotLight');
@@ -18671,6 +18682,11 @@ function performQuickInteraction(object, clickedMesh = null) {
       break;
 
     case 'hourglass':
+      // Log hourglass flip click
+      activityLog.add('CLICK', 'Hourglass flipped', {
+        hourglassId: object.userData.id
+      });
+
       // Flip hourglass animation around X axis (upside down flip)
       const startRotationX = object.rotation.x;
       const endRotationX = startRotationX + Math.PI;
@@ -18708,8 +18724,16 @@ function performQuickInteraction(object, clickedMesh = null) {
       // Toggle globe rotation
       if (object.userData.rotationSpeed > 0) {
         object.userData.rotationSpeed = 0;
+        // Log globe stop click
+        activityLog.add('CLICK', 'Globe rotation stopped', {
+          globeId: object.userData.id
+        });
       } else {
         object.userData.rotationSpeed = 0.01;
+        // Log globe start click
+        activityLog.add('CLICK', 'Globe rotation started', {
+          globeId: object.userData.id
+        });
       }
       break;
 
@@ -18717,10 +18741,18 @@ function performQuickInteraction(object, clickedMesh = null) {
       // Middle-click on clock stops the timer alert sound (without picking up)
       if (timerState.isAlerting) {
         stopTimerAlert();
+        // Log clock alarm stop click
+        activityLog.add('CLICK', 'Clock alarm stopped', {
+          clockId: object.userData.id
+        });
       } else if (object.userData.interactive) {
         // If no alert, open the timer modal
         enterExamineMode(object);
         openInteractionModal(object);
+        // Log clock modal open click
+        activityLog.add('CLICK', 'Clock interaction opened', {
+          clockId: object.userData.id
+        });
       }
       break;
 
@@ -18731,11 +18763,19 @@ function performQuickInteraction(object, clickedMesh = null) {
         // Reset pitch and tempo curve start times when starting
         object.userData.pitchCurveStartTime = Date.now();
         object.userData.tempoCurveStartTime = Date.now();
+        // Log metronome start click
+        activityLog.add('CLICK', 'Metronome started', {
+          metronomeId: object.userData.id
+        });
       } else {
         // Reset pendulum when stopped
         object.userData.pendulumAngle = 0;
         const pendulum = object.getObjectByName('pendulum');
         if (pendulum) pendulum.rotation.z = 0;
+        // Log metronome stop click
+        activityLog.add('CLICK', 'Metronome stopped', {
+          metronomeId: object.userData.id
+        });
       }
       break;
 

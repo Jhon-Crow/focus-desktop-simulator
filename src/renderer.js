@@ -21257,15 +21257,15 @@ function setupMagazineCustomizationHandlers(object) {
 // ============================================================================
 
 // Load document file (doc, docx, or rtf) into document folder
-async function loadDocToDocument(document, file) {
+async function loadDocToDocument(docObject, file) {
   // Prevent multiple simultaneous loads
-  if (document.userData.isLoadingDoc) {
+  if (docObject.userData.isLoadingDoc) {
     console.log('Document already loading, skipping duplicate load request');
     return;
   }
 
   // Set loading flag immediately
-  document.userData.isLoadingDoc = true;
+  docObject.userData.isLoadingDoc = true;
 
   const fileName = file.name.toLowerCase();
   const fileExtension = fileName.split('.').pop();
@@ -21273,13 +21273,13 @@ async function loadDocToDocument(document, file) {
   // Validate file type
   if (!['doc', 'docx', 'rtf'].includes(fileExtension)) {
     console.error('Unsupported file format. Only doc, docx, and rtf are supported.');
-    document.userData.isLoadingDoc = false;
+    docObject.userData.isLoadingDoc = false;
     return;
   }
 
-  document.userData.docPath = file.name;
-  document.userData.docFile = file;
-  document.userData.docExtension = fileExtension;
+  docObject.userData.docPath = file.name;
+  docObject.userData.docFile = file;
+  docObject.userData.docExtension = fileExtension;
 
   const reader = new FileReader();
 
@@ -21292,10 +21292,10 @@ async function loadDocToDocument(document, file) {
         // Use Mammoth.js for DOCX files
         if (typeof mammoth === 'undefined') {
           console.warn('Mammoth.js library not loaded. Using placeholder.');
-          document.userData.totalPages = 10;
-          document.userData.currentPage = 0;
-          document.userData.isLoadingDoc = false;
-          updateDocumentPages(document);
+          docObject.userData.totalPages = 10;
+          docObject.userData.currentPage = 0;
+          docObject.userData.isLoadingDoc = false;
+          updateDocumentPages(docObject);
           return;
         }
 
@@ -21327,54 +21327,54 @@ async function loadDocToDocument(document, file) {
       }
 
       // Store the processed content
-      document.userData.htmlContent = htmlContent;
-      document.userData.totalPages = pageCount;
-      document.userData.currentPage = 0;
-      document.userData.renderedPages = {}; // Cache for rendered page canvases
-      document.userData.pageTextures = {}; // Cache for THREE.Texture objects
-      document.userData.isLoadingDoc = false; // Clear loading flag
+      docObject.userData.htmlContent = htmlContent;
+      docObject.userData.totalPages = pageCount;
+      docObject.userData.currentPage = 0;
+      docObject.userData.renderedPages = {}; // Cache for rendered page canvases
+      docObject.userData.pageTextures = {}; // Cache for THREE.Texture objects
+      docObject.userData.isLoadingDoc = false; // Clear loading flag
 
       // Update document thickness based on page count
-      updateDocumentThickness(document);
+      updateDocumentThickness(docObject);
 
       // Store document as base64 data URL for persistence after reload
       const base64Reader = new FileReader();
       base64Reader.onload = () => {
-        document.userData.docDataUrl = base64Reader.result;
-        document.userData.docDataDirty = true; // Mark as dirty so it gets saved
+        docObject.userData.docDataUrl = base64Reader.result;
+        docObject.userData.docDataDirty = true; // Mark as dirty so it gets saved
         saveState();
       };
       base64Reader.readAsDataURL(file);
 
       // Automatically open the document to show the content
-      if (!document.userData.isOpen) {
-        toggleDocumentOpen(document);
+      if (!docObject.userData.isOpen) {
+        toggleDocumentOpen(docObject);
       }
 
       // Update the page surfaces with actual document content
-      await updateDocumentPagesWithContent(document);
+      await updateDocumentPagesWithContent(docObject);
 
       // Refresh the modal to show the document content immediately
       const content = document.getElementById('interaction-content');
-      if (content && interactionObject === document) {
-        content.innerHTML = getInteractionContent(document);
-        setupDocumentHandlers(document);
+      if (content && interactionObject === docObject) {
+        content.innerHTML = getInteractionContent(docObject);
+        setupDocumentHandlers(docObject);
       }
 
       saveState();
     } catch (error) {
       console.error('Error loading document:', error);
-      document.userData.totalPages = 1;
-      document.userData.currentPage = 0;
-      document.userData.isLoadingDoc = false;
-      updateDocumentPages(document);
+      docObject.userData.totalPages = 1;
+      docObject.userData.currentPage = 0;
+      docObject.userData.isLoadingDoc = false;
+      updateDocumentPages(docObject);
     }
   };
 
   reader.onerror = () => {
     console.error('Error reading document file');
-    document.userData.isLoadingDoc = false;
-    updateDocumentPages(document);
+    docObject.userData.isLoadingDoc = false;
+    updateDocumentPages(docObject);
   };
 
   if (fileExtension === 'docx') {
@@ -21385,14 +21385,14 @@ async function loadDocToDocument(document, file) {
 }
 
 // Load document from base64 data URL (for restoring from saved state)
-async function loadDocFromDataUrl(document, dataUrl) {
+async function loadDocFromDataUrl(docObject, dataUrl) {
   if (!dataUrl) {
     console.warn('Cannot load document: missing data URL');
     return;
   }
 
   try {
-    document.userData.isLoadingDoc = true;
+    docObject.userData.isLoadingDoc = true;
 
     // Convert base64 data URL back to file
     const base64 = dataUrl.split(',')[1];
@@ -21404,15 +21404,15 @@ async function loadDocFromDataUrl(document, dataUrl) {
     }
 
     // Determine file extension from mime type or userData
-    const extension = document.userData.docExtension || 'docx';
+    const extension = docObject.userData.docExtension || 'docx';
     const blob = new Blob([bytes], { type: mimeType });
     const file = new File([blob], `document.${extension}`, { type: mimeType });
 
-    await loadDocToDocument(document, file);
+    await loadDocToDocument(docObject, file);
 
   } catch (error) {
     console.error('Error loading document from data URL:', error);
-    document.userData.isLoadingDoc = false;
+    docObject.userData.isLoadingDoc = false;
   }
 }
 
@@ -21492,24 +21492,24 @@ function renderDocumentPageToCanvas(htmlContent, pageIndex, totalPages, width, h
 }
 
 // Update document pages with content
-async function updateDocumentPagesWithContent(document) {
-  if (!document.userData.htmlContent) {
-    updateDocumentPages(document);
+async function updateDocumentPagesWithContent(docObject) {
+  if (!docObject.userData.htmlContent) {
+    updateDocumentPages(docObject);
     return;
   }
 
-  const openGroup = document.getObjectByName('openDocument');
+  const openGroup = docObject.getObjectByName('openDocument');
   if (!openGroup) return;
 
   const pageSurface = openGroup.getObjectByName('pageSurface');
   if (!pageSurface) return;
 
-  const canvasWidth = document.userData.docResolution || 512;
+  const canvasWidth = docObject.userData.docResolution || 512;
   const canvasHeight = Math.round(canvasWidth * 1.36); // A4-ish ratio
 
-  const htmlContent = document.userData.htmlContent;
-  const totalPages = document.userData.totalPages || 1;
-  const currentPage = document.userData.currentPage || 0;
+  const htmlContent = docObject.userData.htmlContent;
+  const totalPages = docObject.userData.totalPages || 1;
+  const currentPage = docObject.userData.currentPage || 0;
 
   // Render single page
   if (currentPage < totalPages) {
@@ -21527,8 +21527,8 @@ async function updateDocumentPagesWithContent(document) {
 }
 
 // Update document thickness based on page count
-function updateDocumentThickness(document) {
-  const totalPages = document.userData.totalPages || 10;
+function updateDocumentThickness(docObject) {
+  const totalPages = docObject.userData.totalPages || 10;
   // Documents should be similar to magazines in thickness
   const thicknessPerPage = 0.00008; // Each page adds 0.08mm (same as books)
   const baseThickness = 0.012;
@@ -21536,7 +21536,7 @@ function updateDocumentThickness(document) {
   const maxThickness = 0.06;
   const calculatedThickness = Math.max(minThickness, Math.min(maxThickness, baseThickness + (totalPages * thicknessPerPage)));
 
-  const closedGroup = document.getObjectByName('closedDocument');
+  const closedGroup = docObject.getObjectByName('closedDocument');
   if (!closedGroup) return;
 
   // Find folder and update its height
@@ -21567,26 +21567,26 @@ function updateDocumentThickness(document) {
     tab.position.y = calculatedThickness / 2;
   }
 
-  document.userData.documentThickness = calculatedThickness;
+  docObject.userData.documentThickness = calculatedThickness;
 }
 
 // Update document pages (placeholder when no document loaded)
-function updateDocumentPages(document) {
-  if (document.userData.htmlContent) {
-    updateDocumentPagesWithContent(document);
+function updateDocumentPages(docObject) {
+  if (docObject.userData.htmlContent) {
+    updateDocumentPagesWithContent(docObject);
     return;
   }
 
-  const openGroup = document.getObjectByName('openDocument');
+  const openGroup = docObject.getObjectByName('openDocument');
   if (!openGroup) return;
 
   const pageSurface = openGroup.getObjectByName('pageSurface');
   if (!pageSurface) return;
 
-  const canvasWidth = document.userData.docResolution || 512;
+  const canvasWidth = docObject.userData.docResolution || 512;
   const canvasHeight = Math.round(canvasWidth * 1.36);
 
-  const isLoading = document.userData.isLoadingDoc;
+  const isLoading = docObject.userData.isLoadingDoc;
 
   // Placeholder for single page
   const canvas = document.createElement('canvas');
@@ -21660,21 +21660,21 @@ function toggleDocumentOpen(object) {
 }
 
 // Page turning animation for document
-function animateDocumentPageTurn(document, direction) {
-  if (document.userData.isTurningPage) return;
+function animateDocumentPageTurn(docObject, direction) {
+  if (docObject.userData.isTurningPage) return;
 
-  const currentPage = document.userData.currentPage || 0;
-  const totalPages = document.userData.totalPages || 10;
+  const currentPage = docObject.userData.currentPage || 0;
+  const totalPages = docObject.userData.totalPages || 10;
   const maxPage = totalPages - 1; // Single page view
 
   if (direction < 0 && currentPage <= 0) return;
   if (direction > 0 && currentPage >= maxPage) return;
 
-  document.userData.isTurningPage = true;
+  docObject.userData.isTurningPage = true;
 
-  const openGroup = document.getObjectByName('openDocument');
+  const openGroup = docObject.getObjectByName('openDocument');
   if (!openGroup) {
-    document.userData.isTurningPage = false;
+    docObject.userData.isTurningPage = false;
     return;
   }
 
@@ -21718,16 +21718,16 @@ function animateDocumentPageTurn(document, direction) {
       requestAnimationFrame(animate);
     } else {
       openGroup.remove(pivotGroup);
-      document.userData.currentPage += direction;
-      document.userData.isTurningPage = false;
+      docObject.userData.currentPage += direction;
+      docObject.userData.isTurningPage = false;
 
-      updateDocumentPages(document);
+      updateDocumentPages(docObject);
 
-      if (interactionObject === document) {
+      if (interactionObject === docObject) {
         const content = document.getElementById('interaction-content');
         if (content) {
-          content.innerHTML = getInteractionContent(document);
-          setupDocumentHandlers(document);
+          content.innerHTML = getInteractionContent(docObject);
+          setupDocumentHandlers(docObject);
         }
       }
 

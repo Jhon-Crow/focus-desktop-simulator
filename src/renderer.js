@@ -4471,59 +4471,37 @@ function createDocument(options = {}) {
 
   group.add(closedGroup);
 
-  // Document open group (visible when open)
+  // Document open group (visible when open) - single page view
   const openGroup = new THREE.Group();
   openGroup.name = 'openDocument';
   openGroup.visible = false;
 
-  // Left folder (back)
-  const leftFolderGeometry = new THREE.BoxGeometry(0.24, 0.003, 0.32);
-  const leftFolder = new THREE.Mesh(leftFolderGeometry, folderMaterial);
-  leftFolder.position.set(-0.12, 0.0015, 0);
-  leftFolder.name = 'leftFolder';
-  openGroup.add(leftFolder);
+  // Folder back (bottom)
+  const folderBackGeometry = new THREE.BoxGeometry(0.24, 0.003, 0.32);
+  const folderBack = new THREE.Mesh(folderBackGeometry, folderMaterial);
+  folderBack.position.set(0, 0.0015, 0);
+  folderBack.name = 'folderBack';
+  openGroup.add(folderBack);
 
-  // Right folder (front flipped)
-  const rightFolder = new THREE.Mesh(leftFolderGeometry, folderMaterial);
-  rightFolder.position.set(0.12, 0.0015, 0);
-  rightFolder.name = 'rightFolder';
-  openGroup.add(rightFolder);
+  // Paper block (stack of papers)
+  const papersBlockGeometry = new THREE.BoxGeometry(0.22, 0.008, 0.30);
+  const papersBlock = new THREE.Mesh(papersBlockGeometry, papersMaterial);
+  papersBlock.position.set(0, 0.007, 0);
+  papersBlock.name = 'papersBlock';
+  openGroup.add(papersBlock);
 
-  // Page block on left
-  const leftPapersGeometry = new THREE.BoxGeometry(0.22, 0.008, 0.30);
-  const leftPapers = new THREE.Mesh(leftPapersGeometry, papersMaterial);
-  leftPapers.position.set(-0.11, 0.007, 0);
-  openGroup.add(leftPapers);
-
-  // Page block on right
-  const rightPapers = new THREE.Mesh(leftPapersGeometry, papersMaterial);
-  rightPapers.position.set(0.11, 0.007, 0);
-  openGroup.add(rightPapers);
-
-  // Left page surface (for displaying content)
+  // Single page surface (for displaying content)
   const pageSurfaceGeometry = new THREE.PlaneGeometry(0.22, 0.30);
-  const leftPageSurfaceMaterial = new THREE.MeshStandardMaterial({
+  const pageSurfaceMaterial = new THREE.MeshStandardMaterial({
     color: 0xffffff, // Pure white for documents
     roughness: 0.9,
     side: THREE.DoubleSide
   });
-  const leftPageSurface = new THREE.Mesh(pageSurfaceGeometry, leftPageSurfaceMaterial);
-  leftPageSurface.rotation.x = -Math.PI / 2;
-  leftPageSurface.position.set(-0.11, 0.012, 0);
-  leftPageSurface.name = 'leftPageSurface';
-  openGroup.add(leftPageSurface);
-
-  // Right page surface
-  const rightPageSurfaceMaterial = new THREE.MeshStandardMaterial({
-    color: 0xffffff, // Pure white for documents
-    roughness: 0.9,
-    side: THREE.DoubleSide
-  });
-  const rightPageSurface = new THREE.Mesh(pageSurfaceGeometry, rightPageSurfaceMaterial);
-  rightPageSurface.rotation.x = -Math.PI / 2;
-  rightPageSurface.position.set(0.11, 0.012, 0);
-  rightPageSurface.name = 'rightPageSurface';
-  openGroup.add(rightPageSurface);
+  const pageSurface = new THREE.Mesh(pageSurfaceGeometry, pageSurfaceMaterial);
+  pageSurface.rotation.x = -Math.PI / 2;
+  pageSurface.position.set(0, 0.012, 0);
+  pageSurface.name = 'pageSurface';
+  openGroup.add(pageSurface);
 
   group.add(openGroup);
 
@@ -12512,13 +12490,13 @@ function onMouseDown(event) {
           return;
         }
 
-        // For books and magazines, check if user is holding for reading mode
-        if (object.userData.type === 'books' || object.userData.type === 'magazine') {
+        // For books, magazines, and documents, check if user is holding for reading mode
+        if (object.userData.type === 'books' || object.userData.type === 'magazine' || object.userData.type === 'document') {
           bookReadingState.middleMouseDownTime = Date.now();
           bookReadingState.book = object;
           bookReadingState.holdTimeout = setTimeout(() => {
-            // If book/magazine is open, enter reading mode after holding for 300ms
-            // If book/magazine is closed, a hold does nothing extra (will just toggle on quick release)
+            // If book/magazine/document is open, enter reading mode after holding for 300ms
+            // If closed, a hold does nothing extra (will just toggle on quick release)
             if (object.userData.isOpen) {
               enterBookReadingMode(object);
               bookReadingState.holdTimeout = null; // Mark as already handled
@@ -17441,9 +17419,9 @@ function getInteractionContent(object) {
             <div class="timer-buttons" style="margin-top: 10px;">
               <button class="timer-btn reset" id="document-prev-page" ${object.userData.currentPage <= 0 ? 'disabled' : ''}>← Prev</button>
               <span style="color: rgba(255,255,255,0.7); padding: 0 15px;">
-                Page ${object.userData.currentPage + 1} / ${Math.ceil(object.userData.totalPages / 2)}
+                Page ${object.userData.currentPage + 1} / ${object.userData.totalPages}
               </span>
-              <button class="timer-btn start" id="document-next-page" ${object.userData.currentPage >= Math.ceil(object.userData.totalPages / 2) - 1 ? 'disabled' : ''}>Next →</button>
+              <button class="timer-btn start" id="document-next-page" ${object.userData.currentPage >= object.userData.totalPages - 1 ? 'disabled' : ''}>Next →</button>
             </div>
           ` : ''}
         </div>
@@ -21511,8 +21489,8 @@ async function updateDocumentPagesWithContent(document) {
   const openGroup = document.getObjectByName('openDocument');
   if (!openGroup) return;
 
-  const leftPage = openGroup.getObjectByName('leftPageSurface');
-  const rightPage = openGroup.getObjectByName('rightPageSurface');
+  const pageSurface = openGroup.getObjectByName('pageSurface');
+  if (!pageSurface) return;
 
   const canvasWidth = document.userData.docResolution || 512;
   const canvasHeight = Math.round(canvasWidth * 1.36); // A4-ish ratio
@@ -21521,34 +21499,18 @@ async function updateDocumentPagesWithContent(document) {
   const totalPages = document.userData.totalPages || 1;
   const currentPage = document.userData.currentPage || 0;
 
-  // Left page (even page number)
-  const leftPageNum = currentPage * 2;
-  if (leftPage && leftPageNum < totalPages) {
-    const canvas = renderDocumentPageToCanvas(htmlContent, leftPageNum, totalPages, canvasWidth, canvasHeight);
+  // Render single page
+  if (currentPage < totalPages) {
+    const canvas = renderDocumentPageToCanvas(htmlContent, currentPage, totalPages, canvasWidth, canvasHeight);
     const texture = new THREE.CanvasTexture(canvas);
     texture.minFilter = THREE.LinearFilter;
     texture.magFilter = THREE.LinearFilter;
 
-    if (leftPage.material.map) {
-      leftPage.material.map.dispose();
+    if (pageSurface.material.map) {
+      pageSurface.material.map.dispose();
     }
-    leftPage.material.map = texture;
-    leftPage.material.needsUpdate = true;
-  }
-
-  // Right page (odd page number)
-  const rightPageNum = currentPage * 2 + 1;
-  if (rightPage && rightPageNum < totalPages) {
-    const canvas = renderDocumentPageToCanvas(htmlContent, rightPageNum, totalPages, canvasWidth, canvasHeight);
-    const texture = new THREE.CanvasTexture(canvas);
-    texture.minFilter = THREE.LinearFilter;
-    texture.magFilter = THREE.LinearFilter;
-
-    if (rightPage.material.map) {
-      rightPage.material.map.dispose();
-    }
-    rightPage.material.map = texture;
-    rightPage.material.needsUpdate = true;
+    pageSurface.material.map = texture;
+    pageSurface.material.needsUpdate = true;
   }
 }
 
@@ -21606,70 +21568,52 @@ function updateDocumentPages(document) {
   const openGroup = document.getObjectByName('openDocument');
   if (!openGroup) return;
 
-  const leftPage = openGroup.getObjectByName('leftPageSurface');
-  const rightPage = openGroup.getObjectByName('rightPageSurface');
+  const pageSurface = openGroup.getObjectByName('pageSurface');
+  if (!pageSurface) return;
 
   const canvasWidth = document.userData.docResolution || 512;
   const canvasHeight = Math.round(canvasWidth * 1.36);
 
   const isLoading = document.userData.isLoadingDoc;
 
-  // Placeholder for left page
-  if (leftPage && document.userData.totalPages > 0) {
-    const canvas = document.createElement('canvas');
-    canvas.width = canvasWidth;
-    canvas.height = canvasHeight;
-    const ctx = canvas.getContext('2d');
+  // Placeholder for single page
+  const canvas = document.createElement('canvas');
+  canvas.width = canvasWidth;
+  canvas.height = canvasHeight;
+  const ctx = canvas.getContext('2d');
 
-    ctx.fillStyle = '#ffffff';
-    ctx.fillRect(0, 0, canvas.width, canvas.height);
+  ctx.fillStyle = '#ffffff';
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
 
-    ctx.fillStyle = isLoading ? '#3b82f6' : '#666666';
-    ctx.font = 'bold 24px Arial, sans-serif';
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'middle';
-    ctx.fillText(
-      isLoading ? 'Loading...' : 'No Document',
-      canvas.width / 2,
-      canvas.height / 2
-    );
+  ctx.fillStyle = isLoading ? '#3b82f6' : '#666666';
+  ctx.font = 'bold 24px Arial, sans-serif';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText(
+    isLoading ? 'Loading...' : 'No Document',
+    canvas.width / 2,
+    canvas.height / 2 - 30
+  );
 
-    const texture = new THREE.CanvasTexture(canvas);
-    if (leftPage.material.map) leftPage.material.map.dispose();
-    leftPage.material.map = texture;
-    leftPage.material.needsUpdate = true;
-  }
-
-  // Placeholder for right page
-  if (rightPage && document.userData.totalPages > 0) {
-    const canvas = document.createElement('canvas');
-    canvas.width = canvasWidth;
-    canvas.height = canvasHeight;
-    const ctx = canvas.getContext('2d');
-
-    ctx.fillStyle = '#ffffff';
-    ctx.fillRect(0, 0, canvas.width, canvas.height);
-
+  if (!isLoading) {
     ctx.fillStyle = '#999999';
     ctx.font = '16px Arial, sans-serif';
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'middle';
     ctx.fillText(
       'Supported formats:',
       canvas.width / 2,
-      canvas.height / 2 - 20
+      canvas.height / 2 + 10
     );
     ctx.fillText(
       'DOC, DOCX, RTF',
       canvas.width / 2,
-      canvas.height / 2 + 10
+      canvas.height / 2 + 35
     );
-
-    const texture = new THREE.CanvasTexture(canvas);
-    if (rightPage.material.map) rightPage.material.map.dispose();
-    rightPage.material.map = texture;
-    rightPage.material.needsUpdate = true;
   }
+
+  const texture = new THREE.CanvasTexture(canvas);
+  if (pageSurface.material.map) pageSurface.material.map.dispose();
+  pageSurface.material.map = texture;
+  pageSurface.material.needsUpdate = true;
 }
 
 // Toggle document open/closed
@@ -21709,7 +21653,7 @@ function animateDocumentPageTurn(document, direction) {
 
   const currentPage = document.userData.currentPage || 0;
   const totalPages = document.userData.totalPages || 10;
-  const maxPage = Math.ceil(totalPages / 2) - 1;
+  const maxPage = totalPages - 1; // Single page view
 
   if (direction < 0 && currentPage <= 0) return;
   if (direction > 0 && currentPage >= maxPage) return;
@@ -21722,7 +21666,7 @@ function animateDocumentPageTurn(document, direction) {
     return;
   }
 
-  // Create a temporary page for animation
+  // Create a temporary page for animation (single page flips from center)
   const pageGeometry = new THREE.PlaneGeometry(0.22, 0.30);
   const pageMaterial = new THREE.MeshStandardMaterial({
     color: 0xffffff,
@@ -21734,13 +21678,14 @@ function animateDocumentPageTurn(document, direction) {
   const pivotGroup = new THREE.Group();
   pivotGroup.position.set(0, 0.013, 0);
 
-  turningPage.position.set(direction > 0 ? 0.11 : -0.11, 0, 0);
+  // Position page at center, flip left or right
+  turningPage.position.set(0, 0, 0);
   turningPage.rotation.x = -Math.PI / 2;
   pivotGroup.add(turningPage);
   openGroup.add(pivotGroup);
 
   const startAngle = 0;
-  const endAngle = direction > 0 ? -Math.PI : Math.PI;
+  const endAngle = direction > 0 ? Math.PI : -Math.PI;
   const duration = 400;
   const startTime = Date.now();
 
@@ -21913,10 +21858,8 @@ function setupDocumentCustomizationHandlers(object) {
 
       const openGroup = object.getObjectByName('openDocument');
       if (openGroup) {
-        const leftFolder = openGroup.getObjectByName('leftFolder');
-        const rightFolder = openGroup.getObjectByName('rightFolder');
-        if (leftFolder && leftFolder.material) leftFolder.material.color.set(e.target.value);
-        if (rightFolder && rightFolder.material) rightFolder.material.color.set(e.target.value);
+        const folderBack = openGroup.getObjectByName('folderBack');
+        if (folderBack && folderBack.material) folderBack.material.color.set(e.target.value);
       }
 
       saveState();

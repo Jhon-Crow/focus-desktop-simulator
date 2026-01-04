@@ -17006,6 +17006,7 @@ function openInteractionModal(object) {
     'pen-holder': '🖊️',
     'books': '📕',
     'magazine': '📰',
+    'document': '📂',
     'notebook': '📓',
     'paper': '📄'
   };
@@ -21259,10 +21260,12 @@ function setupMagazineCustomizationHandlers(object) {
 // Load document file (doc, docx, or rtf) into document folder
 async function loadDocToDocument(docObject, file) {
   console.log('[DEBUG] loadDocToDocument called, file:', file.name, 'size:', file.size);
+  alert('[DEBUG] loadDocToDocument called, file: ' + file.name);
 
   // Prevent multiple simultaneous loads
   if (docObject.userData.isLoadingDoc) {
     console.log('[DEBUG] Document already loading, skipping duplicate load request');
+    alert('[DEBUG] Document already loading, skipping');
     return;
   }
 
@@ -21745,6 +21748,7 @@ function animateDocumentPageTurn(docObject, direction) {
 // Setup document UI handlers
 function setupDocumentHandlers(object) {
   console.log('[DEBUG] setupDocumentHandlers called for object:', object.userData.id);
+  alert('[DEBUG] setupDocumentHandlers called for object: ' + object.userData.id);
 
   // Toggle button
   const toggleBtn = document.getElementById('document-toggle');
@@ -21791,11 +21795,14 @@ function setupDocumentHandlers(object) {
   const docInput = document.getElementById('document-doc');
   if (docInput) {
     console.log('[DEBUG] Setting up document-doc handler, element found:', docInput);
+    alert('[DEBUG] document-doc input element found!');
     docInput.addEventListener('change', (e) => {
       console.log('[DEBUG] document-doc change event fired, files:', e.target.files);
+      alert('[DEBUG] document-doc change event fired! Files: ' + (e.target.files.length));
       const file = e.target.files[0];
       if (file) {
         console.log('[DEBUG] File selected:', file.name, 'size:', file.size);
+        alert('[DEBUG] File selected: ' + file.name);
         const fileName = file.name.toLowerCase();
         const extension = fileName.split('.').pop();
         console.log('[DEBUG] File extension:', extension);
@@ -21803,18 +21810,23 @@ function setupDocumentHandlers(object) {
         // Validate file extension
         if (['doc', 'docx', 'rtf'].includes(extension)) {
           console.log('[DEBUG] Valid extension, loading document...');
+          alert('[DEBUG] Valid extension, calling loadDocToDocument');
           object.userData.docPath = file.name;
           object.userData.docFile = file;
           loadDocToDocument(object, file);
         } else {
           console.error('Invalid file type. Only doc, docx, and rtf are supported.');
+          alert('Invalid file type. Only doc, docx, and rtf are supported.');
         }
       } else {
         console.log('[DEBUG] No file selected');
+        alert('[DEBUG] No file selected');
       }
+      e.target.value = ''; // Reset input to allow selecting the same file again
     });
   } else {
     console.log('[DEBUG] document-doc element not found');
+    alert('[ERROR] document-doc element NOT FOUND!');
   }
 
   // Edit mode document upload

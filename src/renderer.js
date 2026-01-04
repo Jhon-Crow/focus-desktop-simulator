@@ -3004,6 +3004,7 @@ const PRESET_CREATORS = {
   pen: createPen,
   books: createBooks,
   magazine: createMagazine,
+  document: createDocument,
   'photo-frame': createPhotoFrame,
   globe: createGlobe,
   trophy: createTrophy,
@@ -3061,7 +3062,8 @@ const PALETTE_CATEGORIES = {
     icon: '📚',
     variants: [
       { id: 'books', name: 'Book', icon: '📕' },
-      { id: 'magazine', name: 'Magazine', icon: '📰' }
+      { id: 'magazine', name: 'Magazine', icon: '📰' },
+      { id: 'document', name: 'Document', icon: '📄' }
     ],
     activeIndex: 0
   },
@@ -4319,6 +4321,187 @@ function createMagazine(options = {}) {
   openGroup.add(rightPageSurface);
 
   // No visible spine when open - pages meet flush for spread images
+
+  group.add(openGroup);
+
+  group.position.y = getDeskSurfaceY();
+
+  return group;
+}
+
+function createDocument(options = {}) {
+  const group = new THREE.Group();
+  group.userData = {
+    type: 'document',
+    name: 'Document',
+    interactive: true, // Interactive - can open to view document
+    isOpen: false, // Whether document is open
+    openAngle: 0, // Animation angle
+    documentTitle: options.documentTitle || '',
+    titleColor: options.titleColor || '#333333', // Title text color
+    docPath: null, // Path to document file
+    currentPage: 0, // Current page index
+    totalPages: 0, // Total number of pages
+    docResolution: options.docResolution || 512, // Document rendering resolution (width in pixels)
+    mainColor: options.mainColor || '#f59e0b', // Amber/yellow color for folder
+    accentColor: options.accentColor || '#fbbf24',
+    coverFitMode: options.coverFitMode || 'cover' // Cover image fit mode: 'contain', 'cover', 'stretch'
+  };
+
+  // Document closed group (visible when closed) - appears as a folder
+  const closedGroup = new THREE.Group();
+  closedGroup.name = 'closedDocument';
+
+  // Folder cover - slightly larger than the papers inside
+  const folderMaterial = new THREE.MeshStandardMaterial({
+    color: new THREE.Color(group.userData.mainColor),
+    roughness: 0.3, // Smoother than magazine for plastic/cardboard look
+    metalness: 0.1
+  });
+
+  // Folder dimensions (similar to magazine but with folder appearance)
+  const folderGeometry = new THREE.BoxGeometry(0.24, 0.015, 0.32);
+  const folder = new THREE.Mesh(folderGeometry, folderMaterial);
+  folder.name = 'folder';
+  folder.position.y = 0.0075;
+  folder.castShadow = true;
+  closedGroup.add(folder);
+
+  // Papers (white interior) - visible from the edges, slightly smaller than folder
+  const papersMaterial = new THREE.MeshStandardMaterial({
+    color: 0xffffff, // Pure white for documents
+    roughness: 0.9
+  });
+
+  const papersGeometry = new THREE.BoxGeometry(0.22, 0.012, 0.30);
+  const papers = new THREE.Mesh(papersGeometry, papersMaterial);
+  papers.position.y = 0.0075;
+  papers.name = 'papers';
+  closedGroup.add(papers);
+
+  // Folder tab/edge - thin accent on the side
+  const tabMaterial = new THREE.MeshStandardMaterial({
+    color: new THREE.Color(group.userData.accentColor),
+    roughness: 0.3
+  });
+
+  const tabGeometry = new THREE.BoxGeometry(0.008, 0.016, 0.32);
+  const tab = new THREE.Mesh(tabGeometry, tabMaterial);
+  tab.position.set(-0.116, 0.0075, 0);
+  tab.castShadow = true;
+  closedGroup.add(tab);
+
+  // Title on folder - smaller than magazine
+  const createTitleTexture = (title, width, height, fontSize) => {
+    const canvas = document.createElement('canvas');
+    canvas.width = width;
+    canvas.height = height;
+    const ctx = canvas.getContext('2d');
+
+    // Background matches main color
+    const mainHex = group.userData.mainColor;
+    ctx.fillStyle = mainHex;
+    ctx.fillRect(0, 0, width, height);
+
+    // Text styling - use configurable title color
+    ctx.fillStyle = group.userData.titleColor || '#333333';
+    ctx.font = `bold ${fontSize}px Arial, sans-serif`;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+
+    // Word wrap for long titles with padding
+    const paddingX = 20;
+    const paddingY = 20;
+    const maxWidth = width - paddingX * 2;
+    const maxHeight = height - paddingY * 2;
+
+    const paragraphs = title.split('\n');
+    const lines = [];
+
+    for (const paragraph of paragraphs) {
+      const words = paragraph.split(' ');
+      let currentLine = '';
+
+      for (const word of words) {
+        const testLine = currentLine ? currentLine + ' ' + word : word;
+        const metrics = ctx.measureText(testLine);
+        if (metrics.width > maxWidth && currentLine) {
+          lines.push(currentLine);
+          currentLine = word;
+        } else {
+          currentLine = testLine;
+        }
+      }
+      if (currentLine) lines.push(currentLine);
+    }
+
+    // Draw multiline title (centered vertically within padded area)
+    const lineHeight = fontSize * 1.2;
+    const totalHeight = lines.length * lineHeight;
+    const availableHeight = maxHeight;
+    const startY = paddingY + (availableHeight - totalHeight) / 2 + lineHeight / 2;
+
+    lines.forEach((line, i) => {
+      ctx.fillText(line, width / 2, startY + i * lineHeight);
+    });
+
+    const texture = new THREE.CanvasTexture(canvas);
+    texture.needsUpdate = true;
+    return texture;
+  };
+
+  // Folder title - positioned at top
+  const folderTitleGeometry = new THREE.PlaneGeometry(0.20, 0.08);
+  const folderTitleTexture = createTitleTexture(group.userData.documentTitle, 280, 124, 40);
+  const folderTitleMaterial = new THREE.MeshStandardMaterial({
+    map: folderTitleTexture,
+    roughness: 0.3
+  });
+  const folderTitle = new THREE.Mesh(folderTitleGeometry, folderTitleMaterial);
+  folderTitle.rotation.x = -Math.PI / 2;
+  folderTitle.position.set(0, 0.016, -0.08);
+  folderTitle.name = 'folderTitle';
+  // Hide title background if title is empty or whitespace only
+  const titleText = group.userData.documentTitle || '';
+  folderTitle.visible = titleText.trim().length > 0;
+  closedGroup.add(folderTitle);
+
+  // Store the createTitleTexture function for later updates
+  group.userData.createTitleTexture = createTitleTexture;
+
+  group.add(closedGroup);
+
+  // Document open group (visible when open) - single page view
+  const openGroup = new THREE.Group();
+  openGroup.name = 'openDocument';
+  openGroup.visible = false;
+
+  // Folder back (bottom)
+  const folderBackGeometry = new THREE.BoxGeometry(0.24, 0.003, 0.32);
+  const folderBack = new THREE.Mesh(folderBackGeometry, folderMaterial);
+  folderBack.position.set(0, 0.0015, 0);
+  folderBack.name = 'folderBack';
+  openGroup.add(folderBack);
+
+  // Paper block (stack of papers)
+  const papersBlockGeometry = new THREE.BoxGeometry(0.22, 0.008, 0.30);
+  const papersBlock = new THREE.Mesh(papersBlockGeometry, papersMaterial);
+  papersBlock.position.set(0, 0.007, 0);
+  papersBlock.name = 'papersBlock';
+  openGroup.add(papersBlock);
+
+  // Single page surface (for displaying content)
+  const pageSurfaceGeometry = new THREE.PlaneGeometry(0.22, 0.30);
+  const pageSurfaceMaterial = new THREE.MeshStandardMaterial({
+    color: 0xffffff, // Pure white for documents
+    roughness: 0.9,
+    side: THREE.DoubleSide
+  });
+  const pageSurface = new THREE.Mesh(pageSurfaceGeometry, pageSurfaceMaterial);
+  pageSurface.rotation.x = -Math.PI / 2;
+  pageSurface.position.set(0, 0.012, 0);
+  pageSurface.name = 'pageSurface';
+  openGroup.add(pageSurface);
 
   group.add(openGroup);
 
@@ -9049,6 +9232,22 @@ function updateObjectColor(object, colorType, colorValue) {
       typeSpecificData.coverFitMode = object.userData.coverFitMode;
       typeSpecificData.firstPageAsCover = object.userData.firstPageAsCover;
       break;
+    case 'document':
+      typeSpecificData.documentTitle = object.userData.documentTitle;
+      typeSpecificData.titleColor = object.userData.titleColor;
+      typeSpecificData.docPath = object.userData.docPath;
+      typeSpecificData.docExtension = object.userData.docExtension;
+      typeSpecificData.totalPages = object.userData.totalPages;
+      typeSpecificData.currentPage = object.userData.currentPage;
+      typeSpecificData.isOpen = object.userData.isOpen;
+      // Preserve document data for content display
+      typeSpecificData.htmlContent = object.userData.htmlContent;
+      typeSpecificData.docDataUrl = object.userData.docDataUrl;
+      typeSpecificData.docDataDirty = object.userData.docDataDirty;
+      typeSpecificData.docResolution = object.userData.docResolution;
+      typeSpecificData.renderedPages = object.userData.renderedPages;
+      typeSpecificData.pageTextures = object.userData.pageTextures;
+      break;
     case 'coffee':
       typeSpecificData.drinkType = object.userData.drinkType;
       typeSpecificData.liquidLevel = object.userData.liquidLevel;
@@ -12291,13 +12490,13 @@ function onMouseDown(event) {
           return;
         }
 
-        // For books and magazines, check if user is holding for reading mode
-        if (object.userData.type === 'books' || object.userData.type === 'magazine') {
+        // For books, magazines, and documents, check if user is holding for reading mode
+        if (object.userData.type === 'books' || object.userData.type === 'magazine' || object.userData.type === 'document') {
           bookReadingState.middleMouseDownTime = Date.now();
           bookReadingState.book = object;
           bookReadingState.holdTimeout = setTimeout(() => {
-            // If book/magazine is open, enter reading mode after holding for 300ms
-            // If book/magazine is closed, a hold does nothing extra (will just toggle on quick release)
+            // If book/magazine/document is open, enter reading mode after holding for 300ms
+            // If closed, a hold does nothing extra (will just toggle on quick release)
             if (object.userData.isOpen) {
               enterBookReadingMode(object);
               bookReadingState.holdTimeout = null; // Mark as already handled
@@ -14431,6 +14630,45 @@ function updateCustomizationPanel(object) {
         ` : ''}
       `;
       setupMagazineCustomizationHandlers(object);
+      break;
+
+    case 'document':
+      dynamicOptions.innerHTML = `
+        <div class="customization-group" style="margin-top: 20px; padding-top: 15px; border-top: 1px solid rgba(255,255,255,0.1);">
+          <label>Document Title</label>
+          <input type="text" id="document-title-input" placeholder="Enter document title"
+                 value="${object.userData.documentTitle || ''}"
+                 style="width: 100%; padding: 10px; background: rgba(255,255,255,0.1); border: 1px solid rgba(255,255,255,0.2); border-radius: 8px; color: #fff; margin-top: 8px; font-family: inherit; font-size: inherit;">
+        </div>
+        <div class="customization-group" style="margin-top: 15px;">
+          <label>Title Color</label>
+          <input type="color" id="document-title-color" value="${object.userData.titleColor || '#333333'}"
+                 style="width: 100%; height: 40px; margin-top: 8px; cursor: pointer; border-radius: 8px; border: 1px solid rgba(255,255,255,0.2);">
+        </div>
+        <div class="customization-group" style="margin-top: 15px;">
+          <label>Folder Color</label>
+          <input type="color" id="document-folder-color" value="${object.userData.mainColor || '#f59e0b'}"
+                 style="width: 100%; height: 40px; margin-top: 8px; cursor: pointer; border-radius: 8px; border: 1px solid rgba(255,255,255,0.2);">
+        </div>
+        <div class="customization-group" style="margin-top: 15px;">
+          <label>Document File</label>
+          <div style="display: flex; flex-direction: column; gap: 10px; margin-top: 8px;">
+            <label style="display: inline-block; padding: 10px 15px; background: rgba(79, 70, 229, 0.3); border: 1px solid rgba(79, 70, 229, 0.5); border-radius: 8px; color: #fff; cursor: pointer; text-align: center;">
+              ${object.userData.docPath ? 'Change Document' : 'Choose Document'}
+              <input type="file" id="document-doc-edit" accept=".doc,.docx,.rtf" style="display: none;">
+            </label>
+            ${object.userData.docPath ? `
+              <div style="color: rgba(255,255,255,0.5); font-size: 12px;">
+                Current: ${object.userData.docPath.split('/').pop() || object.userData.docPath.split('\\\\').pop()}
+              </div>
+            ` : ''}
+            <div style="color: rgba(255,255,255,0.4); font-size: 11px;">
+              Supported formats: DOC, DOCX, RTF
+            </div>
+          </div>
+        </div>
+      `;
+      setupDocumentCustomizationHandlers(object);
       break;
 
     case 'pen':
@@ -17142,6 +17380,53 @@ function getInteractionContent(object) {
         </div>
       `;
 
+    case 'document':
+      return `
+        <div class="timer-controls">
+          <div class="timer-display">
+            <div class="time" style="font-size: 24px;">📄 Document</div>
+            <div style="color: rgba(255,255,255,0.6); margin-top: 10px;">
+              ${object.userData.isOpen ? 'Document is open' : 'Middle-click to open'}
+            </div>
+          </div>
+          <div style="margin-top: 15px;">
+            <label style="color: rgba(255,255,255,0.7); display: block; margin-bottom: 8px;">Document Title</label>
+            <input type="text" id="document-title" value="${object.userData.documentTitle || ''}"
+                   placeholder="Enter document title"
+                   style="width: 100%; padding: 10px; background: rgba(255,255,255,0.1); border: 1px solid rgba(255,255,255,0.2); border-radius: 8px; color: #fff;">
+          </div>
+          <div style="margin-top: 15px;">
+            <label style="color: rgba(255,255,255,0.7); display: block; margin-bottom: 8px;">Document File</label>
+            <label class="timer-btn start" style="cursor: pointer; display: inline-block; width: 100%; text-align: center;">
+              ${object.userData.docPath ? 'Change Document' : 'Choose Document'}
+              <input type="file" id="document-doc" accept=".doc,.docx,.rtf" style="display: none;">
+            </label>
+            ${object.userData.docPath ? `
+              <div style="color: rgba(255,255,255,0.5); margin-top: 8px; font-size: 12px;">
+                Current: ${object.userData.docPath.split('/').pop() || object.userData.docPath.split('\\\\').pop()}
+              </div>
+            ` : ''}
+            <div style="color: rgba(255,255,255,0.4); margin-top: 8px; font-size: 11px;">
+              Supported: DOC, DOCX, RTF
+            </div>
+          </div>
+          <div class="timer-buttons" style="margin-top: 15px;">
+            <button class="timer-btn ${object.userData.isOpen ? 'pause' : 'start'}" id="document-toggle">
+              ${object.userData.isOpen ? 'Close Document' : 'Open Document'}
+            </button>
+          </div>
+          ${object.userData.isOpen && object.userData.totalPages > 0 ? `
+            <div class="timer-buttons" style="margin-top: 10px;">
+              <button class="timer-btn reset" id="document-prev-page" ${object.userData.currentPage <= 0 ? 'disabled' : ''}>← Prev</button>
+              <span style="color: rgba(255,255,255,0.7); padding: 0 15px;">
+                Page ${object.userData.currentPage + 1} / ${object.userData.totalPages}
+              </span>
+              <button class="timer-btn start" id="document-next-page" ${object.userData.currentPage >= object.userData.totalPages - 1 ? 'disabled' : ''}>Next →</button>
+            </div>
+          ` : ''}
+        </div>
+      `;
+
     case 'notebook':
     case 'paper':
       // Notebook and paper are drawing surfaces
@@ -17211,6 +17496,9 @@ function setupInteractionHandlers(object) {
       break;
     case 'magazine':
       setupMagazineHandlers(object);
+      break;
+    case 'document':
+      setupDocumentHandlers(object);
       break;
   }
 }
@@ -19697,6 +19985,11 @@ function performQuickInteraction(object, clickedMesh = null) {
       toggleMagazineOpen(object);
       break;
 
+    case 'document':
+      // Toggle document open/closed
+      toggleDocumentOpen(object);
+      break;
+
     case 'laptop':
       // Check if the power button was clicked
       if (clickedMesh && clickedMesh.name === 'powerButton') {
@@ -20943,6 +21236,633 @@ function setupMagazineCustomizationHandlers(object) {
 
         showEditModal(object);
       });
+    });
+  }
+}
+
+// ============================================================================
+// DOCUMENT FOLDER (DOC/DOCX/RTF) HANDLING
+// ============================================================================
+
+// Load document file (doc, docx, or rtf) into document folder
+async function loadDocToDocument(document, file) {
+  // Prevent multiple simultaneous loads
+  if (document.userData.isLoadingDoc) {
+    console.log('Document already loading, skipping duplicate load request');
+    return;
+  }
+
+  // Set loading flag immediately
+  document.userData.isLoadingDoc = true;
+
+  const fileName = file.name.toLowerCase();
+  const fileExtension = fileName.split('.').pop();
+
+  // Validate file type
+  if (!['doc', 'docx', 'rtf'].includes(fileExtension)) {
+    console.error('Unsupported file format. Only doc, docx, and rtf are supported.');
+    document.userData.isLoadingDoc = false;
+    return;
+  }
+
+  document.userData.docPath = file.name;
+  document.userData.docFile = file;
+  document.userData.docExtension = fileExtension;
+
+  const reader = new FileReader();
+
+  reader.onload = async () => {
+    try {
+      let htmlContent = '';
+      let pageCount = 1;
+
+      if (fileExtension === 'docx') {
+        // Use Mammoth.js for DOCX files
+        if (typeof mammoth === 'undefined') {
+          console.warn('Mammoth.js library not loaded. Using placeholder.');
+          document.userData.totalPages = 10;
+          document.userData.currentPage = 0;
+          document.userData.isLoadingDoc = false;
+          updateDocumentPages(document);
+          return;
+        }
+
+        const arrayBuffer = reader.result;
+        const result = await mammoth.convertToHtml({ arrayBuffer: arrayBuffer });
+        htmlContent = result.value;
+
+        // Estimate page count based on content length
+        // Roughly 3000 characters per page
+        const textLength = result.value.replace(/<[^>]*>/g, '').length;
+        pageCount = Math.max(1, Math.ceil(textLength / 3000));
+
+      } else if (fileExtension === 'rtf' || fileExtension === 'doc') {
+        // For RTF and DOC, try basic text extraction
+        const text = reader.result;
+
+        // Basic RTF parsing - strip RTF control codes
+        let cleanText = text;
+        if (fileExtension === 'rtf') {
+          cleanText = text.replace(/\\[a-z]+(-?\d+)?[ ]?|\{|\}/g, '');
+        }
+
+        // Convert to simple HTML
+        htmlContent = '<div style="white-space: pre-wrap; font-family: Arial, sans-serif; font-size: 14px; padding: 20px;">' +
+                     cleanText.substring(0, 10000) + // Limit length
+                     '</div>';
+
+        pageCount = Math.max(1, Math.ceil(cleanText.length / 3000));
+      }
+
+      // Store the processed content
+      document.userData.htmlContent = htmlContent;
+      document.userData.totalPages = pageCount;
+      document.userData.currentPage = 0;
+      document.userData.renderedPages = {}; // Cache for rendered page canvases
+      document.userData.pageTextures = {}; // Cache for THREE.Texture objects
+      document.userData.isLoadingDoc = false; // Clear loading flag
+
+      // Update document thickness based on page count
+      updateDocumentThickness(document);
+
+      // Store document as base64 data URL for persistence after reload
+      const base64Reader = new FileReader();
+      base64Reader.onload = () => {
+        document.userData.docDataUrl = base64Reader.result;
+        document.userData.docDataDirty = true; // Mark as dirty so it gets saved
+        saveState();
+      };
+      base64Reader.readAsDataURL(file);
+
+      // Automatically open the document to show the content
+      if (!document.userData.isOpen) {
+        toggleDocumentOpen(document);
+      }
+
+      // Update the page surfaces with actual document content
+      await updateDocumentPagesWithContent(document);
+
+      // Refresh the modal to show the document content immediately
+      const content = document.getElementById('interaction-content');
+      if (content && interactionObject === document) {
+        content.innerHTML = getInteractionContent(document);
+        setupDocumentHandlers(document);
+      }
+
+      saveState();
+    } catch (error) {
+      console.error('Error loading document:', error);
+      document.userData.totalPages = 1;
+      document.userData.currentPage = 0;
+      document.userData.isLoadingDoc = false;
+      updateDocumentPages(document);
+    }
+  };
+
+  reader.onerror = () => {
+    console.error('Error reading document file');
+    document.userData.isLoadingDoc = false;
+    updateDocumentPages(document);
+  };
+
+  if (fileExtension === 'docx') {
+    reader.readAsArrayBuffer(file);
+  } else {
+    reader.readAsText(file);
+  }
+}
+
+// Load document from base64 data URL (for restoring from saved state)
+async function loadDocFromDataUrl(document, dataUrl) {
+  if (!dataUrl) {
+    console.warn('Cannot load document: missing data URL');
+    return;
+  }
+
+  try {
+    document.userData.isLoadingDoc = true;
+
+    // Convert base64 data URL back to file
+    const base64 = dataUrl.split(',')[1];
+    const mimeType = dataUrl.split(',')[0].split(':')[1].split(';')[0];
+    const binaryString = atob(base64);
+    const bytes = new Uint8Array(binaryString.length);
+    for (let i = 0; i < binaryString.length; i++) {
+      bytes[i] = binaryString.charCodeAt(i);
+    }
+
+    // Determine file extension from mime type or userData
+    const extension = document.userData.docExtension || 'docx';
+    const blob = new Blob([bytes], { type: mimeType });
+    const file = new File([blob], `document.${extension}`, { type: mimeType });
+
+    await loadDocToDocument(document, file);
+
+  } catch (error) {
+    console.error('Error loading document from data URL:', error);
+    document.userData.isLoadingDoc = false;
+  }
+}
+
+// Render HTML content to canvas for a specific page
+function renderDocumentPageToCanvas(htmlContent, pageIndex, totalPages, width, height) {
+  const canvas = document.createElement('canvas');
+  canvas.width = width;
+  canvas.height = height;
+  const ctx = canvas.getContext('2d');
+
+  // White background
+  ctx.fillStyle = '#ffffff';
+  ctx.fillRect(0, 0, width, height);
+
+  // Create a temporary div to measure and render HTML
+  const tempDiv = document.createElement('div');
+  tempDiv.style.position = 'absolute';
+  tempDiv.style.left = '-9999px';
+  tempDiv.style.width = `${width - 40}px`; // Padding
+  tempDiv.style.fontFamily = 'Arial, sans-serif';
+  tempDiv.style.fontSize = '14px';
+  tempDiv.style.lineHeight = '1.6';
+  tempDiv.innerHTML = htmlContent;
+  document.body.appendChild(tempDiv);
+
+  // Simple text rendering from HTML
+  const text = tempDiv.textContent || tempDiv.innerText || '';
+  document.body.removeChild(tempDiv);
+
+  // Calculate characters per page
+  const charsPerPage = 3000;
+  const startChar = pageIndex * charsPerPage;
+  const endChar = startChar + charsPerPage;
+  const pageText = text.substring(startChar, endChar);
+
+  // Render text to canvas
+  ctx.fillStyle = '#000000';
+  ctx.font = '14px Arial, sans-serif';
+  ctx.textAlign = 'left';
+  ctx.textBaseline = 'top';
+
+  const padding = 20;
+  const maxWidth = width - padding * 2;
+  const lineHeight = 20;
+  let y = padding;
+
+  // Word wrap
+  const words = pageText.split(' ');
+  let line = '';
+
+  for (const word of words) {
+    const testLine = line + word + ' ';
+    const metrics = ctx.measureText(testLine);
+
+    if (metrics.width > maxWidth && line !== '') {
+      ctx.fillText(line, padding, y);
+      line = word + ' ';
+      y += lineHeight;
+
+      if (y + lineHeight > height - padding) break;
+    } else {
+      line = testLine;
+    }
+  }
+
+  if (y + lineHeight <= height - padding) {
+    ctx.fillText(line, padding, y);
+  }
+
+  // Page number at bottom
+  ctx.fillStyle = '#666666';
+  ctx.font = '12px Arial, sans-serif';
+  ctx.textAlign = 'center';
+  ctx.fillText(`Page ${pageIndex + 1} of ${totalPages}`, width / 2, height - 15);
+
+  return canvas;
+}
+
+// Update document pages with content
+async function updateDocumentPagesWithContent(document) {
+  if (!document.userData.htmlContent) {
+    updateDocumentPages(document);
+    return;
+  }
+
+  const openGroup = document.getObjectByName('openDocument');
+  if (!openGroup) return;
+
+  const pageSurface = openGroup.getObjectByName('pageSurface');
+  if (!pageSurface) return;
+
+  const canvasWidth = document.userData.docResolution || 512;
+  const canvasHeight = Math.round(canvasWidth * 1.36); // A4-ish ratio
+
+  const htmlContent = document.userData.htmlContent;
+  const totalPages = document.userData.totalPages || 1;
+  const currentPage = document.userData.currentPage || 0;
+
+  // Render single page
+  if (currentPage < totalPages) {
+    const canvas = renderDocumentPageToCanvas(htmlContent, currentPage, totalPages, canvasWidth, canvasHeight);
+    const texture = new THREE.CanvasTexture(canvas);
+    texture.minFilter = THREE.LinearFilter;
+    texture.magFilter = THREE.LinearFilter;
+
+    if (pageSurface.material.map) {
+      pageSurface.material.map.dispose();
+    }
+    pageSurface.material.map = texture;
+    pageSurface.material.needsUpdate = true;
+  }
+}
+
+// Update document thickness based on page count
+function updateDocumentThickness(document) {
+  const totalPages = document.userData.totalPages || 10;
+  // Documents should be similar to magazines in thickness
+  const thicknessPerPage = 0.00008; // Each page adds 0.08mm (same as books)
+  const baseThickness = 0.012;
+  const minThickness = 0.006;
+  const maxThickness = 0.06;
+  const calculatedThickness = Math.max(minThickness, Math.min(maxThickness, baseThickness + (totalPages * thicknessPerPage)));
+
+  const closedGroup = document.getObjectByName('closedDocument');
+  if (!closedGroup) return;
+
+  // Find folder and update its height
+  const folder = closedGroup.children.find(c => c.name === 'folder');
+  if (folder) {
+    const oldGeo = folder.geometry;
+    folder.geometry = new THREE.BoxGeometry(0.24, calculatedThickness + 0.003, 0.32);
+    oldGeo.dispose();
+    folder.position.y = (calculatedThickness + 0.003) / 2;
+  }
+
+  // Find papers block and update
+  const papers = closedGroup.children.find(c => c.name === 'papers');
+  if (papers) {
+    const oldGeo = papers.geometry;
+    papers.geometry = new THREE.BoxGeometry(0.22, calculatedThickness, 0.30);
+    oldGeo.dispose();
+    papers.position.y = calculatedThickness / 2;
+  }
+
+  // Find tab and update
+  const tab = closedGroup.children.find(c => c.geometry && c.geometry.type === 'BoxGeometry' && c.position.x < -0.1);
+  if (tab) {
+    const oldGeo = tab.geometry;
+    const tabThickness = calculatedThickness + 0.002;
+    tab.geometry = new THREE.BoxGeometry(0.008, tabThickness, 0.32);
+    oldGeo.dispose();
+    tab.position.y = calculatedThickness / 2;
+  }
+
+  document.userData.documentThickness = calculatedThickness;
+}
+
+// Update document pages (placeholder when no document loaded)
+function updateDocumentPages(document) {
+  if (document.userData.htmlContent) {
+    updateDocumentPagesWithContent(document);
+    return;
+  }
+
+  const openGroup = document.getObjectByName('openDocument');
+  if (!openGroup) return;
+
+  const pageSurface = openGroup.getObjectByName('pageSurface');
+  if (!pageSurface) return;
+
+  const canvasWidth = document.userData.docResolution || 512;
+  const canvasHeight = Math.round(canvasWidth * 1.36);
+
+  const isLoading = document.userData.isLoadingDoc;
+
+  // Placeholder for single page
+  const canvas = document.createElement('canvas');
+  canvas.width = canvasWidth;
+  canvas.height = canvasHeight;
+  const ctx = canvas.getContext('2d');
+
+  ctx.fillStyle = '#ffffff';
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+  ctx.fillStyle = isLoading ? '#3b82f6' : '#666666';
+  ctx.font = 'bold 24px Arial, sans-serif';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText(
+    isLoading ? 'Loading...' : 'No Document',
+    canvas.width / 2,
+    canvas.height / 2 - 30
+  );
+
+  if (!isLoading) {
+    ctx.fillStyle = '#999999';
+    ctx.font = '16px Arial, sans-serif';
+    ctx.fillText(
+      'Supported formats:',
+      canvas.width / 2,
+      canvas.height / 2 + 10
+    );
+    ctx.fillText(
+      'DOC, DOCX, RTF',
+      canvas.width / 2,
+      canvas.height / 2 + 35
+    );
+  }
+
+  const texture = new THREE.CanvasTexture(canvas);
+  if (pageSurface.material.map) pageSurface.material.map.dispose();
+  pageSurface.material.map = texture;
+  pageSurface.material.needsUpdate = true;
+}
+
+// Toggle document open/closed
+function toggleDocumentOpen(object) {
+  const closedGroup = object.getObjectByName('closedDocument');
+  const openGroup = object.getObjectByName('openDocument');
+
+  if (object.userData.isOpen) {
+    // Close document
+    object.userData.isOpen = false;
+    if (openGroup) openGroup.visible = false;
+    if (closedGroup) closedGroup.visible = true;
+  } else {
+    // Open document
+    object.userData.isOpen = true;
+    if (closedGroup) closedGroup.visible = false;
+    if (openGroup) openGroup.visible = true;
+
+    if (object.userData.currentPage === undefined) {
+      object.userData.currentPage = 0;
+    }
+
+    // If document has a saved data URL but not loaded yet, start loading
+    if (object.userData.docDataUrl && !object.userData.htmlContent && !object.userData.isLoadingDoc) {
+      object.userData.isLoadingDoc = true;
+      updateDocumentPages(object);
+      loadDocFromDataUrl(object, object.userData.docDataUrl);
+    } else {
+      updateDocumentPages(object);
+    }
+  }
+}
+
+// Page turning animation for document
+function animateDocumentPageTurn(document, direction) {
+  if (document.userData.isTurningPage) return;
+
+  const currentPage = document.userData.currentPage || 0;
+  const totalPages = document.userData.totalPages || 10;
+  const maxPage = totalPages - 1; // Single page view
+
+  if (direction < 0 && currentPage <= 0) return;
+  if (direction > 0 && currentPage >= maxPage) return;
+
+  document.userData.isTurningPage = true;
+
+  const openGroup = document.getObjectByName('openDocument');
+  if (!openGroup) {
+    document.userData.isTurningPage = false;
+    return;
+  }
+
+  // Create a temporary page for animation (single page flips from center)
+  const pageGeometry = new THREE.PlaneGeometry(0.22, 0.30);
+  const pageMaterial = new THREE.MeshStandardMaterial({
+    color: 0xffffff,
+    side: THREE.DoubleSide,
+    roughness: 0.9
+  });
+  const turningPage = new THREE.Mesh(pageGeometry, pageMaterial);
+
+  const pivotGroup = new THREE.Group();
+  pivotGroup.position.set(0, 0.013, 0);
+
+  // Position page at center, flip left or right
+  turningPage.position.set(0, 0, 0);
+  turningPage.rotation.x = -Math.PI / 2;
+  pivotGroup.add(turningPage);
+  openGroup.add(pivotGroup);
+
+  const startAngle = 0;
+  const endAngle = direction > 0 ? Math.PI : -Math.PI;
+  const duration = 400;
+  const startTime = Date.now();
+
+  function animate() {
+    const elapsed = Date.now() - startTime;
+    const progress = Math.min(elapsed / duration, 1);
+
+    const easeProgress = progress < 0.5
+      ? 2 * progress * progress
+      : 1 - Math.pow(-2 * progress + 2, 2) / 2;
+
+    pivotGroup.rotation.z = startAngle + (endAngle - startAngle) * easeProgress;
+
+    const liftFactor = Math.sin(progress * Math.PI) * 0.04;
+    pivotGroup.position.y = 0.013 + liftFactor;
+
+    if (progress < 1) {
+      requestAnimationFrame(animate);
+    } else {
+      openGroup.remove(pivotGroup);
+      document.userData.currentPage += direction;
+      document.userData.isTurningPage = false;
+
+      updateDocumentPages(document);
+
+      if (interactionObject === document) {
+        const content = document.getElementById('interaction-content');
+        if (content) {
+          content.innerHTML = getInteractionContent(document);
+          setupDocumentHandlers(document);
+        }
+      }
+
+      saveState();
+    }
+  }
+
+  animate();
+}
+
+// Setup document UI handlers
+function setupDocumentHandlers(object) {
+  // Document file upload
+  const docInput = document.getElementById('document-doc');
+  if (docInput) {
+    docInput.addEventListener('change', (e) => {
+      const file = e.target.files[0];
+      if (file) {
+        const fileName = file.name.toLowerCase();
+        const extension = fileName.split('.').pop();
+
+        // Validate file extension
+        if (['doc', 'docx', 'rtf'].includes(extension)) {
+          object.userData.docPath = file.name;
+          object.userData.docFile = file;
+          loadDocToDocument(object, file);
+        } else {
+          console.error('Invalid file type. Only doc, docx, and rtf are supported.');
+        }
+      }
+    });
+  }
+
+  // Edit mode document upload
+  const docEditInput = document.getElementById('document-doc-edit');
+  if (docEditInput) {
+    docEditInput.addEventListener('change', (e) => {
+      const file = e.target.files[0];
+      if (file) {
+        const fileName = file.name.toLowerCase();
+        const extension = fileName.split('.').pop();
+
+        if (['doc', 'docx', 'rtf'].includes(extension)) {
+          object.userData.docPath = file.name;
+          object.userData.docFile = file;
+          loadDocToDocument(object, file);
+        } else {
+          console.error('Invalid file type. Only doc, docx, and rtf are supported.');
+        }
+      }
+    });
+  }
+
+  // Previous page button
+  const prevBtn = document.getElementById('document-prev-page');
+  if (prevBtn) {
+    prevBtn.addEventListener('click', () => {
+      animateDocumentPageTurn(object, -1);
+    });
+  }
+
+  // Next page button
+  const nextBtn = document.getElementById('document-next-page');
+  if (nextBtn) {
+    nextBtn.addEventListener('click', () => {
+      animateDocumentPageTurn(object, 1);
+    });
+  }
+}
+
+// Setup document customization handlers (for title, colors, etc.)
+function setupDocumentCustomizationHandlers(object) {
+  // Title input
+  const titleInput = document.getElementById('document-title-input');
+  if (titleInput) {
+    titleInput.value = object.userData.documentTitle || '';
+    titleInput.addEventListener('input', (e) => {
+      object.userData.documentTitle = e.target.value;
+
+      // Update title texture
+      const closedGroup = object.getObjectByName('closedDocument');
+      if (closedGroup) {
+        const folderTitle = closedGroup.getObjectByName('folderTitle');
+        if (folderTitle && object.userData.createTitleTexture) {
+          const newTexture = object.userData.createTitleTexture(e.target.value, 280, 124, 40);
+          if (folderTitle.material.map) folderTitle.material.map.dispose();
+          folderTitle.material.map = newTexture;
+          folderTitle.material.needsUpdate = true;
+          folderTitle.visible = e.target.value.trim().length > 0;
+        }
+      }
+
+      saveState();
+    });
+  }
+
+  // Title color picker
+  const titleColorInput = document.getElementById('document-title-color');
+  if (titleColorInput) {
+    titleColorInput.value = object.userData.titleColor || '#333333';
+    titleColorInput.addEventListener('input', (e) => {
+      object.userData.titleColor = e.target.value;
+
+      // Update title texture with new color
+      const closedGroup = object.getObjectByName('closedDocument');
+      if (closedGroup) {
+        const folderTitle = closedGroup.getObjectByName('folderTitle');
+        if (folderTitle && object.userData.createTitleTexture) {
+          const newTexture = object.userData.createTitleTexture(
+            object.userData.documentTitle || '',
+            280,
+            124,
+            40
+          );
+          if (folderTitle.material.map) folderTitle.material.map.dispose();
+          folderTitle.material.map = newTexture;
+          folderTitle.material.needsUpdate = true;
+        }
+      }
+
+      saveState();
+    });
+  }
+
+  // Folder color picker
+  const folderColorInput = document.getElementById('document-folder-color');
+  if (folderColorInput) {
+    folderColorInput.value = object.userData.mainColor || '#f59e0b';
+    folderColorInput.addEventListener('input', (e) => {
+      object.userData.mainColor = e.target.value;
+
+      // Update folder material color
+      const closedGroup = object.getObjectByName('closedDocument');
+      if (closedGroup) {
+        const folder = closedGroup.children.find(c => c.name === 'folder');
+        if (folder && folder.material) {
+          folder.material.color.set(e.target.value);
+        }
+      }
+
+      const openGroup = object.getObjectByName('openDocument');
+      if (openGroup) {
+        const folderBack = openGroup.getObjectByName('folderBack');
+        if (folderBack && folderBack.material) folderBack.material.color.set(e.target.value);
+      }
+
+      saveState();
     });
   }
 }
@@ -22841,6 +23761,22 @@ async function saveStateImmediate() {
           }
           data.currentPage = obj.userData.currentPage || 0;
           break;
+        case 'document':
+          data.documentTitle = obj.userData.documentTitle;
+          data.titleColor = obj.userData.titleColor;
+          data.docPath = obj.userData.docPath;
+          data.docExtension = obj.userData.docExtension;
+          data.docResolution = obj.userData.docResolution;
+          // Save document data to separate storage
+          if (obj.userData.docDataUrl) {
+            data.hasDocData = true;
+            if (obj.userData.docDataDirty) {
+              window.electronAPI.saveObjectData(obj.userData.id, 'doc', obj.userData.docDataUrl);
+              obj.userData.docDataDirty = false;
+            }
+          }
+          data.currentPage = obj.userData.currentPage || 0;
+          break;
         case 'coffee':
           data.drinkType = obj.userData.drinkType;
           data.liquidLevel = obj.userData.liquidLevel;
@@ -23377,6 +24313,53 @@ async function loadState() {
                   obj.userData.coverImageDirty = true;
                   const fitMode = obj.userData.coverFitMode || 'cover';
                   applyMagazineCoverImageWithFit(obj, objData.coverImageDataUrl, fitMode);
+                }
+                break;
+              case 'document':
+                // Restore document-specific data
+                if (objData.hasOwnProperty('documentTitle')) obj.userData.documentTitle = objData.documentTitle;
+                if (objData.titleColor) obj.userData.titleColor = objData.titleColor;
+                if (objData.docPath) obj.userData.docPath = objData.docPath;
+                if (objData.docExtension) obj.userData.docExtension = objData.docExtension;
+                if (objData.docResolution) obj.userData.docResolution = objData.docResolution;
+                if (objData.currentPage !== undefined) obj.userData.currentPage = objData.currentPage;
+                // Regenerate title texture with saved title
+                if (objData.hasOwnProperty('documentTitle') && obj.userData.createTitleTexture) {
+                  const title = objData.documentTitle || '';
+                  const hasTitle = title.trim().length > 0;
+
+                  obj.traverse(child => {
+                    if (child.name === 'folderTitle') {
+                      child.visible = hasTitle;
+
+                      if (hasTitle) {
+                        const newTitleTexture = obj.userData.createTitleTexture(
+                          title, 280, 124, 40
+                        );
+                        child.material.map = newTitleTexture;
+                        child.material.needsUpdate = true;
+                      }
+                    }
+                  });
+                }
+                // Load document data from separate storage if flagged
+                if (objData.hasDocData) {
+                  obj.userData.isLoadingDoc = true;
+                  window.electronAPI.loadObjectData(obj.userData.id, 'doc').then(result => {
+                    if (result.success && result.data) {
+                      obj.userData.docDataUrl = result.data;
+                      loadDocFromDataUrl(obj, result.data);
+                    } else {
+                      obj.userData.isLoadingDoc = false;
+                    }
+                  });
+                }
+                // Legacy support: load from inline data if present
+                if (objData.docDataUrl) {
+                  obj.userData.docDataUrl = objData.docDataUrl;
+                  obj.userData.docDataDirty = true;
+                  obj.userData.isLoadingDoc = true;
+                  loadDocFromDataUrl(obj, objData.docDataUrl);
                 }
                 break;
               case 'coffee':

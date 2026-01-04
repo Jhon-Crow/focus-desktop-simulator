@@ -21258,17 +21258,21 @@ function setupMagazineCustomizationHandlers(object) {
 
 // Load document file (doc, docx, or rtf) into document folder
 async function loadDocToDocument(docObject, file) {
+  console.log('[DEBUG] loadDocToDocument called, file:', file.name, 'size:', file.size);
+
   // Prevent multiple simultaneous loads
   if (docObject.userData.isLoadingDoc) {
-    console.log('Document already loading, skipping duplicate load request');
+    console.log('[DEBUG] Document already loading, skipping duplicate load request');
     return;
   }
 
   // Set loading flag immediately
   docObject.userData.isLoadingDoc = true;
+  console.log('[DEBUG] Loading flag set to true');
 
   const fileName = file.name.toLowerCase();
   const fileExtension = fileName.split('.').pop();
+  console.log('[DEBUG] Processing file:', fileName, 'extension:', fileExtension);
 
   // Validate file type
   if (!['doc', 'docx', 'rtf'].includes(fileExtension)) {
@@ -21740,6 +21744,8 @@ function animateDocumentPageTurn(docObject, direction) {
 
 // Setup document UI handlers
 function setupDocumentHandlers(object) {
+  console.log('[DEBUG] setupDocumentHandlers called for object:', object.userData.id);
+
   // Toggle button
   const toggleBtn = document.getElementById('document-toggle');
   if (toggleBtn) {
@@ -21756,7 +21762,9 @@ function setupDocumentHandlers(object) {
   // Title input
   const titleInput = document.getElementById('document-title');
   if (titleInput) {
+    console.log('[DEBUG] Setting up document-title handler, element found:', titleInput);
     titleInput.addEventListener('change', (e) => {
+      console.log('[DEBUG] document-title change event fired, value:', e.target.value);
       object.userData.documentTitle = e.target.value;
 
       // Update title texture
@@ -21769,53 +21777,74 @@ function setupDocumentHandlers(object) {
           folderTitle.material.map = newTexture;
           folderTitle.material.needsUpdate = true;
           folderTitle.visible = e.target.value.trim().length > 0;
+          console.log('[DEBUG] Title texture updated successfully');
         }
       }
 
       saveState();
     });
+  } else {
+    console.log('[DEBUG] document-title element not found');
   }
 
   // Document file upload
   const docInput = document.getElementById('document-doc');
   if (docInput) {
+    console.log('[DEBUG] Setting up document-doc handler, element found:', docInput);
     docInput.addEventListener('change', (e) => {
+      console.log('[DEBUG] document-doc change event fired, files:', e.target.files);
       const file = e.target.files[0];
       if (file) {
+        console.log('[DEBUG] File selected:', file.name, 'size:', file.size);
         const fileName = file.name.toLowerCase();
         const extension = fileName.split('.').pop();
+        console.log('[DEBUG] File extension:', extension);
 
         // Validate file extension
         if (['doc', 'docx', 'rtf'].includes(extension)) {
+          console.log('[DEBUG] Valid extension, loading document...');
           object.userData.docPath = file.name;
           object.userData.docFile = file;
           loadDocToDocument(object, file);
         } else {
           console.error('Invalid file type. Only doc, docx, and rtf are supported.');
         }
+      } else {
+        console.log('[DEBUG] No file selected');
       }
     });
+  } else {
+    console.log('[DEBUG] document-doc element not found');
   }
 
   // Edit mode document upload
   const docEditInput = document.getElementById('document-doc-edit');
   if (docEditInput) {
+    console.log('[DEBUG] Setting up document-doc-edit handler, element found:', docEditInput);
     docEditInput.addEventListener('change', (e) => {
+      console.log('[DEBUG] document-doc-edit change event fired, files:', e.target.files);
       const file = e.target.files[0];
       if (file) {
+        console.log('[DEBUG] File selected (edit mode):', file.name, 'size:', file.size);
         const fileName = file.name.toLowerCase();
         const extension = fileName.split('.').pop();
+        console.log('[DEBUG] File extension (edit mode):', extension);
 
         if (['doc', 'docx', 'rtf'].includes(extension)) {
+          console.log('[DEBUG] Valid extension (edit mode), loading document...');
           object.userData.docPath = file.name;
           object.userData.docFile = file;
           loadDocToDocument(object, file);
         } else {
           console.error('Invalid file type. Only doc, docx, and rtf are supported.');
         }
+      } else {
+        console.log('[DEBUG] No file selected (edit mode)');
       }
       e.target.value = '';
     });
+  } else {
+    console.log('[DEBUG] document-doc-edit element not found');
   }
 
   // Previous page button

@@ -12646,9 +12646,116 @@ function onMouseDown(event) {
     }
   }
 
-  // If in laptop zoom mode, only allow clicks on the laptop screen itself
+  // If in laptop zoom mode, handle clicks specially
   if (inLaptopZoomMode && zoomedLaptop) {
-    // Check if the click is on the zoomed laptop's screen
+    // If cursor mode is active, process cursor-based clicks on the laptop screen
+    // even if the raycaster hits something else or nothing
+    if (laptopCursorState.visible && laptopCursorState.targetLaptop === zoomedLaptop) {
+      // Process the click as a laptop screen interaction using cursor position
+      // This handles the case where the crosshair points outside the laptop
+      // but the user is clicking with the cursor on the laptop screen
+
+      if (zoomedLaptop.userData.isOn && !zoomedLaptop.userData.isBooting) {
+        const now = Date.now();
+        const timeDiff = now - laptopDoubleClickState.lastClickTime;
+
+        // Use cursor position for click coordinates
+        const clickX = laptopCursorState.x / 512;
+        const clickY = 1 - (laptopCursorState.y / 384); // Flip Y
+        const canvasX = laptopCursorState.x;
+        const canvasY = laptopCursorState.y;
+
+        // Check Start button click (single click)
+        const startBtnX = 5;
+        const startBtnY = 384 - 24;
+        const startBtnW = 60;
+        const startBtnH = 20;
+
+        if (canvasX >= startBtnX && canvasX <= startBtnX + startBtnW &&
+            canvasY >= startBtnY && canvasY <= startBtnY + startBtnH) {
+          // Toggle start menu
+          if (laptopStartMenuState.isOpen && laptopStartMenuState.targetLaptop === zoomedLaptop) {
+            laptopStartMenuState.isOpen = false;
+            laptopStartMenuState.targetLaptop = null;
+          } else {
+            laptopStartMenuState.isOpen = true;
+            laptopStartMenuState.targetLaptop = zoomedLaptop;
+          }
+          updateLaptopDesktopWithCursor(zoomedLaptop);
+          laptopDoubleClickState.lastClickTime = now;
+          return;
+        }
+
+        // Check shutdown button click if start menu is open (Windows XP style)
+        if (laptopStartMenuState.isOpen && laptopStartMenuState.targetLaptop === zoomedLaptop) {
+          const menuX = 0;
+          const menuY = 384 - 28 - 160;  // Updated for XP menu height
+          const menuW = 200;             // Updated for XP menu width
+          const menuH = 160;
+          const bottomBarY = menuY + menuH - 34;  // Orange bottom bar
+          const shutdownX = menuX + menuW - 90;
+          const shutdownY = bottomBarY + 7;
+
+          // Check if clicking on Turn Off button in orange bar
+          if (canvasX >= shutdownX && canvasX <= shutdownX + 80 &&
+              canvasY >= shutdownY && canvasY <= shutdownY + 20) {
+            // Shutdown the laptop
+            laptopStartMenuState.isOpen = false;
+            laptopStartMenuState.targetLaptop = null;
+            toggleLaptopPower(zoomedLaptop);
+            laptopDoubleClickState.lastClickTime = now;
+            return;
+          }
+
+          // Click outside menu closes it
+          if (canvasX < menuX || canvasX > menuX + menuW ||
+              canvasY < menuY || canvasY > menuY + menuH) {
+            laptopStartMenuState.isOpen = false;
+            laptopStartMenuState.targetLaptop = null;
+            updateLaptopDesktopWithCursor(zoomedLaptop);
+            laptopDoubleClickState.lastClickTime = now;
+            return;
+          }
+        }
+
+        // Get icon position from saved positions or default
+        const iconPos = zoomedLaptop.userData.iconPositions || { obsidian: { x: 60, y: 60 } };
+        const iconPosX = iconPos.obsidian?.x || 60;
+        const iconPosY = iconPos.obsidian?.y || 60;
+        const iconSize = 48;
+
+        // Check if click is on the icon (using canvas coordinates)
+        const dx = canvasX - iconPosX;
+        const dy = canvasY - iconPosY;
+        const dist = Math.sqrt(dx * dx + dy * dy);
+        const onIcon = dist < iconSize;
+
+        if (timeDiff < laptopDoubleClickState.doubleClickThreshold) {
+          // Double-click detected - open editor if on icon
+          if (onIcon) {
+            openMarkdownEditor(zoomedLaptop);
+            laptopDoubleClickState.lastClickTime = 0;
+            return;
+          }
+        } else if (onIcon) {
+          // Single click on icon - start dragging
+          laptopIconDragState.isDragging = true;
+          laptopIconDragState.iconName = 'obsidian';
+          laptopIconDragState.startX = canvasX;
+          laptopIconDragState.startY = canvasY;
+          laptopIconDragState.offsetX = canvasX - iconPosX;
+          laptopIconDragState.offsetY = canvasY - iconPosY;
+          laptopIconDragState.targetLaptop = zoomedLaptop;
+        }
+
+        laptopDoubleClickState.lastClickTime = now;
+        return;
+      }
+      // If laptop is off or booting, just block the click
+      return;
+    }
+
+    // If not in cursor mode, check if the raycaster hit the laptop
     if (intersects.length > 0) {
       let object = intersects[0].object;
       while (object.parent && !deskObjects.includes(object)) {

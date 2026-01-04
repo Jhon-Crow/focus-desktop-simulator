@@ -9254,6 +9254,22 @@ function updateObjectColor(object, colorType, colorValue) {
       typeSpecificData.coverFitMode = object.userData.coverFitMode;
       typeSpecificData.firstPageAsCover = object.userData.firstPageAsCover;
       break;
+    case 'document':
+      typeSpecificData.documentTitle = object.userData.documentTitle;
+      typeSpecificData.titleColor = object.userData.titleColor;
+      typeSpecificData.docPath = object.userData.docPath;
+      typeSpecificData.docExtension = object.userData.docExtension;
+      typeSpecificData.totalPages = object.userData.totalPages;
+      typeSpecificData.currentPage = object.userData.currentPage;
+      typeSpecificData.isOpen = object.userData.isOpen;
+      // Preserve document data for content display
+      typeSpecificData.htmlContent = object.userData.htmlContent;
+      typeSpecificData.docDataUrl = object.userData.docDataUrl;
+      typeSpecificData.docDataDirty = object.userData.docDataDirty;
+      typeSpecificData.docResolution = object.userData.docResolution;
+      typeSpecificData.renderedPages = object.userData.renderedPages;
+      typeSpecificData.pageTextures = object.userData.pageTextures;
+      break;
     case 'coffee':
       typeSpecificData.drinkType = object.userData.drinkType;
       typeSpecificData.liquidLevel = object.userData.liquidLevel;
@@ -14638,6 +14654,45 @@ function updateCustomizationPanel(object) {
       setupMagazineCustomizationHandlers(object);
       break;
 
+    case 'document':
+      dynamicOptions.innerHTML = `
+        <div class="customization-group" style="margin-top: 20px; padding-top: 15px; border-top: 1px solid rgba(255,255,255,0.1);">
+          <label>Document Title</label>
+          <input type="text" id="document-title-input" placeholder="Enter document title"
+                 value="${object.userData.documentTitle || ''}"
+                 style="width: 100%; padding: 10px; background: rgba(255,255,255,0.1); border: 1px solid rgba(255,255,255,0.2); border-radius: 8px; color: #fff; margin-top: 8px; font-family: inherit; font-size: inherit;">
+        </div>
+        <div class="customization-group" style="margin-top: 15px;">
+          <label>Title Color</label>
+          <input type="color" id="document-title-color" value="${object.userData.titleColor || '#333333'}"
+                 style="width: 100%; height: 40px; margin-top: 8px; cursor: pointer; border-radius: 8px; border: 1px solid rgba(255,255,255,0.2);">
+        </div>
+        <div class="customization-group" style="margin-top: 15px;">
+          <label>Folder Color</label>
+          <input type="color" id="document-folder-color" value="${object.userData.mainColor || '#f59e0b'}"
+                 style="width: 100%; height: 40px; margin-top: 8px; cursor: pointer; border-radius: 8px; border: 1px solid rgba(255,255,255,0.2);">
+        </div>
+        <div class="customization-group" style="margin-top: 15px;">
+          <label>Document File</label>
+          <div style="display: flex; flex-direction: column; gap: 10px; margin-top: 8px;">
+            <label style="display: inline-block; padding: 10px 15px; background: rgba(79, 70, 229, 0.3); border: 1px solid rgba(79, 70, 229, 0.5); border-radius: 8px; color: #fff; cursor: pointer; text-align: center;">
+              ${object.userData.docPath ? 'Change Document' : 'Choose Document'}
+              <input type="file" id="document-doc-edit" accept=".doc,.docx,.rtf" style="display: none;">
+            </label>
+            ${object.userData.docPath ? `
+              <div style="color: rgba(255,255,255,0.5); font-size: 12px;">
+                Current: ${object.userData.docPath.split('/').pop() || object.userData.docPath.split('\\\\').pop()}
+              </div>
+            ` : ''}
+            <div style="color: rgba(255,255,255,0.4); font-size: 11px;">
+              Supported formats: DOC, DOCX, RTF
+            </div>
+          </div>
+        </div>
+      `;
+      setupDocumentCustomizationHandlers(object);
+      break;
+
     case 'pen':
       const penBodyColor = object.userData.mainColor || '#3b82f6';
       const penInkColor = object.userData.inkColor || object.userData.mainColor || '#3b82f6';
@@ -17347,6 +17402,53 @@ function getInteractionContent(object) {
         </div>
       `;
 
+    case 'document':
+      return `
+        <div class="timer-controls">
+          <div class="timer-display">
+            <div class="time" style="font-size: 24px;">📄 Document</div>
+            <div style="color: rgba(255,255,255,0.6); margin-top: 10px;">
+              ${object.userData.isOpen ? 'Document is open' : 'Middle-click to open'}
+            </div>
+          </div>
+          <div style="margin-top: 15px;">
+            <label style="color: rgba(255,255,255,0.7); display: block; margin-bottom: 8px;">Document Title</label>
+            <input type="text" id="document-title" value="${object.userData.documentTitle || ''}"
+                   placeholder="Enter document title"
+                   style="width: 100%; padding: 10px; background: rgba(255,255,255,0.1); border: 1px solid rgba(255,255,255,0.2); border-radius: 8px; color: #fff;">
+          </div>
+          <div style="margin-top: 15px;">
+            <label style="color: rgba(255,255,255,0.7); display: block; margin-bottom: 8px;">Document File</label>
+            <label class="timer-btn start" style="cursor: pointer; display: inline-block; width: 100%; text-align: center;">
+              ${object.userData.docPath ? 'Change Document' : 'Choose Document'}
+              <input type="file" id="document-doc" accept=".doc,.docx,.rtf" style="display: none;">
+            </label>
+            ${object.userData.docPath ? `
+              <div style="color: rgba(255,255,255,0.5); margin-top: 8px; font-size: 12px;">
+                Current: ${object.userData.docPath.split('/').pop() || object.userData.docPath.split('\\\\').pop()}
+              </div>
+            ` : ''}
+            <div style="color: rgba(255,255,255,0.4); margin-top: 8px; font-size: 11px;">
+              Supported: DOC, DOCX, RTF
+            </div>
+          </div>
+          <div class="timer-buttons" style="margin-top: 15px;">
+            <button class="timer-btn ${object.userData.isOpen ? 'pause' : 'start'}" id="document-toggle">
+              ${object.userData.isOpen ? 'Close Document' : 'Open Document'}
+            </button>
+          </div>
+          ${object.userData.isOpen && object.userData.totalPages > 0 ? `
+            <div class="timer-buttons" style="margin-top: 10px;">
+              <button class="timer-btn reset" id="document-prev-page" ${object.userData.currentPage <= 0 ? 'disabled' : ''}>← Prev</button>
+              <span style="color: rgba(255,255,255,0.7); padding: 0 15px;">
+                Page ${object.userData.currentPage + 1} / ${Math.ceil(object.userData.totalPages / 2)}
+              </span>
+              <button class="timer-btn start" id="document-next-page" ${object.userData.currentPage >= Math.ceil(object.userData.totalPages / 2) - 1 ? 'disabled' : ''}>Next →</button>
+            </div>
+          ` : ''}
+        </div>
+      `;
+
     case 'notebook':
     case 'paper':
       // Notebook and paper are drawing surfaces
@@ -17416,6 +17518,9 @@ function setupInteractionHandlers(object) {
       break;
     case 'magazine':
       setupMagazineHandlers(object);
+      break;
+    case 'document':
+      setupDocumentHandlers(object);
       break;
   }
 }
@@ -19900,6 +20005,11 @@ function performQuickInteraction(object, clickedMesh = null) {
     case 'magazine':
       // Toggle magazine open/closed
       toggleMagazineOpen(object);
+      break;
+
+    case 'document':
+      // Toggle document open/closed
+      toggleDocumentOpen(object);
       break;
 
     case 'laptop':
@@ -23708,6 +23818,22 @@ async function saveStateImmediate() {
           }
           data.currentPage = obj.userData.currentPage || 0;
           break;
+        case 'document':
+          data.documentTitle = obj.userData.documentTitle;
+          data.titleColor = obj.userData.titleColor;
+          data.docPath = obj.userData.docPath;
+          data.docExtension = obj.userData.docExtension;
+          data.docResolution = obj.userData.docResolution;
+          // Save document data to separate storage
+          if (obj.userData.docDataUrl) {
+            data.hasDocData = true;
+            if (obj.userData.docDataDirty) {
+              window.electronAPI.saveObjectData(obj.userData.id, 'doc', obj.userData.docDataUrl);
+              obj.userData.docDataDirty = false;
+            }
+          }
+          data.currentPage = obj.userData.currentPage || 0;
+          break;
         case 'coffee':
           data.drinkType = obj.userData.drinkType;
           data.liquidLevel = obj.userData.liquidLevel;
@@ -24244,6 +24370,53 @@ async function loadState() {
                   obj.userData.coverImageDirty = true;
                   const fitMode = obj.userData.coverFitMode || 'cover';
                   applyMagazineCoverImageWithFit(obj, objData.coverImageDataUrl, fitMode);
+                }
+                break;
+              case 'document':
+                // Restore document-specific data
+                if (objData.hasOwnProperty('documentTitle')) obj.userData.documentTitle = objData.documentTitle;
+                if (objData.titleColor) obj.userData.titleColor = objData.titleColor;
+                if (objData.docPath) obj.userData.docPath = objData.docPath;
+                if (objData.docExtension) obj.userData.docExtension = objData.docExtension;
+                if (objData.docResolution) obj.userData.docResolution = objData.docResolution;
+                if (objData.currentPage !== undefined) obj.userData.currentPage = objData.currentPage;
+                // Regenerate title texture with saved title
+                if (objData.hasOwnProperty('documentTitle') && obj.userData.createTitleTexture) {
+                  const title = objData.documentTitle || '';
+                  const hasTitle = title.trim().length > 0;
+
+                  obj.traverse(child => {
+                    if (child.name === 'folderTitle') {
+                      child.visible = hasTitle;
+
+                      if (hasTitle) {
+                        const newTitleTexture = obj.userData.createTitleTexture(
+                          title, 280, 124, 40
+                        );
+                        child.material.map = newTitleTexture;
+                        child.material.needsUpdate = true;
+                      }
+                    }
+                  });
+                }
+                // Load document data from separate storage if flagged
+                if (objData.hasDocData) {
+                  obj.userData.isLoadingDoc = true;
+                  window.electronAPI.loadObjectData(obj.userData.id, 'doc').then(result => {
+                    if (result.success && result.data) {
+                      obj.userData.docDataUrl = result.data;
+                      loadDocFromDataUrl(obj, result.data);
+                    } else {
+                      obj.userData.isLoadingDoc = false;
+                    }
+                  });
+                }
+                // Legacy support: load from inline data if present
+                if (objData.docDataUrl) {
+                  obj.userData.docDataUrl = objData.docDataUrl;
+                  obj.userData.docDataDirty = true;
+                  obj.userData.isLoadingDoc = true;
+                  loadDocFromDataUrl(obj, objData.docDataUrl);
                 }
                 break;
               case 'coffee':

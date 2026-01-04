@@ -12635,6 +12635,39 @@ function onMouseDown(event) {
     if (dynamicOptions) dynamicOptions.innerHTML = '';
   }
 
+  // Check if any laptop is in zoom mode - if so, block all interactions except with that laptop
+  let inLaptopZoomMode = false;
+  let zoomedLaptop = null;
+  for (const obj of deskObjects) {
+    if (obj.userData.type === 'laptop' && obj.userData.isZoomedIn) {
+      inLaptopZoomMode = true;
+      zoomedLaptop = obj;
+      break;
+    }
+  }
+
+  // If in laptop zoom mode, only allow clicks on the laptop screen itself
+  if (inLaptopZoomMode && zoomedLaptop) {
+    // Check if the click is on the zoomed laptop's screen
+    if (intersects.length > 0) {
+      let object = intersects[0].object;
+      while (object.parent && !deskObjects.includes(object)) {
+        object = object.parent;
+      }
+
+      // Only process the click if it's on the zoomed laptop
+      if (object === zoomedLaptop) {
+        // Continue to normal laptop screen interaction handling below
+      } else {
+        // Block interaction with any other object while in laptop zoom mode
+        return;
+      }
+    } else {
+      // No object clicked while in laptop mode - block interaction
+      return;
+    }
+  }
+
   if (intersects.length > 0) {
     // Find the root object
     let object = intersects[0].object;

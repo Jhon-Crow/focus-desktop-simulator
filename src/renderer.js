@@ -21848,30 +21848,37 @@ function setupDocumentHandlers(object) {
   const docEditInput = document.getElementById('document-doc-edit');
   if (docEditInput) {
     console.log('[DEBUG] Setting up document-doc-edit handler, element found:', docEditInput);
+    alert('[DEBUG] document-doc-edit (EDIT MODE) input element found!');
     docEditInput.addEventListener('change', (e) => {
       console.log('[DEBUG] document-doc-edit change event fired, files:', e.target.files);
+      alert('[DEBUG] document-doc-edit (EDIT MODE) change event fired! Files: ' + (e.target.files.length));
       const file = e.target.files[0];
       if (file) {
         console.log('[DEBUG] File selected (edit mode):', file.name, 'size:', file.size);
+        alert('[DEBUG] EDIT MODE: File selected: ' + file.name);
         const fileName = file.name.toLowerCase();
         const extension = fileName.split('.').pop();
         console.log('[DEBUG] File extension (edit mode):', extension);
 
         if (['doc', 'docx', 'rtf'].includes(extension)) {
           console.log('[DEBUG] Valid extension (edit mode), loading document...');
+          alert('[DEBUG] EDIT MODE: Valid extension, calling loadDocToDocument');
           object.userData.docPath = file.name;
           object.userData.docFile = file;
           loadDocToDocument(object, file);
         } else {
           console.error('Invalid file type. Only doc, docx, and rtf are supported.');
+          alert('Invalid file type. Only doc, docx, and rtf are supported.');
         }
       } else {
         console.log('[DEBUG] No file selected (edit mode)');
+        alert('[DEBUG] EDIT MODE: No file selected');
       }
       e.target.value = '';
     });
   } else {
     console.log('[DEBUG] document-doc-edit element not found');
+    alert('[DEBUG] document-doc-edit (EDIT MODE) element NOT FOUND (this is OK if in interaction mode)');
   }
 
   // Previous page button

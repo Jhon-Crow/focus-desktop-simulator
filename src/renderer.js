@@ -9431,13 +9431,16 @@ function getStackingRadius(object) {
   const type = object.userData.type;
   const scale = object.scale?.x || 1;
 
-  // Use predefined stacking radius if available
+  // Get per-object stack collision radius multiplier (default 1.0 = 100%)
+  const objectMultiplier = object.userData.objectStackCollisionRadiusMultiplier || 1.0;
+
+  // Use predefined stacking radius if available (with per-object multiplier applied)
   if (OBJECT_STACKING_RADII[type] !== undefined) {
-    return OBJECT_STACKING_RADII[type] * scale;
+    return OBJECT_STACKING_RADII[type] * objectMultiplier * scale;
   }
 
   // For unknown types, use default stacking radius
-  return DEFAULT_STACKING_RADIUS * scale;
+  return DEFAULT_STACKING_RADIUS * objectMultiplier * scale;
 }
 
 // Get additional collision points for objects with complex shapes (e.g., laptop monitor)
@@ -11991,6 +11994,55 @@ function setupEventListeners() {
     });
   }
 
+  // Per-object stack collision radius slider
+  const objectStackCollisionRadiusSlider = document.getElementById('object-stack-collision-radius-slider');
+  const objectStackCollisionRadiusValue = document.getElementById('object-stack-collision-radius-value');
+  if (objectStackCollisionRadiusSlider && objectStackCollisionRadiusValue) {
+    objectStackCollisionRadiusSlider.addEventListener('input', (e) => {
+      if (!selectedObject) return;
+      const oldValue = selectedObject.userData.objectStackCollisionRadiusMultiplier || 1.0;
+      const percentage = parseInt(e.target.value);
+      const newValue = percentage / 100;
+      selectedObject.userData.objectStackCollisionRadiusMultiplier = newValue;
+      objectStackCollisionRadiusValue.textContent = percentage + '%';
+
+      // Log stack collision radius change
+      activityLog.add('OBJECT', 'Object stack collision radius changed (edit mode)', {
+        type: selectedObject.userData.type,
+        id: selectedObject.userData.id,
+        oldValue: (oldValue * 100).toFixed(0) + '%',
+        newValue: percentage + '%'
+      });
+
+      saveState();
+      // Update collision debug visualization if enabled
+      if (debugState.showCollisionRadii) {
+        updateCollisionDebugHelpers();
+      }
+    });
+    // Add scroll-based adjustment
+    addScrollToSlider(objectStackCollisionRadiusSlider, (value) => {
+      if (!selectedObject) return;
+      const oldValue = selectedObject.userData.objectStackCollisionRadiusMultiplier || 1.0;
+      const newValue = value / 100;
+      selectedObject.userData.objectStackCollisionRadiusMultiplier = newValue;
+      objectStackCollisionRadiusValue.textContent = value + '%';
+
+      // Log stack collision radius change
+      activityLog.add('OBJECT', 'Object stack collision radius changed (edit mode)', {
+        type: selectedObject.userData.type,
+        id: selectedObject.userData.id,
+        oldValue: (oldValue * 100).toFixed(0) + '%',
+        newValue: value + '%'
+      });
+
+      saveState();
+      if (debugState.showCollisionRadii) {
+        updateCollisionDebugHelpers();
+      }
+    });
+  }
+
   // Per-object collision reset button
   const collisionResetBtn = document.getElementById('collision-reset-btn');
   if (collisionResetBtn) {
@@ -11999,11 +12051,14 @@ function setupEventListeners() {
       // Reset to default (1.0 = 100%)
       selectedObject.userData.objectCollisionRadiusMultiplier = 1.0;
       selectedObject.userData.objectCollisionHeightMultiplier = 1.0;
+      selectedObject.userData.objectStackCollisionRadiusMultiplier = 1.0;
       // Update UI
       if (objectCollisionRadiusSlider) objectCollisionRadiusSlider.value = 100;
       if (objectCollisionRadiusValue) objectCollisionRadiusValue.textContent = '100%';
       if (objectCollisionHeightSlider) objectCollisionHeightSlider.value = 100;
       if (objectCollisionHeightValue) objectCollisionHeightValue.textContent = '100%';
+      if (objectStackCollisionRadiusSlider) objectStackCollisionRadiusSlider.value = 100;
+      if (objectStackCollisionRadiusValue) objectStackCollisionRadiusValue.textContent = '100%';
 
       // Log collision reset
       activityLog.add('OBJECT', 'Object collision settings reset to default (edit mode)', {
@@ -14230,6 +14285,8 @@ function updateObjectCollisionUI(object) {
   const radiusValue = document.getElementById('object-collision-radius-value');
   const heightSlider = document.getElementById('object-collision-height-slider');
   const heightValue = document.getElementById('object-collision-height-value');
+  const stackRadiusSlider = document.getElementById('object-stack-collision-radius-slider');
+  const stackRadiusValue = document.getElementById('object-stack-collision-radius-value');
 
   if (radiusSlider && radiusValue) {
     const radiusMultiplier = object.userData.objectCollisionRadiusMultiplier || 1.0;
@@ -14243,6 +14300,13 @@ function updateObjectCollisionUI(object) {
     const heightPercent = Math.round(heightMultiplier * 100);
     heightSlider.value = heightPercent;
     heightValue.textContent = heightPercent + '%';
+  }
+
+  if (stackRadiusSlider && stackRadiusValue) {
+    const stackRadiusMultiplier = object.userData.objectStackCollisionRadiusMultiplier || 1.0;
+    const stackRadiusPercent = Math.round(stackRadiusMultiplier * 100);
+    stackRadiusSlider.value = stackRadiusPercent;
+    stackRadiusValue.textContent = stackRadiusPercent + '%';
   }
 }
 

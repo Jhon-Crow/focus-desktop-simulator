@@ -8614,20 +8614,15 @@ function findDrawableObjectUnderPen() {
 function worldToDrawingCoords(worldPos, drawableObject) {
   if (!drawableObject) return null;
 
-  // Get object's world position and rotation
+  // Get object's world position
   const objPos = new THREE.Vector3();
   drawableObject.getWorldPosition(objPos);
 
-  // Calculate local offset from object center
+  // Calculate local offset from object center (no rotation applied here)
+  // FIX for issue #105: We don't rotate coordinates here anymore.
+  // Instead, we rotate the texture itself in updateDrawingTexture()
   const localX = worldPos.x - objPos.x;
   const localZ = worldPos.z - objPos.z;
-
-  // FIX for issue #105: Apply rotation to local offset FIRST
-  // This converts world coordinates to object-space coordinates
-  const cos = Math.cos(-drawableObject.rotation.y);
-  const sin = Math.sin(-drawableObject.rotation.y);
-  const rotatedLocalX = localX * cos - localZ * sin;
-  const rotatedLocalZ = localX * sin + localZ * cos;
 
   // Get object dimensions with scale applied
   const baseWidth = drawableObject.userData.type === 'notebook' ? 0.4 : 0.28;
@@ -8636,9 +8631,9 @@ function worldToDrawingCoords(worldPos, drawableObject) {
   const width = baseWidth * scale;
   const depth = baseDepth * scale;
 
-  // Convert to normalized coordinates (0-1) using rotated local coords
-  const normalizedX = (rotatedLocalX / width) + 0.5;
-  const normalizedY = (rotatedLocalZ / depth) + 0.5;
+  // Convert to normalized coordinates (0-1) without rotation
+  const normalizedX = (localX / width) + 0.5;
+  const normalizedY = (localZ / depth) + 0.5;
 
   // Convert to canvas coordinates (512x512 for drawing)
   const canvasSize = 512;
@@ -8694,11 +8689,19 @@ function updateDrawingTexture(drawableObject) {
   if (!drawableObject.userData.drawingTexture) {
     const texture = new THREE.CanvasTexture(canvas);
     texture.needsUpdate = true;
+
+    // FIX for issue #105: Rotate the texture to match object rotation
+    // This way, drawing coordinates stay simple but the visual result is correct
+    texture.center.set(0.5, 0.5); // Set rotation center to texture center
+    texture.rotation = drawableObject.rotation.y; // Rotate texture to match object
+
     drawableObject.userData.drawingTexture = texture;
 
     // Find the page surface and apply texture
     applyDrawingTextureToObject(drawableObject);
   } else {
+    // Update texture rotation when object rotation changes
+    drawableObject.userData.drawingTexture.rotation = drawableObject.rotation.y;
     drawableObject.userData.drawingTexture.needsUpdate = true;
   }
 }

@@ -3647,7 +3647,7 @@ function createLaptop(options = {}) {
     powerButtonBrightness: options.powerButtonBrightness !== undefined ? options.powerButtonBrightness : 50, // Glow brightness 0-100
     powerLedColor: options.powerLedColor || '#00ff00', // Power LED on color
     isLidOpen: true, // Whether laptop lid is open
-    lidRotation: -Math.PI / 6, // Current lid rotation (-π/6 = open, 0 = closed)
+    lidRotation: -Math.PI / 6, // Current lid rotation (-π/6 = 30° open, 0 = closed, -π/2.2 = ~130° fully open)
     targetLidRotation: -Math.PI / 6 // Target lid rotation for smooth animation
   };
 
@@ -12931,6 +12931,19 @@ function onMouseDown(event) {
           lidDragState.startMouseY = mouse.y;
           lidDragState.startLidRotation = object.userData.lidRotation;
 
+          // Log lid drag start
+          const rotationDegrees = (object.userData.lidRotation * 180 / Math.PI).toFixed(1);
+          activityLog.add('LAPTOP', 'Lid drag started', {
+            objectId: object.userData.id,
+            currentRotation: `${rotationDegrees}°`,
+            currentRotationRadians: object.userData.lidRotation.toFixed(4)
+          });
+          console.log('[LAPTOP] Lid drag started:', {
+            objectId: object.userData.id,
+            currentRotation: `${rotationDegrees}°`,
+            currentRotationRadians: object.userData.lidRotation.toFixed(4)
+          });
+
           document.getElementById('customization-panel').classList.remove('open');
           return; // Don't start normal object dragging
         }
@@ -13205,14 +13218,34 @@ function onMouseMove(event) {
     // Calculate target rotation: start rotation + mouse delta
     let newRotation = lidDragState.startLidRotation - (mouseDeltaY * rotationSensitivity);
 
-    // Clamp rotation between 0 (closed) and -π/6 (fully open)
-    const minRotation = -Math.PI / 6; // Fully open
+    // Clamp rotation between 0 (closed) and -π/2.2 (fully open, ~130 degrees)
+    // This allows more realistic laptop lid movement like a real laptop
+    const minRotation = -Math.PI / 2.2; // Fully open (~130 degrees from base)
     const maxRotation = 0; // Fully closed
     newRotation = Math.max(minRotation, Math.min(maxRotation, newRotation));
 
-    // Set target rotation for smooth animation
-    laptop.userData.targetLidRotation = newRotation;
-    laptop.userData.isLidOpen = (newRotation < -0.1); // Consider open if > ~6 degrees
+    // Only update and log if rotation actually changed
+    const rotationChanged = Math.abs(newRotation - laptop.userData.targetLidRotation) > 0.001;
+    if (rotationChanged) {
+      // Set target rotation for smooth animation
+      laptop.userData.targetLidRotation = newRotation;
+      laptop.userData.isLidOpen = (newRotation < -0.1); // Consider open if > ~6 degrees
+
+      // Log lid movement
+      const rotationDegrees = (newRotation * 180 / Math.PI).toFixed(1);
+      activityLog.add('LAPTOP', 'Lid position changed', {
+        objectId: laptop.userData.id,
+        newRotation: `${rotationDegrees}°`,
+        newRotationRadians: newRotation.toFixed(4),
+        isOpen: laptop.userData.isLidOpen
+      });
+      console.log('[LAPTOP] Lid position changed:', {
+        objectId: laptop.userData.id,
+        newRotation: `${rotationDegrees}°`,
+        newRotationRadians: newRotation.toFixed(4),
+        isOpen: laptop.userData.isLidOpen
+      });
+    }
   }
 
   if (isDragging && selectedObject) {
@@ -13366,6 +13399,22 @@ function onMouseUp(event) {
   if (isLidDragging && lidDragState.laptop) {
     // End lid dragging and save state
     const laptop = lidDragState.laptop;
+
+    // Log lid drag end
+    const finalRotationDegrees = (laptop.userData.targetLidRotation * 180 / Math.PI).toFixed(1);
+    activityLog.add('LAPTOP', 'Lid drag ended', {
+      objectId: laptop.userData.id,
+      finalRotation: `${finalRotationDegrees}°`,
+      finalRotationRadians: laptop.userData.targetLidRotation.toFixed(4),
+      isOpen: laptop.userData.isLidOpen
+    });
+    console.log('[LAPTOP] Lid drag ended:', {
+      objectId: laptop.userData.id,
+      finalRotation: `${finalRotationDegrees}°`,
+      finalRotationRadians: laptop.userData.targetLidRotation.toFixed(4),
+      isOpen: laptop.userData.isLidOpen
+    });
+
     isLidDragging = false;
     lidDragState.laptop = null;
     lidDragState.startMouseY = 0;

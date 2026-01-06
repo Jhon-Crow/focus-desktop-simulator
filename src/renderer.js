@@ -8622,11 +8622,11 @@ function worldToDrawingCoords(worldPos, drawableObject) {
   const localX = worldPos.x - objPos.x;
   const localZ = worldPos.z - objPos.z;
 
-  // FIX for issue #105: Apply rotation transformation to coordinates
-  // Since we rotate the canvas content to compensate for paper rotation,
-  // we need to rotate the drawing coordinates to match the rotated canvas
+  // FIX for issue #105: Transform world coordinates to paper-local coordinates
+  // by applying inverse rotation. This ensures drawing happens at the correct
+  // position on the paper, regardless of how the paper is rotated in 3D space.
   const rotation = drawableObject.rotation.y;
-  const cos = Math.cos(-rotation); // Negative because we compensate rotation
+  const cos = Math.cos(-rotation); // Negative for inverse rotation
   const sin = Math.sin(-rotation);
   const rotatedX = localX * cos - localZ * sin;
   const rotatedZ = localX * sin + localZ * cos;
@@ -8686,67 +8686,16 @@ function getDrawingCanvas(drawableObject) {
   return canvas;
 }
 
-// Helper function to rotate canvas content to compensate for paper rotation
-function rotateCanvasContent(canvas, rotationDelta) {
-  const ctx = canvas.getContext('2d');
-  const width = canvas.width;
-  const height = canvas.height;
-
-  // Create temporary canvas to store current content
-  const tempCanvas = document.createElement('canvas');
-  tempCanvas.width = width;
-  tempCanvas.height = height;
-  const tempCtx = tempCanvas.getContext('2d');
-
-  // Copy current content to temp canvas
-  tempCtx.drawImage(canvas, 0, 0);
-
-  // Clear main canvas
-  ctx.clearRect(0, 0, width, height);
-
-  // Fill with white background
-  ctx.fillStyle = '#ffffff';
-  ctx.fillRect(0, 0, width, height);
-
-  // Rotate and draw back the content
-  // Use negative rotation to compensate for paper rotation
-  ctx.save();
-  ctx.translate(width / 2, height / 2);
-  ctx.rotate(-rotationDelta); // Negative to compensate paper rotation
-  ctx.translate(-width / 2, -height / 2);
-  ctx.drawImage(tempCanvas, 0, 0);
-  ctx.restore();
-}
-
 // Update the 3D texture from the drawing canvas
 function updateDrawingTexture(drawableObject) {
   if (!drawableObject || !drawableObject.userData.drawingCanvas) return;
 
   const canvas = drawableObject.userData.drawingCanvas;
-  const currentRotation = drawableObject.rotation.y;
 
-  // FIX for issue #105: Track rotation and compensate canvas content
-  // Initialize lastRotation if not set
-  if (drawableObject.userData.lastRotation === undefined) {
-    drawableObject.userData.lastRotation = currentRotation;
-  }
-
-  // Check if rotation changed significantly
-  const rotationDelta = currentRotation - drawableObject.userData.lastRotation;
-  const rotationThreshold = 0.001; // Small threshold to avoid floating point issues
-
-  if (Math.abs(rotationDelta) > rotationThreshold) {
-    // Paper rotated! Compensate by rotating canvas content
-    // This keeps the drawing visually stable for the observer
-    rotateCanvasContent(canvas, rotationDelta);
-    drawableObject.userData.lastRotation = currentRotation;
-  }
-
-  // Create or update texture WITHOUT rotation
+  // Create or update texture
   if (!drawableObject.userData.drawingTexture) {
     const texture = new THREE.CanvasTexture(canvas);
     texture.needsUpdate = true;
-    // No texture rotation - canvas content is already compensated
     drawableObject.userData.drawingTexture = texture;
 
     // Find the page surface and apply texture

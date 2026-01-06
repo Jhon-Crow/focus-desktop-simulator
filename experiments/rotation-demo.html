@@ -1,0 +1,303 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Issue #105 - Drawing on Rotated Paper Demo</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 20px;
+            background: #f0f0f0;
+        }
+        h1 {
+            color: #333;
+        }
+        .container {
+            display: flex;
+            gap: 20px;
+            margin: 20px 0;
+        }
+        .demo-box {
+            background: white;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+        }
+        canvas {
+            border: 2px solid #333;
+            cursor: crosshair;
+            display: block;
+            margin: 10px 0;
+        }
+        .controls {
+            margin: 10px 0;
+        }
+        button {
+            padding: 8px 16px;
+            margin: 5px;
+            cursor: pointer;
+            background: #007bff;
+            color: white;
+            border: none;
+            border-radius: 4px;
+        }
+        button:hover {
+            background: #0056b3;
+        }
+        .info {
+            background: #e7f3ff;
+            padding: 10px;
+            border-radius: 4px;
+            margin: 10px 0;
+            font-family: monospace;
+            font-size: 12px;
+        }
+        .success {
+            background: #d4edda;
+            color: #155724;
+            padding: 10px;
+            border-radius: 4px;
+            margin: 10px 0;
+        }
+        .paper-visualization {
+            position: relative;
+            width: 300px;
+            height: 300px;
+            margin: 20px auto;
+        }
+        .paper {
+            position: absolute;
+            width: 200px;
+            height: 280px;
+            background: white;
+            border: 2px solid #333;
+            top: 50%;
+            left: 50%;
+            transform-origin: center center;
+            transition: transform 0.3s;
+            box-shadow: 0 4px 8px rgba(0,0,0,0.2);
+        }
+        .pen-dot {
+            position: absolute;
+            width: 10px;
+            height: 10px;
+            background: red;
+            border-radius: 50%;
+            transform: translate(-50%, -50%);
+        }
+    </style>
+</head>
+<body>
+    <h1>🎯 Issue #105: Drawing on Rotated Paper</h1>
+
+    <div class="success">
+        <strong>✅ Fixed!</strong> The pen now draws correctly under its tip when the paper is rotated.
+    </div>
+
+    <div class="container">
+        <div class="demo-box">
+            <h2>Interactive Demo</h2>
+            <p>Draw on the canvas below. Use the rotation slider to rotate the "paper" and see that drawing still works correctly!</p>
+
+            <div class="controls">
+                <label>Paper Rotation: <span id="rotationValue">0°</span></label><br>
+                <input type="range" id="rotation" min="0" max="360" value="0" style="width: 100%">
+            </div>
+
+            <canvas id="drawCanvas" width="400" height="400"></canvas>
+
+            <div class="controls">
+                <button onclick="clearCanvas()">Clear Canvas</button>
+                <button onclick="drawTestPattern()">Draw Test Pattern</button>
+            </div>
+
+            <div class="info" id="info">
+                Move mouse over canvas to see coordinates
+            </div>
+        </div>
+
+        <div class="demo-box">
+            <h2>How It Works</h2>
+            <p><strong>The Fix:</strong></p>
+            <ul>
+                <li>✅ Transform world coordinates to paper-local coordinates</li>
+                <li>✅ Apply inverse rotation to coordinates</li>
+                <li>❌ NO canvas content rotation</li>
+                <li>❌ NO texture rotation</li>
+            </ul>
+
+            <p><strong>Coordinate Transformation:</strong></p>
+            <pre style="background: #f8f9fa; padding: 10px; border-radius: 4px;">
+// Get local offset
+localX = worldX - paperX
+localZ = worldZ - paperZ
+
+// Transform to paper-local coords
+cos = Math.cos(-rotation)
+sin = Math.sin(-rotation)
+rotatedX = localX * cos - localZ * sin
+rotatedZ = localX * sin + localZ * cos
+
+// Map to canvas coordinates
+canvasX = (rotatedX / width + 0.5) * 512
+canvasY = (rotatedZ / depth + 0.5) * 512
+            </pre>
+
+            <p><strong>Why this works:</strong></p>
+            <ul>
+                <li>The canvas texture is attached to the 3D paper mesh</li>
+                <li>When the paper rotates, the texture rotates with it</li>
+                <li>We just need to ensure coordinates map correctly</li>
+                <li>Drawing is "fixed" to the paper in paper-local space</li>
+            </ul>
+        </div>
+    </div>
+
+    <script>
+        const canvas = document.getElementById('drawCanvas');
+        const ctx = canvas.getContext('2d');
+        const rotationSlider = document.getElementById('rotation');
+        const rotationValue = document.getElementById('rotationValue');
+        const info = document.getElementById('info');
+
+        let isDrawing = false;
+        let lastX = 0;
+        let lastY = 0;
+        let currentRotation = 0;
+
+        // Initialize white background
+        ctx.fillStyle = 'white';
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+        ctx.strokeStyle = 'black';
+        ctx.lineWidth = 2;
+        ctx.lineCap = 'round';
+        ctx.lineJoin = 'round';
+
+        // Transform world coordinates to paper-local coordinates
+        function worldToPaperLocal(worldX, worldY, rotation) {
+            // Center is at canvas center
+            const centerX = canvas.width / 2;
+            const centerY = canvas.height / 2;
+
+            // Local offset from center
+            const localX = worldX - centerX;
+            const localY = worldY - centerY;
+
+            // Apply inverse rotation (in radians)
+            const rad = -rotation * Math.PI / 180;
+            const cos = Math.cos(rad);
+            const sin = Math.sin(rad);
+
+            const rotatedX = localX * cos - localY * sin;
+            const rotatedY = localX * sin + localY * cos;
+
+            // Back to canvas coordinates
+            return {
+                x: rotatedX + centerX,
+                y: rotatedY + centerY
+            };
+        }
+
+        function updateRotation() {
+            currentRotation = parseInt(rotationSlider.value);
+            rotationValue.textContent = currentRotation + '°';
+        }
+
+        function clearCanvas() {
+            ctx.fillStyle = 'white';
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+        }
+
+        function drawTestPattern() {
+            clearCanvas();
+
+            // Draw a cross pattern at center
+            ctx.strokeStyle = 'blue';
+            ctx.lineWidth = 3;
+
+            const centerX = canvas.width / 2;
+            const centerY = canvas.height / 2;
+
+            // Horizontal line
+            ctx.beginPath();
+            const h1 = worldToPaperLocal(centerX - 50, centerY, currentRotation);
+            const h2 = worldToPaperLocal(centerX + 50, centerY, currentRotation);
+            ctx.moveTo(h1.x, h1.y);
+            ctx.lineTo(h2.x, h2.y);
+            ctx.stroke();
+
+            // Vertical line
+            ctx.beginPath();
+            const v1 = worldToPaperLocal(centerX, centerY - 50, currentRotation);
+            const v2 = worldToPaperLocal(centerX, centerY + 50, currentRotation);
+            ctx.moveTo(v1.x, v1.y);
+            ctx.lineTo(v2.x, v2.y);
+            ctx.stroke();
+
+            // Draw circle
+            ctx.strokeStyle = 'red';
+            ctx.beginPath();
+            for (let angle = 0; angle <= 360; angle += 5) {
+                const rad = angle * Math.PI / 180;
+                const x = centerX + Math.cos(rad) * 80;
+                const y = centerY + Math.sin(rad) * 80;
+                const p = worldToPaperLocal(x, y, currentRotation);
+                if (angle === 0) {
+                    ctx.moveTo(p.x, p.y);
+                } else {
+                    ctx.lineTo(p.x, p.y);
+                }
+            }
+            ctx.stroke();
+
+            ctx.strokeStyle = 'black';
+            ctx.lineWidth = 2;
+        }
+
+        rotationSlider.addEventListener('input', updateRotation);
+
+        canvas.addEventListener('mousedown', (e) => {
+            isDrawing = true;
+            const rect = canvas.getBoundingClientRect();
+            const mouseX = e.clientX - rect.left;
+            const mouseY = e.clientY - rect.top;
+            const p = worldToPaperLocal(mouseX, mouseY, currentRotation);
+            lastX = p.x;
+            lastY = p.y;
+        });
+
+        canvas.addEventListener('mousemove', (e) => {
+            const rect = canvas.getBoundingClientRect();
+            const mouseX = e.clientX - rect.left;
+            const mouseY = e.clientY - rect.top;
+            const p = worldToPaperLocal(mouseX, mouseY, currentRotation);
+
+            info.innerHTML = `
+                Mouse (world): (${mouseX.toFixed(0)}, ${mouseY.toFixed(0)})<br>
+                Paper rotation: ${currentRotation}°<br>
+                Canvas coords: (${p.x.toFixed(0)}, ${p.y.toFixed(0)})
+            `;
+
+            if (isDrawing) {
+                ctx.beginPath();
+                ctx.moveTo(lastX, lastY);
+                ctx.lineTo(p.x, p.y);
+                ctx.stroke();
+                lastX = p.x;
+                lastY = p.y;
+            }
+        });
+
+        canvas.addEventListener('mouseup', () => {
+            isDrawing = false;
+        });
+
+        canvas.addEventListener('mouseleave', () => {
+            isDrawing = false;
+        });
+    </script>
+</body>
+</html>

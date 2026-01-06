@@ -11656,11 +11656,20 @@ function setupEventListeners() {
       activityLog.add('USER_ACTION', 'Exit application confirmed');
 
       try {
-        // Save the current state before exiting
+        // First, unmute other applications if they are muted
+        const muteOtherAppsCheckbox = document.getElementById('mute-other-apps-checkbox');
+        if (muteOtherAppsCheckbox && muteOtherAppsCheckbox.checked) {
+          console.log('Unchecking mute other apps before exit');
+          muteOtherAppsCheckbox.checked = false;
+          // Trigger the change event to actually unmute
+          await window.electronAPI.setMuteOtherApps(false);
+        }
+
+        // Save the current state before exiting (now with muteOtherApps: false)
         await saveStateImmediate();
         console.log('State saved before exit');
 
-        // Quit the application (this will also restore sound in main.js)
+        // Quit the application
         await window.electronAPI.quitApplication();
       } catch (error) {
         console.error('Error during application exit:', error);

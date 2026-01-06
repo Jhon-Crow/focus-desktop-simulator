@@ -1639,6 +1639,21 @@ app.on('before-quit', async () => {
   if (keyboardHookProcess) {
     await stopKeyboardHook();
   }
+
+  // If other apps are muted, unmute them before quitting
+  if (otherAppsMuted && process.platform === 'win32') {
+    console.log('Unmuting other applications before quit (before-quit handler)...');
+    const baseScript = getAudioControlScriptContent();
+    const unmuteScript = baseScript + '\n[AudioManager]::UnmuteAllApps()';
+
+    try {
+      await executePowerShellScript(unmuteScript);
+      console.log('Other applications unmuted successfully (before-quit handler)');
+      otherAppsMuted = false;
+    } catch (err) {
+      console.error('Failed to unmute applications on quit (before-quit handler):', err);
+    }
+  }
 });
 
 // Store muted state for other apps

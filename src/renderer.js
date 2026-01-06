@@ -13313,19 +13313,19 @@ function onMouseMove(event) {
     const screenFacesCamera = normalizedRotationY < Math.PI / 2 || normalizedRotationY > 3 * Math.PI / 2;
 
     // Calculate direction multiplier based on orientation
-    // When screen faces camera: pulling down (positive deltaY) = closing lid = toward 0 (less negative)
-    // When screen faces away: pulling down (positive deltaY) = opening lid = more negative rotation
-    const directionMultiplier = screenFacesCamera ? 1 : -1;
+    // When screen faces camera: pulling down (positive deltaY) = opening lid = more negative rotation
+    // When screen faces away: pulling down (positive deltaY) = closing lid = toward 0 (less negative)
+    const directionMultiplier = screenFacesCamera ? -1 : 1;
 
     // Calculate target rotation with orientation-aware direction
-    // Positive deltaY (pull down/toward you) with screen facing camera = close lid (toward 0)
-    // Positive deltaY (pull down/toward you) with screen facing away = open lid (more negative)
+    // Positive deltaY (pull down/toward you) with screen facing camera = open lid (more negative)
+    // Positive deltaY (pull down/toward you) with screen facing away = close lid (toward 0)
     let newRotation = lidDragState.startLidRotation - (lidDragState.accumulatedDeltaY * rotationSensitivity * directionMultiplier);
 
-    // Clamp rotation between 0 (closed) and -π/2.2 (fully open, ~130 degrees)
-    // This allows more realistic laptop lid movement like a real laptop
-    const minRotation = -Math.PI / 2.2; // Fully open (~130 degrees from base)
-    const maxRotation = 0; // Fully closed
+    // Clamp rotation between 0 (closed) and -π (fully open, ~180 degrees - screen flat behind base)
+    // This allows full range of motion like some convertible laptops
+    const minRotation = -Math.PI; // Fully open (~180 degrees from base, screen flat behind)
+    const maxRotation = 0; // Fully closed (screen flat on base)
     newRotation = Math.max(minRotation, Math.min(maxRotation, newRotation));
 
     // Only update and log if rotation actually changed

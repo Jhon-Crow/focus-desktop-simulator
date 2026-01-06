@@ -9431,13 +9431,16 @@ function getStackingRadius(object) {
   const type = object.userData.type;
   const scale = object.scale?.x || 1;
 
-  // Use predefined stacking radius if available
+  // Get per-object stack collision radius multiplier (default 1.0 = 100%)
+  const objectMultiplier = object.userData.objectStackCollisionRadiusMultiplier || 1.0;
+
+  // Use predefined stacking radius if available (with per-object multiplier applied)
   if (OBJECT_STACKING_RADII[type] !== undefined) {
-    return OBJECT_STACKING_RADII[type] * scale;
+    return OBJECT_STACKING_RADII[type] * objectMultiplier * scale;
   }
 
   // For unknown types, use default stacking radius
-  return DEFAULT_STACKING_RADIUS * scale;
+  return DEFAULT_STACKING_RADIUS * objectMultiplier * scale;
 }
 
 // Get additional collision points for objects with complex shapes (e.g., laptop monitor)
@@ -9606,7 +9609,10 @@ function createCollisionHelper(object) {
 
   // Stacking radius visualization (blue/cyan - used for stacking detection)
   // Uses physics.height as stacking considers the visual height
-  const stackingGeometry = new THREE.CylinderGeometry(stackingRadius, stackingRadius, physics.height, 16, 1, true);
+  // Apply height multiplier for accurate debug visualization
+  const stackHeightMultiplier = object.userData.objectStackCollisionHeightMultiplier || 1.0;
+  const visualStackHeight = physics.height * stackHeightMultiplier;
+  const stackingGeometry = new THREE.CylinderGeometry(stackingRadius, stackingRadius, visualStackHeight, 16, 1, true);
   const stackingMaterial = new THREE.MeshBasicMaterial({
     color: 0x00aaff,
     transparent: true,
@@ -9615,7 +9621,7 @@ function createCollisionHelper(object) {
     depthWrite: false
   });
   const stackingHelper = new THREE.Mesh(stackingGeometry, stackingMaterial);
-  stackingHelper.position.y = physics.height / 2;
+  stackingHelper.position.y = visualStackHeight / 2;
   helperGroup.add(stackingHelper);
 
   // Add stacking radius ring at the base
@@ -10120,7 +10126,8 @@ function findSupportingY(object, x, z) {
     const otherPhysics = getObjectPhysics(other);
     const otherRadius = getStackingRadius(other);
     const otherScale = other.userData.scale || other.scale.x || 1.0;
-    const otherTop = other.position.y + otherPhysics.height * otherScale;
+    const otherHeightMultiplier = other.userData.objectStackCollisionHeightMultiplier || 1.0;
+    const otherTop = other.position.y + otherPhysics.height * otherScale * otherHeightMultiplier;
 
     // Check horizontal overlap
     const dx = x - other.position.x;
@@ -11991,6 +11998,104 @@ function setupEventListeners() {
     });
   }
 
+  // Per-object stack collision radius slider
+  const objectStackCollisionRadiusSlider = document.getElementById('object-stack-collision-radius-slider');
+  const objectStackCollisionRadiusValue = document.getElementById('object-stack-collision-radius-value');
+  if (objectStackCollisionRadiusSlider && objectStackCollisionRadiusValue) {
+    objectStackCollisionRadiusSlider.addEventListener('input', (e) => {
+      if (!selectedObject) return;
+      const oldValue = selectedObject.userData.objectStackCollisionRadiusMultiplier || 1.0;
+      const percentage = parseInt(e.target.value);
+      const newValue = percentage / 100;
+      selectedObject.userData.objectStackCollisionRadiusMultiplier = newValue;
+      objectStackCollisionRadiusValue.textContent = percentage + '%';
+
+      // Log stack collision radius change
+      activityLog.add('OBJECT', 'Object stack collision radius changed (edit mode)', {
+        type: selectedObject.userData.type,
+        id: selectedObject.userData.id,
+        oldValue: (oldValue * 100).toFixed(0) + '%',
+        newValue: percentage + '%'
+      });
+
+      saveState();
+      // Update collision debug visualization if enabled
+      if (debugState.showCollisionRadii) {
+        updateCollisionDebugHelpers();
+      }
+    });
+    // Add scroll-based adjustment
+    addScrollToSlider(objectStackCollisionRadiusSlider, (value) => {
+      if (!selectedObject) return;
+      const oldValue = selectedObject.userData.objectStackCollisionRadiusMultiplier || 1.0;
+      const newValue = value / 100;
+      selectedObject.userData.objectStackCollisionRadiusMultiplier = newValue;
+      objectStackCollisionRadiusValue.textContent = value + '%';
+
+      // Log stack collision radius change
+      activityLog.add('OBJECT', 'Object stack collision radius changed (edit mode)', {
+        type: selectedObject.userData.type,
+        id: selectedObject.userData.id,
+        oldValue: (oldValue * 100).toFixed(0) + '%',
+        newValue: value + '%'
+      });
+
+      saveState();
+      if (debugState.showCollisionRadii) {
+        updateCollisionDebugHelpers();
+      }
+    });
+  }
+
+  // Per-object stack collision height slider
+  const objectStackCollisionHeightSlider = document.getElementById('object-stack-collision-height-slider');
+  const objectStackCollisionHeightValue = document.getElementById('object-stack-collision-height-value');
+  if (objectStackCollisionHeightSlider && objectStackCollisionHeightValue) {
+    objectStackCollisionHeightSlider.addEventListener('input', (e) => {
+      if (!selectedObject) return;
+      const oldValue = selectedObject.userData.objectStackCollisionHeightMultiplier || 1.0;
+      const percentage = parseInt(e.target.value);
+      const newValue = percentage / 100;
+      selectedObject.userData.objectStackCollisionHeightMultiplier = newValue;
+      objectStackCollisionHeightValue.textContent = percentage + '%';
+
+      // Log stack collision height change
+      activityLog.add('OBJECT', 'Object stack collision height changed (edit mode)', {
+        type: selectedObject.userData.type,
+        id: selectedObject.userData.id,
+        oldValue: (oldValue * 100).toFixed(0) + '%',
+        newValue: percentage + '%'
+      });
+
+      saveState();
+      // Update collision debug visualization if enabled
+      if (debugState.showCollisionRadii) {
+        updateCollisionDebugHelpers();
+      }
+    });
+    // Add scroll-based adjustment
+    addScrollToSlider(objectStackCollisionHeightSlider, (value) => {
+      if (!selectedObject) return;
+      const oldValue = selectedObject.userData.objectStackCollisionHeightMultiplier || 1.0;
+      const newValue = value / 100;
+      selectedObject.userData.objectStackCollisionHeightMultiplier = newValue;
+      objectStackCollisionHeightValue.textContent = value + '%';
+
+      // Log stack collision height change
+      activityLog.add('OBJECT', 'Object stack collision height changed (edit mode)', {
+        type: selectedObject.userData.type,
+        id: selectedObject.userData.id,
+        oldValue: (oldValue * 100).toFixed(0) + '%',
+        newValue: value + '%'
+      });
+
+      saveState();
+      if (debugState.showCollisionRadii) {
+        updateCollisionDebugHelpers();
+      }
+    });
+  }
+
   // Per-object collision reset button
   const collisionResetBtn = document.getElementById('collision-reset-btn');
   if (collisionResetBtn) {
@@ -11999,11 +12104,17 @@ function setupEventListeners() {
       // Reset to default (1.0 = 100%)
       selectedObject.userData.objectCollisionRadiusMultiplier = 1.0;
       selectedObject.userData.objectCollisionHeightMultiplier = 1.0;
+      selectedObject.userData.objectStackCollisionRadiusMultiplier = 1.0;
+      selectedObject.userData.objectStackCollisionHeightMultiplier = 1.0;
       // Update UI
       if (objectCollisionRadiusSlider) objectCollisionRadiusSlider.value = 100;
       if (objectCollisionRadiusValue) objectCollisionRadiusValue.textContent = '100%';
       if (objectCollisionHeightSlider) objectCollisionHeightSlider.value = 100;
       if (objectCollisionHeightValue) objectCollisionHeightValue.textContent = '100%';
+      if (objectStackCollisionRadiusSlider) objectStackCollisionRadiusSlider.value = 100;
+      if (objectStackCollisionRadiusValue) objectStackCollisionRadiusValue.textContent = '100%';
+      if (objectStackCollisionHeightSlider) objectStackCollisionHeightSlider.value = 100;
+      if (objectStackCollisionHeightValue) objectStackCollisionHeightValue.textContent = '100%';
 
       // Log collision reset
       activityLog.add('OBJECT', 'Object collision settings reset to default (edit mode)', {
@@ -13708,7 +13819,8 @@ function calculateDragStackingY(draggedObject, posX, posZ) {
     if (horizontalDist < overlapThreshold) {
       // Calculate the top surface of the object below
       const otherScale = obj.userData.scale || obj.scale.x || 1.0;
-      const objTopY = obj.position.y + otherPhysics.height * otherScale;
+      const heightMultiplier = obj.userData.objectStackCollisionHeightMultiplier || 1.0;
+      const objTopY = obj.position.y + otherPhysics.height * otherScale * heightMultiplier;
       overlappingObjects.push({ obj, topY: objTopY });
     }
   });
@@ -13787,7 +13899,8 @@ function calculateStackingY(droppedObject) {
     if (horizontalDist < overlapThreshold) {
       // Calculate the top surface of the object below
       const otherScale = obj.userData.scale || obj.scale.x || 1.0;
-      const objTopY = obj.position.y + otherPhysics.height * otherScale;
+      const heightMultiplier = obj.userData.objectStackCollisionHeightMultiplier || 1.0;
+      const objTopY = obj.position.y + otherPhysics.height * otherScale * heightMultiplier;
       overlappingObjects.push({ obj, topY: objTopY });
     }
   });
@@ -13851,7 +13964,8 @@ function calculatePullResistance(draggedObject, currentX, currentZ, targetX, tar
     if (horizontalDist < overlapThreshold) {
       // Check if dragged object is UNDER this object (based on Y positions)
       const draggedScale = draggedObject.userData.scale || draggedObject.scale.x || 1.0;
-      const draggedTop = draggedObject.position.y + draggedPhysics.height * draggedScale;
+      const draggedHeightMultiplier = draggedObject.userData.objectStackCollisionHeightMultiplier || 1.0;
+      const draggedTop = draggedObject.position.y + draggedPhysics.height * draggedScale * draggedHeightMultiplier;
       const objBottom = obj.position.y;
 
       // If the object above us has its bottom at or above our top, we're under it
@@ -14230,6 +14344,10 @@ function updateObjectCollisionUI(object) {
   const radiusValue = document.getElementById('object-collision-radius-value');
   const heightSlider = document.getElementById('object-collision-height-slider');
   const heightValue = document.getElementById('object-collision-height-value');
+  const stackRadiusSlider = document.getElementById('object-stack-collision-radius-slider');
+  const stackRadiusValue = document.getElementById('object-stack-collision-radius-value');
+  const stackHeightSlider = document.getElementById('object-stack-collision-height-slider');
+  const stackHeightValue = document.getElementById('object-stack-collision-height-value');
 
   if (radiusSlider && radiusValue) {
     const radiusMultiplier = object.userData.objectCollisionRadiusMultiplier || 1.0;
@@ -14243,6 +14361,20 @@ function updateObjectCollisionUI(object) {
     const heightPercent = Math.round(heightMultiplier * 100);
     heightSlider.value = heightPercent;
     heightValue.textContent = heightPercent + '%';
+  }
+
+  if (stackRadiusSlider && stackRadiusValue) {
+    const stackRadiusMultiplier = object.userData.objectStackCollisionRadiusMultiplier || 1.0;
+    const stackRadiusPercent = Math.round(stackRadiusMultiplier * 100);
+    stackRadiusSlider.value = stackRadiusPercent;
+    stackRadiusValue.textContent = stackRadiusPercent + '%';
+  }
+
+  if (stackHeightSlider && stackHeightValue) {
+    const stackHeightMultiplier = object.userData.objectStackCollisionHeightMultiplier || 1.0;
+    const stackHeightPercent = Math.round(stackHeightMultiplier * 100);
+    stackHeightSlider.value = stackHeightPercent;
+    stackHeightValue.textContent = stackHeightPercent + '%';
   }
 }
 
@@ -22873,6 +23005,12 @@ async function saveStateImmediate() {
       if (obj.userData.objectCollisionHeightMultiplier !== undefined && obj.userData.objectCollisionHeightMultiplier !== 1.0) {
         data.objectCollisionHeightMultiplier = obj.userData.objectCollisionHeightMultiplier;
       }
+      if (obj.userData.objectStackCollisionRadiusMultiplier !== undefined && obj.userData.objectStackCollisionRadiusMultiplier !== 1.0) {
+        data.objectStackCollisionRadiusMultiplier = obj.userData.objectStackCollisionRadiusMultiplier;
+      }
+      if (obj.userData.objectStackCollisionHeightMultiplier !== undefined && obj.userData.objectStackCollisionHeightMultiplier !== 1.0) {
+        data.objectStackCollisionHeightMultiplier = obj.userData.objectStackCollisionHeightMultiplier;
+      }
 
       // Save floor/fallen state (Y position is already saved above for all objects)
       if (obj.userData.isOnFloor) {
@@ -23759,6 +23897,12 @@ async function loadState() {
             }
             if (objData.objectCollisionHeightMultiplier !== undefined) {
               obj.userData.objectCollisionHeightMultiplier = objData.objectCollisionHeightMultiplier;
+            }
+            if (objData.objectStackCollisionRadiusMultiplier !== undefined) {
+              obj.userData.objectStackCollisionRadiusMultiplier = objData.objectStackCollisionRadiusMultiplier;
+            }
+            if (objData.objectStackCollisionHeightMultiplier !== undefined) {
+              obj.userData.objectStackCollisionHeightMultiplier = objData.objectStackCollisionHeightMultiplier;
             }
 
             // Restore sound-related properties for all object types (generic approach)

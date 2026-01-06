@@ -8618,9 +8618,16 @@ function worldToDrawingCoords(worldPos, drawableObject) {
   const objPos = new THREE.Vector3();
   drawableObject.getWorldPosition(objPos);
 
-  // Calculate local offset
+  // Calculate local offset from object center
   const localX = worldPos.x - objPos.x;
   const localZ = worldPos.z - objPos.z;
+
+  // FIX for issue #105: Apply rotation to local offset FIRST
+  // This converts world coordinates to object-space coordinates
+  const cos = Math.cos(-drawableObject.rotation.y);
+  const sin = Math.sin(-drawableObject.rotation.y);
+  const rotatedLocalX = localX * cos - localZ * sin;
+  const rotatedLocalZ = localX * sin + localZ * cos;
 
   // Get object dimensions with scale applied
   const baseWidth = drawableObject.userData.type === 'notebook' ? 0.4 : 0.28;
@@ -8629,23 +8636,15 @@ function worldToDrawingCoords(worldPos, drawableObject) {
   const width = baseWidth * scale;
   const depth = baseDepth * scale;
 
-  // Convert to normalized coordinates (0-1)
-  const normalizedX = (localX / width) + 0.5;
-  const normalizedY = (localZ / depth) + 0.5;
-
-  // Apply object rotation (simplified - just Y rotation)
-  const cos = Math.cos(-drawableObject.rotation.y);
-  const sin = Math.sin(-drawableObject.rotation.y);
-  const centeredX = normalizedX - 0.5;
-  const centeredY = normalizedY - 0.5;
-  const rotatedX = centeredX * cos - centeredY * sin + 0.5;
-  const rotatedY = centeredX * sin + centeredY * cos + 0.5;
+  // Convert to normalized coordinates (0-1) using rotated local coords
+  const normalizedX = (rotatedLocalX / width) + 0.5;
+  const normalizedY = (rotatedLocalZ / depth) + 0.5;
 
   // Convert to canvas coordinates (512x512 for drawing)
   const canvasSize = 512;
   return {
-    x: Math.floor(rotatedX * canvasSize),
-    y: Math.floor(rotatedY * canvasSize)
+    x: Math.floor(normalizedX * canvasSize),
+    y: Math.floor(normalizedY * canvasSize)
   };
 }
 

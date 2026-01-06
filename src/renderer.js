@@ -13326,11 +13326,11 @@ function onMouseMove(event) {
     // Positive deltaY (pull down/toward you) with screen facing away = open lid (more negative, away from 0°)
     let newRotation = lidDragState.startLidRotation - (lidDragState.accumulatedDeltaY * rotationSensitivity * directionMultiplier);
 
-    // Clamp rotation range: -90° (normal open position) to 0° (fully closed)
+    // Clamp rotation range: -90° (normal open position) to -180° (folded backward)
     // Starting position: -90° (normal laptop open position, 90° physical angle)
-    // Can close: -90° to 0° range (closing the lid completely flat on keyboard)
-    const minRotation = -Math.PI / 2; // -90° (normal open position, 90° physical angle)
-    const maxRotation = 0; // Fully closed (0°, lid flat on keyboard)
+    // Can close further: -90° to -180° range (180° total movement, folding lid backward past flat)
+    const minRotation = -Math.PI; // -180° (folded completely backward, past flat position)
+    const maxRotation = -Math.PI / 2; // -90° (normal open position, 90° physical angle)
     newRotation = Math.max(minRotation, Math.min(maxRotation, newRotation));
 
     // Only update and log if rotation actually changed

@@ -76,6 +76,12 @@ let desk;
 let deskObjects = [];
 let selectedObject = null;
 let isDragging = false;
+let isLidDragging = false; // Separate flag for laptop lid dragging
+let lidDragState = {
+  laptop: null,           // Laptop being dragged
+  startMouseY: 0,         // Initial mouse Y position when lid drag started
+  startLidRotation: 0     // Initial lid rotation when drag started
+};
 let dragPlane;
 let raycaster;
 let mouse;
@@ -3639,7 +3645,10 @@ function createLaptop(options = {}) {
     powerButtonColor: options.powerButtonColor || '#ff0000', // Power button color
     powerButtonGlow: options.powerButtonGlow !== undefined ? options.powerButtonGlow : true, // Whether button glows
     powerButtonBrightness: options.powerButtonBrightness !== undefined ? options.powerButtonBrightness : 50, // Glow brightness 0-100
-    powerLedColor: options.powerLedColor || '#00ff00' // Power LED on color
+    powerLedColor: options.powerLedColor || '#00ff00', // Power LED on color
+    isLidOpen: true, // Whether laptop lid is open
+    lidRotation: -Math.PI / 6, // Current lid rotation (-π/6 = open, 0 = closed)
+    targetLidRotation: -Math.PI / 6 // Target lid rotation for smooth animation
   };
 
   // Base/keyboard part
@@ -12899,6 +12908,34 @@ function onMouseDown(event) {
         return;
       }
 
+      // Special handling for laptop lid dragging
+      if (object.userData.type === 'laptop') {
+        const clickedMesh = intersects[0].object;
+        const screenGroup = object.getObjectByName('screenGroup');
+
+        // Check if clicking on the lid (screenGroup or its children)
+        let isClickingLid = false;
+        let checkMesh = clickedMesh;
+        while (checkMesh && checkMesh !== object) {
+          if (checkMesh === screenGroup || checkMesh.parent === screenGroup) {
+            isClickingLid = true;
+            break;
+          }
+          checkMesh = checkMesh.parent;
+        }
+
+        // If clicking on the lid, start lid dragging instead of object dragging
+        if (isClickingLid) {
+          isLidDragging = true;
+          lidDragState.laptop = object;
+          lidDragState.startMouseY = mouse.y;
+          lidDragState.startLidRotation = object.userData.lidRotation;
+
+          document.getElementById('customization-panel').classList.remove('open');
+          return; // Don't start normal object dragging
+        }
+      }
+
       selectedObject = object;
       isDragging = true;
       dragLayerOffset = 0; // Reset layer offset when starting drag
@@ -13155,6 +13192,29 @@ function onMouseMove(event) {
     }
   }
 
+  // Handle laptop lid dragging
+  if (isLidDragging && lidDragState.laptop) {
+    const laptop = lidDragState.laptop;
+
+    // Calculate rotation based on mouse Y movement
+    // Moving mouse up (negative delta) = opening lid (more negative rotation)
+    // Moving mouse down (positive delta) = closing lid (toward 0)
+    const mouseDeltaY = mouse.y - lidDragState.startMouseY;
+    const rotationSensitivity = 1.5; // Adjust sensitivity as needed
+
+    // Calculate target rotation: start rotation + mouse delta
+    let newRotation = lidDragState.startLidRotation - (mouseDeltaY * rotationSensitivity);
+
+    // Clamp rotation between 0 (closed) and -π/6 (fully open)
+    const minRotation = -Math.PI / 6; // Fully open
+    const maxRotation = 0; // Fully closed
+    newRotation = Math.max(minRotation, Math.min(maxRotation, newRotation));
+
+    // Set target rotation for smooth animation
+    laptop.userData.targetLidRotation = newRotation;
+    laptop.userData.isLidOpen = (newRotation < -0.1); // Consider open if > ~6 degrees
+  }
+
   if (isDragging && selectedObject) {
     // Desk bounds for reference (not clamping during drag to allow dropping on floor)
     const halfWidth = CONFIG.desk.width / 2 - 0.2;
@@ -13302,6 +13362,22 @@ function onMouseMove(event) {
 }
 
 function onMouseUp(event) {
+  // Handle laptop lid drag end (before other handlers)
+  if (isLidDragging && lidDragState.laptop) {
+    // End lid dragging and save state
+    const laptop = lidDragState.laptop;
+    isLidDragging = false;
+    lidDragState.laptop = null;
+    lidDragState.startMouseY = 0;
+    lidDragState.startLidRotation = 0;
+
+    // Save the new lid position to state
+    if (laptop) {
+      saveState();
+    }
+    return;
+  }
+
   // Handle laptop icon drag end (before other handlers)
   if (laptopIconDragState.isDragging) {
     // End icon dragging and save state
@@ -23919,6 +23995,19 @@ function animate() {
       const land = obj.getObjectByName('land');
       if (globe) globe.rotation.y += obj.userData.rotationSpeed;
       if (land) land.rotation.y += obj.userData.rotationSpeed;
+    }
+
+    // Animate laptop lid opening/closing
+    if (obj.userData.type === 'laptop') {
+      const screenGroup = obj.getObjectByName('screenGroup');
+      if (screenGroup && obj.userData.targetLidRotation !== undefined) {
+        const diff = obj.userData.targetLidRotation - obj.userData.lidRotation;
+        if (Math.abs(diff) > 0.001) {
+          const speed = 0.15; // Smooth animation speed
+          obj.userData.lidRotation += diff * speed;
+          screenGroup.rotation.x = obj.userData.lidRotation;
+        }
+      }
     }
 
     // Animate metronome pendulum

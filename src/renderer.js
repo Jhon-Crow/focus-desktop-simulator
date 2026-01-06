@@ -8639,8 +8639,13 @@ function worldToDrawingCoords(worldPos, drawableObject) {
   const depth = baseDepth * scale;
 
   // Convert to normalized coordinates (0-1)
+  // IMPORTANT: Invert the Z-to-Y mapping because:
+  // - Camera is at +Z looking toward -Z
+  // - Mouse moving DOWN on screen goes toward -Z (away from camera)
+  // - But canvas Y should INCREASE when moving down (canvas Y=0 is at top)
+  // - So we flip: larger Z values (toward camera) map to smaller canvas Y (top)
   const normalizedX = (rotatedX / width) + 0.5;
-  const normalizedY = (rotatedZ / depth) + 0.5;
+  const normalizedY = 1.0 - ((rotatedZ / depth) + 0.5);
 
   // Convert to canvas coordinates (512x512 for drawing)
   const canvasSize = 512;

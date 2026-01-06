@@ -23005,6 +23005,12 @@ async function saveStateImmediate() {
       if (obj.userData.objectCollisionHeightMultiplier !== undefined && obj.userData.objectCollisionHeightMultiplier !== 1.0) {
         data.objectCollisionHeightMultiplier = obj.userData.objectCollisionHeightMultiplier;
       }
+      if (obj.userData.objectStackCollisionRadiusMultiplier !== undefined && obj.userData.objectStackCollisionRadiusMultiplier !== 1.0) {
+        data.objectStackCollisionRadiusMultiplier = obj.userData.objectStackCollisionRadiusMultiplier;
+      }
+      if (obj.userData.objectStackCollisionHeightMultiplier !== undefined && obj.userData.objectStackCollisionHeightMultiplier !== 1.0) {
+        data.objectStackCollisionHeightMultiplier = obj.userData.objectStackCollisionHeightMultiplier;
+      }
 
       // Save floor/fallen state (Y position is already saved above for all objects)
       if (obj.userData.isOnFloor) {
@@ -23891,6 +23897,12 @@ async function loadState() {
             }
             if (objData.objectCollisionHeightMultiplier !== undefined) {
               obj.userData.objectCollisionHeightMultiplier = objData.objectCollisionHeightMultiplier;
+            }
+            if (objData.objectStackCollisionRadiusMultiplier !== undefined) {
+              obj.userData.objectStackCollisionRadiusMultiplier = objData.objectStackCollisionRadiusMultiplier;
+            }
+            if (objData.objectStackCollisionHeightMultiplier !== undefined) {
+              obj.userData.objectStackCollisionHeightMultiplier = objData.objectStackCollisionHeightMultiplier;
             }
 
             // Restore sound-related properties for all object types (generic approach)

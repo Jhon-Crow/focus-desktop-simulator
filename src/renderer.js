@@ -9609,7 +9609,10 @@ function createCollisionHelper(object) {
 
   // Stacking radius visualization (blue/cyan - used for stacking detection)
   // Uses physics.height as stacking considers the visual height
-  const stackingGeometry = new THREE.CylinderGeometry(stackingRadius, stackingRadius, physics.height, 16, 1, true);
+  // Apply height multiplier for accurate debug visualization
+  const stackHeightMultiplier = object.userData.objectStackCollisionHeightMultiplier || 1.0;
+  const visualStackHeight = physics.height * stackHeightMultiplier;
+  const stackingGeometry = new THREE.CylinderGeometry(stackingRadius, stackingRadius, visualStackHeight, 16, 1, true);
   const stackingMaterial = new THREE.MeshBasicMaterial({
     color: 0x00aaff,
     transparent: true,
@@ -9618,7 +9621,7 @@ function createCollisionHelper(object) {
     depthWrite: false
   });
   const stackingHelper = new THREE.Mesh(stackingGeometry, stackingMaterial);
-  stackingHelper.position.y = physics.height / 2;
+  stackingHelper.position.y = visualStackHeight / 2;
   helperGroup.add(stackingHelper);
 
   // Add stacking radius ring at the base

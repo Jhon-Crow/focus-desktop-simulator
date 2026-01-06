@@ -22952,6 +22952,8 @@ async function saveStateImmediate() {
             data.firstPageAsCover = true;
           }
           data.currentPage = obj.userData.currentPage || 0;
+          // Save open/close state
+          data.isOpen = obj.userData.isOpen || false;
           break;
         case 'magazine':
           data.magazineTitle = obj.userData.magazineTitle;
@@ -22980,6 +22982,8 @@ async function saveStateImmediate() {
             data.firstPageAsCover = true;
           }
           data.currentPage = obj.userData.currentPage || 0;
+          // Save open/close state
+          data.isOpen = obj.userData.isOpen || false;
           break;
         case 'coffee':
           data.drinkType = obj.userData.drinkType;
@@ -23434,6 +23438,19 @@ async function loadState() {
                   const fitMode = obj.userData.coverFitMode || 'contain';
                   applyCoverImageWithFit(obj, objData.coverImageDataUrl, fitMode);
                 }
+                // Restore open/close state
+                if (objData.isOpen) {
+                  obj.userData.isOpen = true;
+                  const closedGroup = obj.getObjectByName('closedBook');
+                  const openGroup = obj.getObjectByName('openBook');
+                  if (closedGroup) closedGroup.visible = false;
+                  if (openGroup) {
+                    openGroup.visible = true;
+                    // Update pages to show content after PDF loads
+                    // Use setTimeout to ensure PDF loading has started
+                    setTimeout(() => updateBookPages(obj), 100);
+                  }
+                }
                 break;
               case 'magazine':
                 // Restore magazine-specific data
@@ -23517,6 +23534,19 @@ async function loadState() {
                   obj.userData.coverImageDirty = true;
                   const fitMode = obj.userData.coverFitMode || 'cover';
                   applyMagazineCoverImageWithFit(obj, objData.coverImageDataUrl, fitMode);
+                }
+                // Restore open/close state
+                if (objData.isOpen) {
+                  obj.userData.isOpen = true;
+                  const closedGroup = obj.getObjectByName('closedMagazine');
+                  const openGroup = obj.getObjectByName('openMagazine');
+                  if (closedGroup) closedGroup.visible = false;
+                  if (openGroup) {
+                    openGroup.visible = true;
+                    // Update pages to show content after PDF loads
+                    // Use setTimeout to ensure PDF loading has started
+                    setTimeout(() => updateMagazinePages(obj), 100);
+                  }
                 }
                 break;
               case 'coffee':

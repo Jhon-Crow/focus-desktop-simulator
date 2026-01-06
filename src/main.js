@@ -1639,6 +1639,21 @@ app.on('before-quit', async () => {
   if (keyboardHookProcess) {
     await stopKeyboardHook();
   }
+
+  // If other apps are muted, unmute them before quitting
+  if (otherAppsMuted && process.platform === 'win32') {
+    console.log('Unmuting other applications before quit (before-quit handler)...');
+    const baseScript = getAudioControlScriptContent();
+    const unmuteScript = baseScript + '\n[AudioManager]::UnmuteAllApps()';
+
+    try {
+      await executePowerShellScript(unmuteScript);
+      console.log('Other applications unmuted successfully (before-quit handler)');
+      otherAppsMuted = false;
+    } catch (err) {
+      console.error('Failed to unmute applications on quit (before-quit handler):', err);
+    }
+  }
 });
 
 // Store muted state for other apps
@@ -2064,6 +2079,35 @@ ipcMain.handle('set-mute-other-apps', async (event, enabled) => {
     }
   } catch (error) {
     console.error('Error setting mute other apps:', error);
+    return { success: false, error: error.message };
+  }
+});
+
+// Quit application - ensures proper cleanup before exit
+ipcMain.handle('quit-application', async () => {
+  try {
+    console.log('quit-application IPC handler called');
+
+    // If other apps are muted, unmute them before quitting
+    if (otherAppsMuted && process.platform === 'win32') {
+      console.log('Unmuting other applications before quit...');
+      const baseScript = getAudioControlScriptContent();
+      const unmuteScript = baseScript + '\n[AudioManager]::UnmuteAllApps()';
+
+      try {
+        await executePowerShellScript(unmuteScript);
+        console.log('Other applications unmuted successfully');
+      } catch (err) {
+        console.error('Failed to unmute applications on quit:', err);
+      }
+    }
+
+    // Quit the application
+    app.quit();
+
+    return { success: true };
+  } catch (error) {
+    console.error('Error quitting application:', error);
     return { success: false, error: error.message };
   }
 });

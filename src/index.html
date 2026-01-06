@@ -751,6 +751,11 @@
       font-size: 13px;
       pointer-events: none;
       transition: opacity 0.3s ease;
+      display: none; /* Hidden by default */
+    }
+
+    #instructions.visible {
+      display: block;
     }
 
     /* Clock display */
@@ -1291,8 +1296,11 @@
       <button id="log-record-btn" style="width: 100%; padding: 12px; background: rgba(34, 197, 94, 0.2); border: 1px solid rgba(34, 197, 94, 0.4); border-radius: 8px; color: #22c55e; font-size: 14px; cursor: pointer; transition: all 0.2s ease; margin-bottom: 10px;">
         📋 Start Log Recording
       </button>
-      <button id="clear-desk-btn" style="width: 100%; padding: 12px; background: rgba(239, 68, 68, 0.2); border: 1px solid rgba(239, 68, 68, 0.4); border-radius: 8px; color: #ef4444; font-size: 14px; cursor: pointer; transition: all 0.2s ease;">
+      <button id="clear-desk-btn" style="width: 100%; padding: 12px; background: rgba(239, 68, 68, 0.2); border: 1px solid rgba(239, 68, 68, 0.4); border-radius: 8px; color: #ef4444; font-size: 14px; cursor: pointer; transition: all 0.2s ease; margin-bottom: 10px;">
         🗑️ Clear All Objects
+      </button>
+      <button id="exit-app-btn" style="width: 100%; padding: 12px; background: rgba(239, 68, 68, 0.3); border: 1px solid rgba(239, 68, 68, 0.5); border-radius: 8px; color: #ef4444; font-size: 14px; cursor: pointer; transition: all 0.2s ease;">
+        🚪 Exit Application
       </button>
     </div>
 
@@ -1369,6 +1377,19 @@
             <strong>MMB on floor:</strong> Quick click returns last fallen object to table. Hold 300ms to delete with red flash.
           </p>
         </div>
+      </div>
+    </div>
+
+    <div class="menu-section">
+      <h3>Interface</h3>
+      <div style="margin-bottom: 15px;">
+        <label style="display: flex; align-items: center; color: rgba(255, 255, 255, 0.8); font-size: 13px; cursor: pointer;">
+          <input type="checkbox" id="show-control-hints-checkbox" style="margin-right: 10px; width: 18px; height: 18px; accent-color: #4f46e5; cursor: pointer;">
+          <span>Show Control Hints</span>
+        </label>
+        <p style="font-size: 11px; color: rgba(255, 255, 255, 0.5); margin-top: 4px; margin-left: 28px; line-height: 1.4;">
+          Display control hints at the bottom of the screen
+        </p>
       </div>
     </div>
   </div>

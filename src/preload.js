@@ -41,5 +41,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // Window settings
   setFullscreenBorderless: (enabled) => ipcRenderer.invoke('set-fullscreen-borderless', enabled),
   setIgnoreShortcuts: (enabled) => ipcRenderer.invoke('set-ignore-shortcuts', enabled),
-  setMuteOtherApps: (enabled) => ipcRenderer.invoke('set-mute-other-apps', enabled)
+  setMuteOtherApps: (enabled) => ipcRenderer.invoke('set-mute-other-apps', enabled),
+  // Application control
+  quitApplication: () => ipcRenderer.invoke('quit-application')
 });

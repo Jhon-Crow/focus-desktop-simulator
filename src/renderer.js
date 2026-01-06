@@ -11651,6 +11651,36 @@ function setupEventListeners() {
     }
   });
 
+  // Exit Application button
+  document.getElementById('exit-app-btn').addEventListener('click', async () => {
+    if (confirm('Are you sure you want to exit the application? The current state will be saved and sound settings will be restored.')) {
+      activityLog.add('USER_ACTION', 'Exit application confirmed');
+
+      try {
+        // First, unmute other applications if they are muted
+        const muteOtherAppsCheckbox = document.getElementById('mute-other-apps-checkbox');
+        if (muteOtherAppsCheckbox && muteOtherAppsCheckbox.checked) {
+          console.log('Unchecking mute other apps before exit');
+          muteOtherAppsCheckbox.checked = false;
+          // Trigger the change event to actually unmute
+          await window.electronAPI.setMuteOtherApps(false);
+        }
+
+        // Save the current state before exiting (now with muteOtherApps: false)
+        await saveStateImmediate();
+        console.log('State saved before exit');
+
+        // Quit the application
+        await window.electronAPI.quitApplication();
+      } catch (error) {
+        console.error('Error during application exit:', error);
+        alert('Failed to properly exit the application. Please try again or close the window manually.');
+      }
+    } else {
+      activityLog.add('USER_ACTION', 'Exit application canceled');
+    }
+  });
+
   // Window Settings - Fullscreen Borderless Mode
   const fullscreenBorderlessCheckbox = document.getElementById('fullscreen-borderless-checkbox');
   if (fullscreenBorderlessCheckbox) {
@@ -11750,6 +11780,25 @@ function setupEventListeners() {
         e.target.checked = !enabled;
         alert('Error setting mute other apps: ' + error.message);
       }
+    });
+  }
+
+  // Interface Settings - Show Control Hints
+  const showControlHintsCheckbox = document.getElementById('show-control-hints-checkbox');
+  const instructionsElement = document.getElementById('instructions');
+  if (showControlHintsCheckbox && instructionsElement) {
+    showControlHintsCheckbox.addEventListener('change', (e) => {
+      const enabled = e.target.checked;
+      activityLog.add('USER_ACTION', 'Show control hints toggled', { enabled });
+
+      if (enabled) {
+        instructionsElement.classList.add('visible');
+      } else {
+        instructionsElement.classList.remove('visible');
+      }
+
+      // Save state to persist setting across restarts
+      saveState();
     });
   }
 
@@ -23331,7 +23380,8 @@ async function saveStateImmediate() {
     windowSettings: {
       fullscreenBorderless: document.getElementById('fullscreen-borderless-checkbox')?.checked || false,
       ignoreShortcuts: document.getElementById('ignore-shortcuts-checkbox')?.checked || false,
-      muteOtherApps: document.getElementById('mute-other-apps-checkbox')?.checked || false
+      muteOtherApps: document.getElementById('mute-other-apps-checkbox')?.checked || false,
+      showControlHints: document.getElementById('show-control-hints-checkbox')?.checked || false
     }
   };
 
@@ -23420,6 +23470,19 @@ async function loadState() {
             window.electronAPI.setMuteOtherApps(true).catch(err => {
               console.error('Failed to restore mute other apps:', err);
             });
+          }
+        }
+
+        // Restore show control hints checkbox state and apply setting
+        const showControlHintsCheckbox = document.getElementById('show-control-hints-checkbox');
+        const instructionsElement = document.getElementById('instructions');
+        if (showControlHintsCheckbox && instructionsElement && savedSettings.showControlHints !== undefined) {
+          showControlHintsCheckbox.checked = savedSettings.showControlHints;
+          // Apply the setting
+          if (savedSettings.showControlHints) {
+            instructionsElement.classList.add('visible');
+          } else {
+            instructionsElement.classList.remove('visible');
           }
         }
       }

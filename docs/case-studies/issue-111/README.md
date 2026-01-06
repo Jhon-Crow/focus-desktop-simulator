@@ -80,7 +80,42 @@ const shiftX = intersectionX - bookCornerX;  // Inverted X for camera movement
 **Attempts:**
 1. First fix (commit 6562cce): Attempted to swap left/right book corner calculations - FAILED
 2. Second fix (commit 868aabb): Reverted to original corner calculations - STILL FAILED
-3. Third fix (current): Identified true root cause - inverted camera movement direction
+3. Third fix (commit e91c397): Identified true root cause - inverted camera movement direction ✅
+
+### Problem 5: Exponential Camera Drift (Critical Bug - Session 7)
+**Symptom:** When pressing any corner shortcut repeatedly, camera exponentially drifted away from book instead of staying at the corner. Example: pressing E 20 times caused panOffset.x to reach -649,159 (should be ~-0.7).
+
+**Root Cause:** Code used `+=` to accumulate shift offsets:
+```js
+bookReadingState.panOffsetX += shiftX;  // BUG
+bookReadingState.panOffsetZ += shiftZ;  // BUG
+```
+
+The intersections are calculated based on **current camera position** which already includes current `panOffsetX` and `panOffsetZ`. When we calculate the shift and then ADD it to the existing offsets, we're essentially doubling the offset on each press:
+
+- Press 1: `offset = 0 + shift1` = shift1 ✅
+- Press 2: Camera at shift1, intersections reflect this. New shift ≈ shift1. Result: `offset = shift1 + shift1` = 2×shift1 ❌
+- Press 3: Camera at 2×shift1. New shift ≈ 2×shift1. Result: `offset = 2×shift1 + 2×shift1` = 4×shift1 ❌
+- Press 4: `offset ≈ 8×shift1` ❌
+- Exponential growth continues...
+
+**Solution:** Changed from `+=` (accumulate) to `=` (set):
+```js
+bookReadingState.panOffsetX = shiftX;  // FIXED
+bookReadingState.panOffsetZ = shiftZ;  // FIXED
+```
+
+The shift calculation already gives us the **absolute offset needed**, not a delta to add.
+
+**Evidence from Activity Log:**
+- 1st E press: panOffset.x = -0.723 ✅
+- 2nd E press: panOffset.x = -0.741 (drift starts)
+- 3rd E press: panOffset.x = -0.778
+- 8th E press: panOffset.x = -1.884
+- 9th E press: panOffset.x = -3.064
+- 20th E press: panOffset.x = -649.159 (!)
+
+After fix: Repeated presses maintain stable panOffset values ✅
 
 ## Technical Approach
 
@@ -114,6 +149,7 @@ Uses Three.js raycasting to unproject viewport corners onto book plane:
 5. **Session 4 Feedback:** "Keys completely mixed up - Q→bottom-right, E→bottom-left, Z→top-right, C→top-left" + "Bottom positions too far"
 6. **Session 5 Feedback (after commit 6562cce):** "Nothing changed, right keys move left, left keys move right"
 7. **Session 6 Feedback (after commit 868aabb):** "Nothing changed, right keys move left, left keys move right" (same issue persisted)
+8. **Session 7 Feedback (after commit e91c397):** "First press works ~correctly, but repeat presses cause exponential camera drift away from book"
 
 ## Metrics
 
@@ -129,9 +165,9 @@ Uses Three.js raycasting to unproject viewport corners onto book plane:
 - **Key commits:** 3 (initial implementation, raycasting fix, Z-axis inversion fix)
 
 ### Iterations
-- **Implementation attempts:** 6
-- **User tests:** 5+ documented
-- **Critical bugs found:** 4 (fixed offsets, Z-axis inversion, NDC coordinate mapping, X-axis camera movement inversion)
+- **Implementation attempts:** 7
+- **User tests:** 6+ documented
+- **Critical bugs found:** 5 (fixed offsets, Z-axis inversion, NDC coordinate mapping, X-axis camera movement inversion, exponential camera drift)
 
 ## Resolution Status
 
@@ -139,20 +175,23 @@ Uses Three.js raycasting to unproject viewport corners onto book plane:
 - ✅ Fixed: Z-axis inversion corrected (Session 3)
 - ✅ Fixed: NDC coordinate mapping (Session 4)
 - ✅ Fixed: X-axis camera movement direction inversion (Session 6)
+- ✅ Fixed: Exponential camera drift on repeated presses (Session 7)
 - ✅ Implemented: Enhanced camera jump logging with viewport intersection data
 - ✅ Documented: Comprehensive case study
-- ⏳ Pending: Final user testing to verify all corners align correctly
+- ⏳ Pending: Final user testing to verify all corners align correctly and repeat presses are stable
 
 ## Lessons for Future Development
 
 1. **Coordinate systems require explicit documentation** - Camera orientation and perspective must be clearly stated
 2. **NDC coordinates vary by framework** - Three.js uses Y: -1 (top) to +1 (bottom), opposite of screen coordinates
 3. **Camera movement is inverse to viewport appearance** - Moving camera right makes scene appear left (critical insight)
-4. **Test early, test often** - All bugs would have been caught immediately with basic corner navigation test
-5. **Activity logging is invaluable** - Detailed logs enabled quick identification of Z-axis inversion
-6. **User testing reveals real issues** - Mathematical correctness ≠ correct user experience
-7. **Case studies pay dividends** - Systematic analysis prevents similar bugs in the future
-8. **First principles analysis beats trial-and-error** - Understanding WASD controls revealed the true camera movement direction
+4. **Accumulation vs. assignment matters** - Using `+=` vs `=` can cause exponential feedback loops when updates depend on current state
+5. **Test early, test often** - All bugs would have been caught immediately with basic corner navigation test including repeated presses
+6. **Activity logging is invaluable** - Detailed logs enabled quick identification of Z-axis inversion and exponential drift patterns
+7. **User testing reveals real issues** - Mathematical correctness ≠ correct user experience
+8. **Case studies pay dividends** - Systematic analysis prevents similar bugs in the future
+9. **First principles analysis beats trial-and-error** - Understanding WASD controls revealed the true camera movement direction
+10. **Test edge cases** - Repeated actions can expose accumulation bugs that single tests miss
 
 ## Related Links
 

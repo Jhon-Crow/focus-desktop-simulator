@@ -11495,7 +11495,11 @@ function setupEventListeners() {
     }
 
     // Quick navigation shortcuts in reading mode: Q, E, Z, C
-    // Q - top of left page, E - top of right page, Z - bottom of left page, C - bottom of right page
+    // Aligns book corners with screen corners regardless of zoom level
+    // Q - top-left corner of book at top-left corner of screen
+    // E - top-right corner of book at top-right corner of screen
+    // Z - bottom-left corner of book at bottom-left corner of screen
+    // C - bottom-right corner of book at bottom-right corner of screen
     const quickNavKey = e.code;
     if (quickNavKey === 'KeyQ' || quickNavKey === 'KeyE' || quickNavKey === 'KeyZ' || quickNavKey === 'KeyC') {
       // Don't process if typing in an input field
@@ -11506,37 +11510,62 @@ function setupEventListeners() {
         e.preventDefault();
         const bookWorldPos = bookReadingState.bookWorldPos;
 
-        // Standard book page width offset (approximate half-width of each page)
-        const pageWidth = 0.15; // Half of typical book width for left/right pages
+        // Calculate visible area based on camera FOV, zoom distance, and aspect ratio
+        // This ensures book corners align with screen corners at any zoom level
+        const zoomDist = bookReadingState.zoomDistance;
+        const fovRad = THREE.MathUtils.degToRad(camera.fov);
 
-        // Vertical positions: top (negative Z offset) and bottom (positive Z offset)
-        const topOffset = -0.8;    // Top of page
-        const bottomOffset = 0.8;  // Bottom of page
+        // Visible height at the book plane (camera looking down)
+        // The camera is at height = bookY + zoomDist, looking at bookY
+        // But there's also a Z offset of 0.65, so the actual viewing angle is tilted
+        // For simplicity, we use the vertical distance (zoomDist) as the primary factor
+        const visibleHeight = 2 * Math.tan(fovRad / 2) * zoomDist;
+        const visibleWidth = visibleHeight * camera.aspect;
+
+        // Book dimensions when open (two pages side by side)
+        // Each page is 0.28 wide, so open book is ~0.56 wide (0.28 * 2)
+        // Book depth is 0.38
+        const bookType = bookReadingState.book.userData.type;
+        let bookHalfWidth, bookHalfDepth;
+
+        if (bookType === 'magazine') {
+          // Magazine: 0.22 x 0.30 closed, open width is ~0.44
+          bookHalfWidth = 0.22; // Half of open magazine width
+          bookHalfDepth = 0.15; // Half of magazine depth
+        } else {
+          // Book: 0.28 x 0.38 closed, open width is ~0.56
+          bookHalfWidth = 0.28; // Half of open book width
+          bookHalfDepth = 0.19; // Half of book depth
+        }
+
+        // Calculate offsets to align book corners with screen corners
+        // Offset = (halfVisibleArea - halfBookDimension)
+        // This positions the camera so the book corner is at the screen corner
+        const xOffsetLeft = -(visibleWidth / 2 - bookHalfWidth);  // Move camera left
+        const xOffsetRight = (visibleWidth / 2 - bookHalfWidth);  // Move camera right
+        const zOffsetTop = -(visibleHeight / 2 - bookHalfDepth);  // Move camera toward top (negative Z)
+        const zOffsetBottom = (visibleHeight / 2 - bookHalfDepth); // Move camera toward bottom (positive Z)
 
         // Apply the quick navigation based on key pressed
         if (quickNavKey === 'KeyQ') {
-          // Q - top of left page
-          bookReadingState.panOffsetX = -pageWidth;
-          bookReadingState.panOffsetZ = topOffset;
+          // Q - top-left corner of book at top-left corner of screen
+          bookReadingState.panOffsetX = xOffsetLeft;
+          bookReadingState.panOffsetZ = zOffsetTop;
         } else if (quickNavKey === 'KeyE') {
-          // E - top of right page
-          bookReadingState.panOffsetX = pageWidth;
-          bookReadingState.panOffsetZ = topOffset;
+          // E - top-right corner of book at top-right corner of screen
+          bookReadingState.panOffsetX = xOffsetRight;
+          bookReadingState.panOffsetZ = zOffsetTop;
         } else if (quickNavKey === 'KeyZ') {
-          // Z - bottom of left page
-          bookReadingState.panOffsetX = -pageWidth;
-          bookReadingState.panOffsetZ = bottomOffset;
+          // Z - bottom-left corner of book at bottom-left corner of screen
+          bookReadingState.panOffsetX = xOffsetLeft;
+          bookReadingState.panOffsetZ = zOffsetBottom;
         } else if (quickNavKey === 'KeyC') {
-          // C - bottom of right page
-          bookReadingState.panOffsetX = pageWidth;
-          bookReadingState.panOffsetZ = bottomOffset;
+          // C - bottom-right corner of book at bottom-right corner of screen
+          bookReadingState.panOffsetX = xOffsetRight;
+          bookReadingState.panOffsetZ = zOffsetBottom;
         }
 
-        // Clamp pan offsets to reasonable limits (same as WASD controls)
-        bookReadingState.panOffsetX = Math.max(-1.5, Math.min(1.5, bookReadingState.panOffsetX));
-        bookReadingState.panOffsetZ = Math.max(-1.5, Math.min(1.5, bookReadingState.panOffsetZ));
-
-        // Update camera position
+        // Update camera position (no clamping - allow full corner navigation)
         camera.position.set(
           bookWorldPos.x + bookReadingState.panOffsetX,
           bookWorldPos.y + bookReadingState.zoomDistance,

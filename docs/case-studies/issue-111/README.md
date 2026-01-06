@@ -42,16 +42,37 @@ This case study documents the implementation and debugging process for adding qu
 **Solution:** Swapped Z-coordinate calculations for top/bottom corners
 **Details:** See `root-cause-analysis.md`
 
-### Problem 3: Top-Left Corner Slightly Off
-**Symptom:** Top-left corner alignment "slightly lower than needed"
-**Status:** Identified but not yet fixed (requires verification after main fix)
+### Problem 3: Completely Reversed Key Mapping (Critical Bug - Session 4)
+**Symptom:** All keys mapped to opposite corners:
+- Q (top-left) → went to bottom-right
+- E (top-right) → went to bottom-left
+- Z (bottom-left) → went to top-right
+- C (bottom-right) → went to top-left
+
+**Cause:** Incorrect NDC (Normalized Device Coordinates) interpretation. Three.js uses Y: -1 for top and Y: +1 for bottom, opposite of typical screen coordinates.
+
+**Solution:** Fixed viewport corner definitions:
+- Top-left: `(-1, -1)` not `(-1, +1)`
+- Top-right: `(+1, -1)` not `(+1, +1)`
+- Bottom-left: `(-1, +1)` not `(-1, -1)`
+- Bottom-right: `(+1, +1)` not `(+1, -1)`
+
+### Problem 4: Bottom Positions Too Far (Under Investigation)
+**Symptom:** When navigating to bottom corners, camera position is too far from book
+**Possible Cause:** Camera look-at point offset (bookWorldPos.y + 0.03) not accounted for
+**Status:** May be resolved by NDC fix; enhanced logging added for diagnosis
 
 ## Technical Approach
 
 ### Raycasting Solution
 Uses Three.js raycasting to unproject viewport corners onto book plane:
 
-1. Define viewport corners in NDC: (-1,1), (1,1), (-1,-1), (1,-1)
+1. Define viewport corners in NDC (Normalized Device Coordinates):
+   - Top-left: `(-1, -1)` (left + top)
+   - Top-right: `(+1, -1)` (right + top)
+   - Bottom-left: `(-1, +1)` (left + bottom)
+   - Bottom-right: `(+1, +1)` (right + bottom)
+   - Note: In Three.js, Y: -1 is top, Y: +1 is bottom
 2. Create horizontal plane at book's Y level
 3. Cast rays from camera through viewport corners
 4. Find intersection points on book plane
@@ -70,6 +91,7 @@ Uses Three.js raycasting to unproject viewport corners onto book plane:
 2. **Session 2 Feedback:** "Controls inverted - buttons for bottom corners go up, buttons for top corners go down"
 3. **Session 2 Positive:** "Top positions practically ideal (top-left slightly low)"
 4. **Session 3 Request:** "Create case study with timeline, root cause analysis, and data compilation"
+5. **Session 4 Feedback:** "Keys completely mixed up - Q→bottom-right, E→bottom-left, Z→top-right, C→top-left" + "Bottom positions too far"
 
 ## Metrics
 
@@ -85,21 +107,25 @@ Uses Three.js raycasting to unproject viewport corners onto book plane:
 - **Key commits:** 3 (initial implementation, raycasting fix, Z-axis inversion fix)
 
 ### Iterations
-- **Implementation attempts:** 3
-- **User tests:** 2 documented activity logs
-- **Critical bugs found:** 2 (fixed offsets, Z-axis inversion)
+- **Implementation attempts:** 4
+- **User tests:** 3 documented (2 activity logs from previous sessions, 1 in Session 4)
+- **Critical bugs found:** 3 (fixed offsets, Z-axis inversion, NDC coordinate mapping)
 
 ## Resolution Status
 
 - ✅ Fixed: Navigation shortcuts functional
 - ✅ Fixed: Z-axis inversion corrected
-- ✅ Implemented: Camera jump logging
+- ✅ Fixed: NDC coordinate mapping (Session 4)
+- ✅ Implemented: Enhanced camera jump logging with viewport intersection data
 - ✅ Documented: Comprehensive case study
+- ⏳ Pending: Verify "bottom positions too far" is resolved by NDC fix
 - ⏳ Pending: Minor top-left corner alignment fine-tuning (if needed after testing)
 
 ## Lessons for Future Development
 
 1. **Coordinate systems require explicit documentation** - Camera orientation and perspective must be clearly stated
+2. **NDC coordinates vary by framework** - Three.js uses Y: -1 (top) to +1 (bottom), opposite of screen coordinates
+3. **Test early, test often** - NDC bug would have been caught immediately with basic corner navigation test
 2. **Activity logging is invaluable** - Detailed logs enabled quick identification of Z-axis inversion
 3. **User testing reveals real issues** - Mathematical correctness ≠ correct user experience
 4. **Case studies pay dividends** - Systematic analysis prevents similar bugs in the future

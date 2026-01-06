@@ -1,7 +1,0 @@
-Issue to solve: https://github.com/Jhon-Crow/focus-desktop-simulator/issues/111
-Your prepared branch: issue-111-019dca2841ef
-Your prepared working directory: /tmp/gh-issue-solver-1767710912154
-Your forked repository: konard/Jhon-Crow-focus-desktop-simulator
-Original repository (upstream): Jhon-Crow/focus-desktop-simulator
-
-Proceed.

@@ -11518,13 +11518,14 @@ function setupEventListeners() {
         const bookPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), -bookY);
 
         // Unproject the four corners of the viewport to find where they hit the book plane
-        // Viewport corners in NDC: top-left (-1,1), top-right (1,1), bottom-left (-1,-1), bottom-right (1,-1)
+        // Viewport corners in NDC (Normalized Device Coordinates):
+        // In Three.js NDC: X: -1 (left) to +1 (right), Y: -1 (top) to +1 (bottom)
         const raycaster = new THREE.Raycaster();
         const corners = [
-          new THREE.Vector2(-1, 1),  // top-left
-          new THREE.Vector2(1, 1),   // top-right
-          new THREE.Vector2(-1, -1), // bottom-left
-          new THREE.Vector2(1, -1)   // bottom-right
+          new THREE.Vector2(-1, -1), // top-left (left + top)
+          new THREE.Vector2(1, -1),  // top-right (right + top)
+          new THREE.Vector2(-1, 1),  // bottom-left (left + bottom)
+          new THREE.Vector2(1, 1)    // bottom-right (right + bottom)
         ];
 
         const intersections = corners.map(corner => {
@@ -11537,10 +11538,10 @@ function setupEventListeners() {
         // Calculate the bounds of the visible area on the book plane
         // intersections[0] = top-left, intersections[1] = top-right
         // intersections[2] = bottom-left, intersections[3] = bottom-right
-        const minX = Math.min(intersections[0].x, intersections[2].x);
-        const maxX = Math.max(intersections[1].x, intersections[3].x);
-        const minZ = Math.min(intersections[0].z, intersections[1].z);
-        const maxZ = Math.max(intersections[2].z, intersections[3].z);
+        const minX = Math.min(intersections[0].x, intersections[2].x);  // left side
+        const maxX = Math.max(intersections[1].x, intersections[3].x);  // right side
+        const minZ = Math.min(intersections[2].z, intersections[3].z);  // bottom (smaller Z)
+        const maxZ = Math.max(intersections[0].z, intersections[1].z);  // top (larger Z)
 
         const visibleWidth = maxX - minX;
         const visibleHeight = maxZ - minZ;  // Using Z for "height" since book is on XZ plane

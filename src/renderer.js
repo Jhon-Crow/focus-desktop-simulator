@@ -11493,6 +11493,59 @@ function setupEventListeners() {
         camera.position.y = Math.max(1, Math.min(8, camera.position.y));
       }
     }
+
+    // Quick navigation shortcuts in reading mode: Q, E, Z, C
+    // Q - top of left page, E - top of right page, Z - bottom of left page, C - bottom of right page
+    const quickNavKey = e.code;
+    if (quickNavKey === 'KeyQ' || quickNavKey === 'KeyE' || quickNavKey === 'KeyZ' || quickNavKey === 'KeyC') {
+      // Don't process if typing in an input field
+      if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
+
+      // Only works in reading mode
+      if (bookReadingState.active && bookReadingState.book && bookReadingState.bookWorldPos) {
+        e.preventDefault();
+        const bookWorldPos = bookReadingState.bookWorldPos;
+
+        // Standard book page width offset (approximate half-width of each page)
+        const pageWidth = 0.15; // Half of typical book width for left/right pages
+
+        // Vertical positions: top (negative Z offset) and bottom (positive Z offset)
+        const topOffset = -0.8;    // Top of page
+        const bottomOffset = 0.8;  // Bottom of page
+
+        // Apply the quick navigation based on key pressed
+        if (quickNavKey === 'KeyQ') {
+          // Q - top of left page
+          bookReadingState.panOffsetX = -pageWidth;
+          bookReadingState.panOffsetZ = topOffset;
+        } else if (quickNavKey === 'KeyE') {
+          // E - top of right page
+          bookReadingState.panOffsetX = pageWidth;
+          bookReadingState.panOffsetZ = topOffset;
+        } else if (quickNavKey === 'KeyZ') {
+          // Z - bottom of left page
+          bookReadingState.panOffsetX = -pageWidth;
+          bookReadingState.panOffsetZ = bottomOffset;
+        } else if (quickNavKey === 'KeyC') {
+          // C - bottom of right page
+          bookReadingState.panOffsetX = pageWidth;
+          bookReadingState.panOffsetZ = bottomOffset;
+        }
+
+        // Clamp pan offsets to reasonable limits (same as WASD controls)
+        bookReadingState.panOffsetX = Math.max(-1.5, Math.min(1.5, bookReadingState.panOffsetX));
+        bookReadingState.panOffsetZ = Math.max(-1.5, Math.min(1.5, bookReadingState.panOffsetZ));
+
+        // Update camera position
+        camera.position.set(
+          bookWorldPos.x + bookReadingState.panOffsetX,
+          bookWorldPos.y + bookReadingState.zoomDistance,
+          bookWorldPos.z + 0.65 + bookReadingState.panOffsetZ
+        );
+
+        return;
+      }
+    }
   });
 
   // Window resize

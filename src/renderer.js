@@ -11477,6 +11477,8 @@ function setupEventListeners() {
             // Use correct page turn function based on type
             if (book.userData.type === 'magazine') {
               animateMagazinePageTurn(book, -1);
+            } else if (book.userData.type === 'document') {
+              animateDocumentPageTurn(book, -1);
             } else {
               animatePageTurn(book, -1);
             }
@@ -11485,6 +11487,8 @@ function setupEventListeners() {
             // Use correct page turn function based on type
             if (book.userData.type === 'magazine') {
               animateMagazinePageTurn(book, 1);
+            } else if (book.userData.type === 'document') {
+              animateDocumentPageTurn(book, 1);
             } else {
               animatePageTurn(book, 1);
             }
@@ -11514,22 +11518,22 @@ function setupEventListeners() {
 
       // Page navigation (only ArrowLeft/ArrowRight, not in reading mode)
       if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
-        // Check if we're examining a book/magazine or have a book/magazine modal open
+        // Check if we're examining a book/magazine/document or have a book/magazine/document modal open
         let bookObject = null;
         if (examineState.active && examineState.object &&
-            (examineState.object.userData.type === 'books' || examineState.object.userData.type === 'magazine')) {
+            (examineState.object.userData.type === 'books' || examineState.object.userData.type === 'magazine' || examineState.object.userData.type === 'document')) {
           bookObject = examineState.object;
         } else if (interactionObject &&
-            (interactionObject.userData.type === 'books' || interactionObject.userData.type === 'magazine')) {
+            (interactionObject.userData.type === 'books' || interactionObject.userData.type === 'magazine' || interactionObject.userData.type === 'document')) {
           bookObject = interactionObject;
         } else {
-          // Also check if crosshair is aimed at a book/magazine (raycast from center of screen)
+          // Also check if crosshair is aimed at a book/magazine/document (raycast from center of screen)
           const centerMouse = new THREE.Vector2(0, 0);
           raycaster.setFromCamera(centerMouse, camera);
           const intersects = raycaster.intersectObjects(deskObjects, true);
           for (const hit of intersects) {
             const obj = getParentDeskObject(hit.object);
-            if (obj && (obj.userData.type === 'books' || obj.userData.type === 'magazine') && obj.userData.isOpen) {
+            if (obj && (obj.userData.type === 'books' || obj.userData.type === 'magazine' || obj.userData.type === 'document') && obj.userData.isOpen) {
               bookObject = obj;
               break;
             }
@@ -11544,6 +11548,8 @@ function setupEventListeners() {
             // Previous page with animation
             if (bookObject.userData.type === 'magazine') {
               animateMagazinePageTurn(bookObject, -1);
+            } else if (bookObject.userData.type === 'document') {
+              animateDocumentPageTurn(bookObject, -1);
             } else {
               animatePageTurn(bookObject, -1);
             }
@@ -11553,6 +11559,8 @@ function setupEventListeners() {
             if (!bookObject.userData.totalPages) bookObject.userData.totalPages = 10;
             if (bookObject.userData.type === 'magazine') {
               animateMagazinePageTurn(bookObject, 1);
+            } else if (bookObject.userData.type === 'document') {
+              animateDocumentPageTurn(bookObject, 1);
             } else {
               animatePageTurn(bookObject, 1);
             }
@@ -13960,10 +13968,12 @@ function onMouseUp(event) {
       clearTimeout(bookReadingState.holdTimeout);
       bookReadingState.holdTimeout = null;
 
-      // Quick click on book/magazine - toggle open/close
+      // Quick click on book/magazine/document - toggle open/close
       if (bookReadingState.book) {
         if (bookReadingState.book.userData.type === 'magazine') {
           toggleMagazineOpen(bookReadingState.book);
+        } else if (bookReadingState.book.userData.type === 'document') {
+          toggleDocumentOpen(bookReadingState.book);
         } else {
           toggleBookOpen(bookReadingState.book);
         }
@@ -15194,6 +15204,15 @@ function updateCustomizationPanel(object) {
             <div style="color: rgba(255,255,255,0.4); font-size: 11px;">
               Supported formats: DOC, DOCX, RTF
             </div>
+          </div>
+        </div>
+        <div class="customization-group" style="margin-top: 15px;">
+          <label>Render Resolution: <span id="document-resolution-display">${object.userData.docResolution || 512}px</span></label>
+          <input type="range" id="document-resolution" min="384" max="1536" step="128" value="${object.userData.docResolution || 512}"
+                 style="width: 100%; margin-top: 8px; accent-color: #4f46e5;">
+          <div style="display: flex; justify-content: space-between; color: rgba(255,255,255,0.4); font-size: 10px; margin-top: 4px;">
+            <span>Fast</span>
+            <span>Quality</span>
           </div>
         </div>
       `;
@@ -22480,6 +22499,29 @@ function setupDocumentCustomizationHandlers(object) {
       });
     } else {
       console.error('[DOC-UPLOAD-EDIT] Elements NOT FOUND - button:', !!docEditBtn, ', input:', !!docEditInput);
+    }
+
+    // Resolution slider handler
+    const resolutionSlider = document.getElementById('document-resolution');
+    const resolutionDisplay = document.getElementById('document-resolution-display');
+    if (resolutionSlider && resolutionDisplay) {
+      resolutionSlider.value = object.userData.docResolution || 512;
+      resolutionDisplay.textContent = (object.userData.docResolution || 512) + 'px';
+
+      resolutionSlider.addEventListener('input', (e) => {
+        const newRes = parseInt(e.target.value);
+        resolutionDisplay.textContent = newRes + 'px';
+        object.userData.docResolution = newRes;
+        saveState();
+      });
+
+      // Re-render pages on change (when user releases slider)
+      resolutionSlider.addEventListener('change', () => {
+        // Re-render document pages with new resolution
+        if (object.userData.isOpen && object.userData.docHtmlContent) {
+          updateDocumentPagesWithContent(object);
+        }
+      });
     }
   }, 0);
 }

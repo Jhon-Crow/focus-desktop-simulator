@@ -2111,3 +2111,423 @@ ipcMain.handle('quit-application', async () => {
     return { success: false, error: error.message };
   }
 });
+
+// ============================================================================
+// EXTENSIBILITY - Custom Models, Editor, and Laptop Programs
+// ============================================================================
+
+// Get the extensibility data directory path
+function getExtensibilityDir() {
+  const userDataPath = app.getPath('userData');
+  const extDir = path.join(userDataPath, 'extensibility');
+
+  // Ensure directories exist
+  const modelsDir = path.join(extDir, 'models');
+  const programsDir = path.join(extDir, 'programs');
+
+  if (!fs.existsSync(modelsDir)) {
+    fs.mkdirSync(modelsDir, { recursive: true });
+  }
+  if (!fs.existsSync(programsDir)) {
+    fs.mkdirSync(programsDir, { recursive: true });
+  }
+
+  return {
+    base: extDir,
+    models: modelsDir,
+    programs: programsDir
+  };
+}
+
+// Select and load a custom model JSON file
+ipcMain.handle('ext-select-model-file', async () => {
+  try {
+    const result = await dialog.showOpenDialog(mainWindow, {
+      properties: ['openFile'],
+      title: 'Select Custom Model File',
+      filters: [
+        { name: 'JSON Files', extensions: ['json'] }
+      ]
+    });
+
+    if (result.canceled || result.filePaths.length === 0) {
+      return { success: true, canceled: true };
+    }
+
+    const filePath = result.filePaths[0];
+    const content = fs.readFileSync(filePath, 'utf8');
+
+    // Parse and validate JSON
+    let modelData;
+    try {
+      modelData = JSON.parse(content);
+    } catch (parseErr) {
+      return { success: false, error: 'Invalid JSON file: ' + parseErr.message };
+    }
+
+    // Validate required fields
+    if (!modelData.id) {
+      return { success: false, error: 'Model must have an "id" field' };
+    }
+    if (!modelData.name) {
+      return { success: false, error: 'Model must have a "name" field' };
+    }
+
+    // Copy to models directory
+    const dirs = getExtensibilityDir();
+    const destPath = path.join(dirs.models, `${modelData.id}.json`);
+    fs.writeFileSync(destPath, content, 'utf8');
+
+    return {
+      success: true,
+      model: modelData,
+      filePath: destPath
+    };
+  } catch (error) {
+    console.error('Error selecting model file:', error);
+    return { success: false, error: error.message };
+  }
+});
+
+// Select a folder and load all model JSON files from it
+ipcMain.handle('ext-select-model-folder', async () => {
+  try {
+    const result = await dialog.showOpenDialog(mainWindow, {
+      properties: ['openDirectory'],
+      title: 'Select Custom Models Folder'
+    });
+
+    if (result.canceled || result.filePaths.length === 0) {
+      return { success: true, canceled: true };
+    }
+
+    const folderPath = result.filePaths[0];
+    const dirs = getExtensibilityDir();
+    const models = [];
+    const errors = [];
+
+    // Find all JSON files in the folder
+    const files = fs.readdirSync(folderPath);
+    for (const file of files) {
+      if (!file.endsWith('.json')) continue;
+
+      const filePath = path.join(folderPath, file);
+      try {
+        const content = fs.readFileSync(filePath, 'utf8');
+        const modelData = JSON.parse(content);
+
+        if (!modelData.id || !modelData.name) {
+          errors.push(`${file}: Missing required fields (id, name)`);
+          continue;
+        }
+
+        // Copy to models directory
+        const destPath = path.join(dirs.models, `${modelData.id}.json`);
+        fs.writeFileSync(destPath, content, 'utf8');
+
+        models.push(modelData);
+      } catch (err) {
+        errors.push(`${file}: ${err.message}`);
+      }
+    }
+
+    return {
+      success: true,
+      models: models,
+      errors: errors.length > 0 ? errors : null
+    };
+  } catch (error) {
+    console.error('Error selecting model folder:', error);
+    return { success: false, error: error.message };
+  }
+});
+
+// Load all saved custom models
+ipcMain.handle('ext-load-models', async () => {
+  try {
+    const dirs = getExtensibilityDir();
+    const models = [];
+
+    const files = fs.readdirSync(dirs.models);
+    for (const file of files) {
+      if (!file.endsWith('.json')) continue;
+
+      try {
+        const content = fs.readFileSync(path.join(dirs.models, file), 'utf8');
+        const modelData = JSON.parse(content);
+        models.push(modelData);
+      } catch (err) {
+        console.warn('Failed to load model:', file, err.message);
+      }
+    }
+
+    return { success: true, models: models };
+  } catch (error) {
+    console.error('Error loading models:', error);
+    return { success: false, error: error.message };
+  }
+});
+
+// Delete a custom model
+ipcMain.handle('ext-delete-model', async (event, modelId) => {
+  try {
+    const dirs = getExtensibilityDir();
+    const filePath = path.join(dirs.models, `${modelId}.json`);
+
+    if (fs.existsSync(filePath)) {
+      fs.unlinkSync(filePath);
+    }
+
+    return { success: true };
+  } catch (error) {
+    console.error('Error deleting model:', error);
+    return { success: false, error: error.message };
+  }
+});
+
+// Save a model from the editor
+ipcMain.handle('ext-save-model', async (event, modelData) => {
+  try {
+    // Validate required fields
+    if (!modelData.id) {
+      return { success: false, error: 'Model must have an "id" field' };
+    }
+    if (!modelData.name) {
+      return { success: false, error: 'Model must have a "name" field' };
+    }
+
+    const dirs = getExtensibilityDir();
+    const filePath = path.join(dirs.models, `${modelData.id}.json`);
+    fs.writeFileSync(filePath, JSON.stringify(modelData, null, 2), 'utf8');
+
+    return { success: true, filePath: filePath };
+  } catch (error) {
+    console.error('Error saving model:', error);
+    return { success: false, error: error.message };
+  }
+});
+
+// Export a model to user-selected location
+ipcMain.handle('ext-export-model', async (event, modelData) => {
+  try {
+    const result = await dialog.showSaveDialog(mainWindow, {
+      title: 'Export Model',
+      defaultPath: `${modelData.id || 'custom-model'}.json`,
+      filters: [
+        { name: 'JSON Files', extensions: ['json'] }
+      ]
+    });
+
+    if (result.canceled || !result.filePath) {
+      return { success: true, canceled: true };
+    }
+
+    fs.writeFileSync(result.filePath, JSON.stringify(modelData, null, 2), 'utf8');
+
+    return { success: true, filePath: result.filePath };
+  } catch (error) {
+    console.error('Error exporting model:', error);
+    return { success: false, error: error.message };
+  }
+});
+
+// Select and load a custom program (HTML folder with manifest.json)
+ipcMain.handle('ext-select-program', async () => {
+  try {
+    const result = await dialog.showOpenDialog(mainWindow, {
+      properties: ['openDirectory'],
+      title: 'Select Program Folder (must contain manifest.json)'
+    });
+
+    if (result.canceled || result.filePaths.length === 0) {
+      return { success: true, canceled: true };
+    }
+
+    const folderPath = result.filePaths[0];
+    const manifestPath = path.join(folderPath, 'manifest.json');
+
+    // Check for manifest.json
+    if (!fs.existsSync(manifestPath)) {
+      return { success: false, error: 'Folder must contain a manifest.json file' };
+    }
+
+    // Read and parse manifest
+    let manifest;
+    try {
+      const manifestContent = fs.readFileSync(manifestPath, 'utf8');
+      manifest = JSON.parse(manifestContent);
+    } catch (err) {
+      return { success: false, error: 'Invalid manifest.json: ' + err.message };
+    }
+
+    // Validate manifest
+    if (!manifest.id) {
+      return { success: false, error: 'Manifest must have an "id" field' };
+    }
+    if (!manifest.name) {
+      return { success: false, error: 'Manifest must have a "name" field' };
+    }
+    if (!manifest.entry) {
+      manifest.entry = 'index.html';
+    }
+
+    // Check entry file exists
+    const entryPath = path.join(folderPath, manifest.entry);
+    if (!fs.existsSync(entryPath)) {
+      return { success: false, error: `Entry file "${manifest.entry}" not found` };
+    }
+
+    // Copy program folder to programs directory
+    const dirs = getExtensibilityDir();
+    const destPath = path.join(dirs.programs, manifest.id);
+
+    // Remove existing if present
+    if (fs.existsSync(destPath)) {
+      fs.rmSync(destPath, { recursive: true, force: true });
+    }
+
+    // Copy folder recursively
+    fs.cpSync(folderPath, destPath, { recursive: true });
+
+    // Read entry content
+    const entryContent = fs.readFileSync(path.join(destPath, manifest.entry), 'utf8');
+
+    return {
+      success: true,
+      program: {
+        ...manifest,
+        path: destPath,
+        entryContent: entryContent
+      }
+    };
+  } catch (error) {
+    console.error('Error selecting program:', error);
+    return { success: false, error: error.message };
+  }
+});
+
+// Select folder containing multiple programs
+ipcMain.handle('ext-select-program-folder', async () => {
+  try {
+    const result = await dialog.showOpenDialog(mainWindow, {
+      properties: ['openDirectory'],
+      title: 'Select Folder Containing Programs'
+    });
+
+    if (result.canceled || result.filePaths.length === 0) {
+      return { success: true, canceled: true };
+    }
+
+    const folderPath = result.filePaths[0];
+    const dirs = getExtensibilityDir();
+    const programs = [];
+    const errors = [];
+
+    // Find all subdirectories with manifest.json
+    const entries = fs.readdirSync(folderPath, { withFileTypes: true });
+    for (const entry of entries) {
+      if (!entry.isDirectory()) continue;
+
+      const subfolderPath = path.join(folderPath, entry.name);
+      const manifestPath = path.join(subfolderPath, 'manifest.json');
+
+      if (!fs.existsSync(manifestPath)) continue;
+
+      try {
+        const manifestContent = fs.readFileSync(manifestPath, 'utf8');
+        const manifest = JSON.parse(manifestContent);
+
+        if (!manifest.id || !manifest.name) {
+          errors.push(`${entry.name}: Missing required fields (id, name)`);
+          continue;
+        }
+
+        if (!manifest.entry) manifest.entry = 'index.html';
+
+        // Copy program
+        const destPath = path.join(dirs.programs, manifest.id);
+        if (fs.existsSync(destPath)) {
+          fs.rmSync(destPath, { recursive: true, force: true });
+        }
+        fs.cpSync(subfolderPath, destPath, { recursive: true });
+
+        const entryContent = fs.readFileSync(path.join(destPath, manifest.entry), 'utf8');
+
+        programs.push({
+          ...manifest,
+          path: destPath,
+          entryContent: entryContent
+        });
+      } catch (err) {
+        errors.push(`${entry.name}: ${err.message}`);
+      }
+    }
+
+    return {
+      success: true,
+      programs: programs,
+      errors: errors.length > 0 ? errors : null
+    };
+  } catch (error) {
+    console.error('Error selecting program folder:', error);
+    return { success: false, error: error.message };
+  }
+});
+
+// Load all saved custom programs
+ipcMain.handle('ext-load-programs', async () => {
+  try {
+    const dirs = getExtensibilityDir();
+    const programs = [];
+
+    const entries = fs.readdirSync(dirs.programs, { withFileTypes: true });
+    for (const entry of entries) {
+      if (!entry.isDirectory()) continue;
+
+      const manifestPath = path.join(dirs.programs, entry.name, 'manifest.json');
+      if (!fs.existsSync(manifestPath)) continue;
+
+      try {
+        const manifestContent = fs.readFileSync(manifestPath, 'utf8');
+        const manifest = JSON.parse(manifestContent);
+
+        if (!manifest.entry) manifest.entry = 'index.html';
+
+        const entryPath = path.join(dirs.programs, entry.name, manifest.entry);
+        const entryContent = fs.existsSync(entryPath)
+          ? fs.readFileSync(entryPath, 'utf8')
+          : null;
+
+        programs.push({
+          ...manifest,
+          path: path.join(dirs.programs, entry.name),
+          entryContent: entryContent
+        });
+      } catch (err) {
+        console.warn('Failed to load program:', entry.name, err.message);
+      }
+    }
+
+    return { success: true, programs: programs };
+  } catch (error) {
+    console.error('Error loading programs:', error);
+    return { success: false, error: error.message };
+  }
+});
+
+// Delete a custom program
+ipcMain.handle('ext-delete-program', async (event, programId) => {
+  try {
+    const dirs = getExtensibilityDir();
+    const programPath = path.join(dirs.programs, programId);
+
+    if (fs.existsSync(programPath)) {
+      fs.rmSync(programPath, { recursive: true, force: true });
+    }
+
+    return { success: true };
+  } catch (error) {
+    console.error('Error deleting program:', error);
+    return { success: false, error: error.message };
+  }
+});

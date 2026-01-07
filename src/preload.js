@@ -43,5 +43,17 @@ contextBridge.exposeInMainWorld('electronAPI', {
   setIgnoreShortcuts: (enabled) => ipcRenderer.invoke('set-ignore-shortcuts', enabled),
   setMuteOtherApps: (enabled) => ipcRenderer.invoke('set-mute-other-apps', enabled),
   // Application control
-  quitApplication: () => ipcRenderer.invoke('quit-application')
+  quitApplication: () => ipcRenderer.invoke('quit-application'),
+  // Extensibility - Custom Models
+  extSelectModelFile: () => ipcRenderer.invoke('ext-select-model-file'),
+  extSelectModelFolder: () => ipcRenderer.invoke('ext-select-model-folder'),
+  extLoadModels: () => ipcRenderer.invoke('ext-load-models'),
+  extDeleteModel: (modelId) => ipcRenderer.invoke('ext-delete-model', modelId),
+  extSaveModel: (modelData) => ipcRenderer.invoke('ext-save-model', modelData),
+  extExportModel: (modelData) => ipcRenderer.invoke('ext-export-model', modelData),
+  // Extensibility - Laptop Programs
+  extSelectProgram: () => ipcRenderer.invoke('ext-select-program'),
+  extSelectProgramFolder: () => ipcRenderer.invoke('ext-select-program-folder'),
+  extLoadPrograms: () => ipcRenderer.invoke('ext-load-programs'),
+  extDeleteProgram: (programId) => ipcRenderer.invoke('ext-delete-program', programId)
 });

@@ -1229,6 +1229,395 @@
       width: 100%;
       height: 4px;
     }
+
+    /* ============================================
+       Extensibility Menu Modal
+       ============================================ */
+    #extensibility-modal {
+      position: fixed;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%) scale(0.9);
+      background: rgba(26, 26, 46, 0.98);
+      backdrop-filter: blur(15px);
+      -webkit-backdrop-filter: blur(15px);
+      border: 1px solid rgba(255, 255, 255, 0.15);
+      border-radius: 16px;
+      padding: 0;
+      z-index: 300;
+      width: 90%;
+      max-width: 800px;
+      max-height: 85vh;
+      opacity: 0;
+      pointer-events: none;
+      transition: all 0.3s ease;
+      box-shadow: 0 20px 60px rgba(0, 0, 0, 0.6);
+      display: flex;
+      flex-direction: column;
+    }
+
+    #extensibility-modal.open {
+      opacity: 1;
+      pointer-events: auto;
+      transform: translate(-50%, -50%) scale(1);
+    }
+
+    .extensibility-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 20px 25px;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+    }
+
+    .extensibility-header h2 {
+      color: #fff;
+      font-size: 18px;
+      font-weight: 600;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .extensibility-close-btn {
+      width: 32px;
+      height: 32px;
+      background: rgba(255, 255, 255, 0.1);
+      border: none;
+      border-radius: 50%;
+      color: rgba(255, 255, 255, 0.7);
+      font-size: 18px;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      transition: all 0.2s ease;
+    }
+
+    .extensibility-close-btn:hover {
+      background: rgba(255, 255, 255, 0.2);
+      color: #fff;
+    }
+
+    .extensibility-tabs {
+      display: flex;
+      padding: 0 25px;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+      background: rgba(0, 0, 0, 0.2);
+    }
+
+    .extensibility-tab {
+      padding: 15px 20px;
+      background: none;
+      border: none;
+      color: rgba(255, 255, 255, 0.6);
+      font-size: 14px;
+      cursor: pointer;
+      transition: all 0.2s ease;
+      position: relative;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .extensibility-tab:hover {
+      color: rgba(255, 255, 255, 0.9);
+    }
+
+    .extensibility-tab.active {
+      color: #fff;
+    }
+
+    .extensibility-tab.active::after {
+      content: '';
+      position: absolute;
+      bottom: 0;
+      left: 0;
+      right: 0;
+      height: 2px;
+      background: #4f46e5;
+    }
+
+    .extensibility-tab-icon {
+      font-size: 16px;
+    }
+
+    .extensibility-content {
+      flex: 1;
+      overflow-y: auto;
+      padding: 25px;
+    }
+
+    .extensibility-panel {
+      display: none;
+    }
+
+    .extensibility-panel.active {
+      display: block;
+    }
+
+    .extensibility-section {
+      margin-bottom: 25px;
+    }
+
+    .extensibility-section h3 {
+      color: rgba(255, 255, 255, 0.9);
+      font-size: 14px;
+      font-weight: 500;
+      margin-bottom: 12px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .extensibility-section p {
+      color: rgba(255, 255, 255, 0.5);
+      font-size: 12px;
+      line-height: 1.5;
+      margin-bottom: 15px;
+    }
+
+    .extensibility-btn {
+      padding: 12px 20px;
+      background: rgba(79, 70, 229, 0.3);
+      border: 1px solid rgba(79, 70, 229, 0.5);
+      border-radius: 8px;
+      color: #fff;
+      font-size: 13px;
+      cursor: pointer;
+      transition: all 0.2s ease;
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .extensibility-btn:hover {
+      background: rgba(79, 70, 229, 0.5);
+      border-color: rgba(79, 70, 229, 0.7);
+    }
+
+    .extensibility-btn.secondary {
+      background: rgba(255, 255, 255, 0.1);
+      border-color: rgba(255, 255, 255, 0.2);
+    }
+
+    .extensibility-btn.secondary:hover {
+      background: rgba(255, 255, 255, 0.15);
+      border-color: rgba(255, 255, 255, 0.3);
+    }
+
+    .extensibility-btn.danger {
+      background: rgba(239, 68, 68, 0.2);
+      border-color: rgba(239, 68, 68, 0.4);
+      color: #ef4444;
+    }
+
+    .extensibility-btn.danger:hover {
+      background: rgba(239, 68, 68, 0.3);
+    }
+
+    .extensibility-list {
+      background: rgba(0, 0, 0, 0.3);
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      border-radius: 8px;
+      max-height: 200px;
+      overflow-y: auto;
+    }
+
+    .extensibility-list-item {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 12px 15px;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+      transition: background 0.2s ease;
+    }
+
+    .extensibility-list-item:last-child {
+      border-bottom: none;
+    }
+
+    .extensibility-list-item:hover {
+      background: rgba(79, 70, 229, 0.1);
+    }
+
+    .extensibility-list-item-info {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+
+    .extensibility-list-item-icon {
+      font-size: 20px;
+    }
+
+    .extensibility-list-item-name {
+      color: #fff;
+      font-size: 13px;
+    }
+
+    .extensibility-list-item-desc {
+      color: rgba(255, 255, 255, 0.5);
+      font-size: 11px;
+      margin-top: 2px;
+    }
+
+    .extensibility-list-item-actions {
+      display: flex;
+      gap: 8px;
+    }
+
+    .extensibility-list-item-btn {
+      padding: 6px 12px;
+      background: rgba(255, 255, 255, 0.1);
+      border: none;
+      border-radius: 6px;
+      color: rgba(255, 255, 255, 0.8);
+      font-size: 11px;
+      cursor: pointer;
+      transition: all 0.2s ease;
+    }
+
+    .extensibility-list-item-btn:hover {
+      background: rgba(255, 255, 255, 0.2);
+    }
+
+    .extensibility-list-item-btn.danger:hover {
+      background: rgba(239, 68, 68, 0.3);
+      color: #ef4444;
+    }
+
+    .extensibility-empty {
+      text-align: center;
+      padding: 30px;
+      color: rgba(255, 255, 255, 0.4);
+      font-size: 13px;
+    }
+
+    .extensibility-empty-icon {
+      font-size: 40px;
+      margin-bottom: 15px;
+      opacity: 0.5;
+    }
+
+    /* Editor specific styles */
+    .editor-form {
+      display: grid;
+      gap: 15px;
+    }
+
+    .editor-form-group {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+
+    .editor-form-group label {
+      color: rgba(255, 255, 255, 0.7);
+      font-size: 12px;
+    }
+
+    .editor-form-group input,
+    .editor-form-group textarea,
+    .editor-form-group select {
+      padding: 10px 12px;
+      background: rgba(255, 255, 255, 0.1);
+      border: 1px solid rgba(255, 255, 255, 0.2);
+      border-radius: 6px;
+      color: #fff;
+      font-size: 13px;
+      transition: border-color 0.2s ease;
+    }
+
+    .editor-form-group input:focus,
+    .editor-form-group textarea:focus,
+    .editor-form-group select:focus {
+      outline: none;
+      border-color: rgba(79, 70, 229, 0.6);
+    }
+
+    .editor-form-group textarea {
+      min-height: 80px;
+      resize: vertical;
+      font-family: 'Courier New', monospace;
+    }
+
+    .editor-form-group select option {
+      background: #1a1a2e;
+      color: #fff;
+    }
+
+    .editor-form-row {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 15px;
+    }
+
+    .editor-preview {
+      background: rgba(0, 0, 0, 0.4);
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      border-radius: 8px;
+      padding: 20px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 150px;
+    }
+
+    .editor-preview-placeholder {
+      color: rgba(255, 255, 255, 0.3);
+      font-size: 12px;
+      text-align: center;
+    }
+
+    .editor-actions {
+      display: flex;
+      gap: 10px;
+      margin-top: 10px;
+    }
+
+    /* Programs panel styles */
+    .program-card {
+      background: rgba(0, 0, 0, 0.3);
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      border-radius: 10px;
+      padding: 15px;
+      margin-bottom: 10px;
+      transition: all 0.2s ease;
+    }
+
+    .program-card:hover {
+      border-color: rgba(79, 70, 229, 0.4);
+    }
+
+    .program-card-header {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      margin-bottom: 10px;
+    }
+
+    .program-card-icon {
+      font-size: 28px;
+    }
+
+    .program-card-title {
+      color: #fff;
+      font-size: 14px;
+      font-weight: 500;
+    }
+
+    .program-card-desc {
+      color: rgba(255, 255, 255, 0.5);
+      font-size: 12px;
+      line-height: 1.4;
+      margin-bottom: 12px;
+    }
+
+    .program-card-actions {
+      display: flex;
+      gap: 8px;
+    }
   </style>
 </head>
 <body>
@@ -1392,6 +1781,16 @@
         </p>
       </div>
     </div>
+
+    <div class="menu-section">
+      <h3>Extensibility</h3>
+      <button id="open-extensibility-btn" style="width: 100%; padding: 12px; background: rgba(79, 70, 229, 0.3); border: 1px solid rgba(79, 70, 229, 0.5); border-radius: 8px; color: #a5b4fc; font-size: 14px; cursor: pointer; transition: all 0.2s ease; display: flex; align-items: center; justify-content: center; gap: 8px;">
+        <span style="font-size: 18px;">🧩</span> Extensibility Menu
+      </button>
+      <p style="font-size: 11px; color: rgba(255, 255, 255, 0.5); margin-top: 8px; line-height: 1.4;">
+        Load custom models, create objects, and add programs for Laptop
+      </p>
+    </div>
   </div>
 
   <!-- Variant context menu (for RMB on palette categories) -->
@@ -1478,6 +1877,239 @@
     <h3><span class="modal-icon" id="modal-icon"></span><span id="modal-title">Interact</span></h3>
     <div class="interaction-content" id="interaction-content">
       <!-- Dynamic content will be inserted here -->
+    </div>
+  </div>
+
+  <!-- Extensibility Modal -->
+  <div id="extensibility-modal">
+    <div class="extensibility-header">
+      <h2><span>🧩</span> Extensibility</h2>
+      <button class="extensibility-close-btn" id="extensibility-close-btn">&times;</button>
+    </div>
+
+    <div class="extensibility-tabs">
+      <button class="extensibility-tab active" data-tab="models">
+        <span class="extensibility-tab-icon">📦</span> Models
+      </button>
+      <button class="extensibility-tab" data-tab="editor">
+        <span class="extensibility-tab-icon">✏️</span> Editor
+      </button>
+      <button class="extensibility-tab" data-tab="programs">
+        <span class="extensibility-tab-icon">💻</span> Programs
+      </button>
+    </div>
+
+    <div class="extensibility-content">
+      <!-- Models Panel -->
+      <div class="extensibility-panel active" id="ext-panel-models">
+        <div class="extensibility-section">
+          <h3>📥 Load Custom Models</h3>
+          <p>
+            Load custom 3D object definitions from JSON files. Custom models will appear in the palette and can be placed on your desk like built-in objects.
+          </p>
+          <div style="display: flex; gap: 10px; flex-wrap: wrap;">
+            <button class="extensibility-btn" id="ext-load-model-btn">
+              <span>📁</span> Load Model File
+            </button>
+            <button class="extensibility-btn secondary" id="ext-load-model-folder-btn">
+              <span>📂</span> Load from Folder
+            </button>
+          </div>
+        </div>
+
+        <div class="extensibility-section">
+          <h3>📋 Loaded Custom Models</h3>
+          <div class="extensibility-list" id="ext-models-list">
+            <div class="extensibility-empty">
+              <div class="extensibility-empty-icon">📦</div>
+              <div>No custom models loaded</div>
+              <div style="margin-top: 8px; font-size: 11px;">Click "Load Model File" to add custom objects</div>
+            </div>
+          </div>
+        </div>
+
+        <div class="extensibility-section">
+          <h3>📖 Model Format Reference</h3>
+          <p style="font-size: 11px; line-height: 1.6;">
+            Custom models are JSON files that define object properties. Example structure:
+          </p>
+          <div style="background: rgba(0,0,0,0.4); border-radius: 6px; padding: 12px; font-family: 'Courier New', monospace; font-size: 11px; color: rgba(255,255,255,0.8); overflow-x: auto;">
+            <pre style="margin: 0;">{
+  "id": "my-object",
+  "name": "My Custom Object",
+  "icon": "🎁",
+  "category": "trinkets",
+  "geometry": {
+    "type": "box",
+    "width": 0.5, "height": 0.3, "depth": 0.5
+  },
+  "material": {
+    "color": "#3b82f6",
+    "roughness": 0.5,
+    "metalness": 0.2
+  }
+}</pre>
+          </div>
+        </div>
+      </div>
+
+      <!-- Editor Panel -->
+      <div class="extensibility-panel" id="ext-panel-editor">
+        <div class="extensibility-section">
+          <h3>✏️ Object Editor</h3>
+          <p>
+            Create and edit custom object definitions visually. Configure geometry, materials, and behaviors.
+          </p>
+        </div>
+
+        <div class="editor-form">
+          <div class="editor-form-row">
+            <div class="editor-form-group">
+              <label>Object ID</label>
+              <input type="text" id="editor-object-id" placeholder="my-custom-object">
+            </div>
+            <div class="editor-form-group">
+              <label>Display Name</label>
+              <input type="text" id="editor-object-name" placeholder="My Custom Object">
+            </div>
+          </div>
+
+          <div class="editor-form-row">
+            <div class="editor-form-group">
+              <label>Icon (emoji)</label>
+              <input type="text" id="editor-object-icon" placeholder="🎁" maxlength="4">
+            </div>
+            <div class="editor-form-group">
+              <label>Category</label>
+              <select id="editor-object-category">
+                <option value="trinkets">Trinkets</option>
+                <option value="clocks">Clocks</option>
+                <option value="lighting">Lighting</option>
+                <option value="writing">Writing</option>
+                <option value="books">Books</option>
+                <option value="audio">Audio</option>
+                <option value="frames">Photo Frames</option>
+                <option value="tech">Tech</option>
+                <option value="custom">Custom</option>
+              </select>
+            </div>
+          </div>
+
+          <div class="editor-form-row">
+            <div class="editor-form-group">
+              <label>Geometry Type</label>
+              <select id="editor-geometry-type">
+                <option value="box">Box</option>
+                <option value="cylinder">Cylinder</option>
+                <option value="sphere">Sphere</option>
+                <option value="cone">Cone</option>
+              </select>
+            </div>
+            <div class="editor-form-group">
+              <label>Material Color</label>
+              <input type="color" id="editor-material-color" value="#3b82f6">
+            </div>
+          </div>
+
+          <div class="editor-form-row">
+            <div class="editor-form-group">
+              <label>Width</label>
+              <input type="number" id="editor-geo-width" value="0.5" step="0.1" min="0.1">
+            </div>
+            <div class="editor-form-group">
+              <label>Height</label>
+              <input type="number" id="editor-geo-height" value="0.3" step="0.1" min="0.1">
+            </div>
+          </div>
+
+          <div class="editor-form-row">
+            <div class="editor-form-group">
+              <label>Depth</label>
+              <input type="number" id="editor-geo-depth" value="0.5" step="0.1" min="0.1">
+            </div>
+            <div class="editor-form-group">
+              <label>Roughness</label>
+              <input type="range" id="editor-roughness" min="0" max="1" step="0.1" value="0.5">
+            </div>
+          </div>
+
+          <div class="editor-actions">
+            <button class="extensibility-btn" id="editor-preview-btn">
+              <span>👁️</span> Preview
+            </button>
+            <button class="extensibility-btn" id="editor-save-btn">
+              <span>💾</span> Save as JSON
+            </button>
+            <button class="extensibility-btn secondary" id="editor-add-to-palette-btn">
+              <span>➕</span> Add to Palette
+            </button>
+            <button class="extensibility-btn secondary" id="editor-clear-btn">
+              <span>🗑️</span> Clear
+            </button>
+          </div>
+        </div>
+
+        <div class="extensibility-section" style="margin-top: 20px;">
+          <h3>👁️ Preview</h3>
+          <div class="editor-preview" id="editor-preview-container">
+            <div class="editor-preview-placeholder">
+              Click "Preview" to see your object
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Programs Panel -->
+      <div class="extensibility-panel" id="ext-panel-programs">
+        <div class="extensibility-section">
+          <h3>💻 Laptop Programs</h3>
+          <p>
+            Load custom programs (HTML/JS) that run inside the laptop screen. Programs can be interactive web applications.
+          </p>
+          <div style="display: flex; gap: 10px; flex-wrap: wrap;">
+            <button class="extensibility-btn" id="ext-load-program-btn">
+              <span>📁</span> Load Program
+            </button>
+            <button class="extensibility-btn secondary" id="ext-load-program-folder-btn">
+              <span>📂</span> Load from Folder
+            </button>
+          </div>
+        </div>
+
+        <div class="extensibility-section">
+          <h3>📋 Loaded Programs</h3>
+          <div class="extensibility-list" id="ext-programs-list">
+            <div class="extensibility-empty">
+              <div class="extensibility-empty-icon">💻</div>
+              <div>No custom programs loaded</div>
+              <div style="margin-top: 8px; font-size: 11px;">Click "Load Program" to add custom laptop applications</div>
+            </div>
+          </div>
+        </div>
+
+        <div class="extensibility-section">
+          <h3>📖 Program Format Reference</h3>
+          <p style="font-size: 11px; line-height: 1.6;">
+            Programs are HTML files with a manifest.json. Directory structure:
+          </p>
+          <div style="background: rgba(0,0,0,0.4); border-radius: 6px; padding: 12px; font-family: 'Courier New', monospace; font-size: 11px; color: rgba(255,255,255,0.8);">
+            <pre style="margin: 0;">my-program/
+├── manifest.json
+├── index.html
+├── style.css (optional)
+└── script.js (optional)
+
+manifest.json:
+{
+  "id": "my-program",
+  "name": "My Program",
+  "icon": "🎮",
+  "description": "Description here",
+  "entry": "index.html"
+}</pre>
+          </div>
+        </div>
+      </div>
     </div>
   </div>
 

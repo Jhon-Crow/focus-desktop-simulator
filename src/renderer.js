@@ -24814,6 +24814,740 @@ function renderPixelArt() {
 }
 
 // ============================================================================
+// EXTENSIBILITY SYSTEM - Custom Models, Editor, and Laptop Programs
+// ============================================================================
+
+// Storage for custom models and programs
+const extensibilityState = {
+  customModels: [],      // Loaded custom model definitions
+  customPrograms: [],    // Loaded custom laptop programs
+  editorPreviewObject: null, // Preview object in editor
+  isModalOpen: false
+};
+
+// Open/close extensibility modal
+function openExtensibilityModal() {
+  const modal = document.getElementById('extensibility-modal');
+  if (modal) {
+    modal.classList.add('open');
+    extensibilityState.isModalOpen = true;
+    // Load existing models and programs
+    loadExtensibilityData();
+  }
+}
+
+function closeExtensibilityModal() {
+  const modal = document.getElementById('extensibility-modal');
+  if (modal) {
+    modal.classList.remove('open');
+    extensibilityState.isModalOpen = false;
+    // Clean up editor preview if it exists
+    cleanupEditorPreview();
+  }
+}
+
+// Switch between tabs in extensibility modal
+function switchExtensibilityTab(tabName) {
+  // Update tab buttons
+  document.querySelectorAll('.extensibility-tab').forEach(tab => {
+    tab.classList.toggle('active', tab.dataset.tab === tabName);
+  });
+
+  // Update panels
+  document.querySelectorAll('.extensibility-panel').forEach(panel => {
+    panel.classList.toggle('active', panel.id === `ext-panel-${tabName}`);
+  });
+}
+
+// Load all extensibility data from disk
+async function loadExtensibilityData() {
+  try {
+    // Load custom models
+    const modelsResult = await window.electronAPI.extLoadModels();
+    if (modelsResult.success) {
+      extensibilityState.customModels = modelsResult.models || [];
+      updateModelsListUI();
+      registerCustomModels();
+    }
+
+    // Load custom programs
+    const programsResult = await window.electronAPI.extLoadPrograms();
+    if (programsResult.success) {
+      extensibilityState.customPrograms = programsResult.programs || [];
+      updateProgramsListUI();
+    }
+  } catch (error) {
+    console.error('Error loading extensibility data:', error);
+  }
+}
+
+// Update the models list UI
+function updateModelsListUI() {
+  const listContainer = document.getElementById('ext-models-list');
+  if (!listContainer) return;
+
+  if (extensibilityState.customModels.length === 0) {
+    listContainer.innerHTML = `
+      <div class="extensibility-empty">
+        <div class="extensibility-empty-icon">📦</div>
+        <div>No custom models loaded</div>
+        <div style="margin-top: 8px; font-size: 11px;">Click "Load Model File" to add custom objects</div>
+      </div>
+    `;
+    return;
+  }
+
+  listContainer.innerHTML = extensibilityState.customModels.map(model => `
+    <div class="extensibility-list-item" data-model-id="${model.id}">
+      <div class="extensibility-list-item-info">
+        <span class="extensibility-list-item-icon">${model.icon || '📦'}</span>
+        <div>
+          <div class="extensibility-list-item-name">${model.name}</div>
+          <div class="extensibility-list-item-desc">${model.category || 'custom'} | ${model.id}</div>
+        </div>
+      </div>
+      <div class="extensibility-list-item-actions">
+        <button class="extensibility-list-item-btn" onclick="spawnCustomModel('${model.id}')">Add</button>
+        <button class="extensibility-list-item-btn danger" onclick="deleteCustomModel('${model.id}')">Delete</button>
+      </div>
+    </div>
+  `).join('');
+}
+
+// Update the programs list UI
+function updateProgramsListUI() {
+  const listContainer = document.getElementById('ext-programs-list');
+  if (!listContainer) return;
+
+  if (extensibilityState.customPrograms.length === 0) {
+    listContainer.innerHTML = `
+      <div class="extensibility-empty">
+        <div class="extensibility-empty-icon">💻</div>
+        <div>No custom programs loaded</div>
+        <div style="margin-top: 8px; font-size: 11px;">Click "Load Program" to add custom laptop applications</div>
+      </div>
+    `;
+    return;
+  }
+
+  listContainer.innerHTML = extensibilityState.customPrograms.map(program => `
+    <div class="extensibility-list-item" data-program-id="${program.id}">
+      <div class="extensibility-list-item-info">
+        <span class="extensibility-list-item-icon">${program.icon || '💻'}</span>
+        <div>
+          <div class="extensibility-list-item-name">${program.name}</div>
+          <div class="extensibility-list-item-desc">${program.description || program.id}</div>
+        </div>
+      </div>
+      <div class="extensibility-list-item-actions">
+        <button class="extensibility-list-item-btn danger" onclick="deleteCustomProgram('${program.id}')">Delete</button>
+      </div>
+    </div>
+  `).join('');
+}
+
+// Register custom models in the palette system
+function registerCustomModels() {
+  // First, remove any previously registered custom models
+  for (const modelId of Object.keys(PRESET_CREATORS)) {
+    if (modelId.startsWith('custom-')) {
+      delete PRESET_CREATORS[modelId];
+    }
+  }
+
+  // Remove custom category if it exists (will be recreated)
+  if (PALETTE_CATEGORIES.custom) {
+    PALETTE_CATEGORIES.custom.variants = [];
+  }
+
+  // Register each custom model
+  extensibilityState.customModels.forEach(model => {
+    const modelId = `custom-${model.id}`;
+
+    // Create creator function for this model
+    PRESET_CREATORS[modelId] = (options = {}) => createCustomObject(model, options);
+
+    // Add to appropriate category
+    const categoryId = model.category || 'custom';
+    if (!PALETTE_CATEGORIES[categoryId]) {
+      // Create custom category if it doesn't exist
+      PALETTE_CATEGORIES.custom = {
+        name: 'Custom',
+        icon: '🧩',
+        variants: [],
+        activeIndex: 0
+      };
+    }
+
+    // Add variant if not already present
+    const category = PALETTE_CATEGORIES[categoryId] || PALETTE_CATEGORIES.custom;
+    const existingVariant = category.variants.find(v => v.id === modelId);
+    if (!existingVariant) {
+      category.variants.push({
+        id: modelId,
+        name: model.name,
+        icon: model.icon || '📦'
+      });
+    }
+  });
+
+  // Rebuild palette UI
+  buildPaletteMenu();
+}
+
+// Create a custom object from model definition
+function createCustomObject(modelDef, options = {}) {
+  const group = new THREE.Group();
+
+  // Set user data
+  group.userData = {
+    type: `custom-${modelDef.id}`,
+    name: modelDef.name,
+    interactive: modelDef.interactive !== false,
+    mainColor: options.mainColor || modelDef.material?.color || '#4f46e5',
+    accentColor: options.accentColor || modelDef.material?.accentColor || '#818cf8',
+    customModel: true,
+    modelDefinition: modelDef
+  };
+
+  // Create geometry based on definition
+  const geoDef = modelDef.geometry || { type: 'box', width: 0.5, height: 0.3, depth: 0.5 };
+  let geometry;
+
+  switch (geoDef.type) {
+    case 'cylinder':
+      geometry = new THREE.CylinderGeometry(
+        geoDef.radiusTop || geoDef.width / 2 || 0.25,
+        geoDef.radiusBottom || geoDef.width / 2 || 0.25,
+        geoDef.height || 0.3,
+        geoDef.segments || 16
+      );
+      break;
+    case 'sphere':
+      geometry = new THREE.SphereGeometry(
+        geoDef.radius || geoDef.width / 2 || 0.25,
+        geoDef.widthSegments || 16,
+        geoDef.heightSegments || 12
+      );
+      break;
+    case 'cone':
+      geometry = new THREE.ConeGeometry(
+        geoDef.radius || geoDef.width / 2 || 0.25,
+        geoDef.height || 0.3,
+        geoDef.segments || 16
+      );
+      break;
+    case 'box':
+    default:
+      geometry = new THREE.BoxGeometry(
+        geoDef.width || 0.5,
+        geoDef.height || 0.3,
+        geoDef.depth || 0.5
+      );
+      break;
+  }
+
+  // Create material
+  const matDef = modelDef.material || {};
+  const material = new THREE.MeshStandardMaterial({
+    color: new THREE.Color(group.userData.mainColor),
+    roughness: matDef.roughness !== undefined ? matDef.roughness : 0.5,
+    metalness: matDef.metalness !== undefined ? matDef.metalness : 0.2
+  });
+
+  // Create mesh
+  const mesh = new THREE.Mesh(geometry, material);
+  mesh.castShadow = true;
+  mesh.receiveShadow = true;
+
+  // Position the mesh so it sits on the table
+  const halfHeight = (geoDef.height || 0.3) / 2;
+  mesh.position.y = halfHeight;
+
+  group.add(mesh);
+
+  // Add accent parts if defined
+  if (modelDef.accentParts && Array.isArray(modelDef.accentParts)) {
+    modelDef.accentParts.forEach(part => {
+      const partGeometry = createGeometryFromDef(part.geometry || { type: 'box', width: 0.1, height: 0.1, depth: 0.1 });
+      const partMaterial = new THREE.MeshStandardMaterial({
+        color: new THREE.Color(group.userData.accentColor),
+        roughness: part.roughness !== undefined ? part.roughness : 0.3,
+        metalness: part.metalness !== undefined ? part.metalness : 0.5
+      });
+
+      const partMesh = new THREE.Mesh(partGeometry, partMaterial);
+      partMesh.position.set(part.x || 0, part.y || 0, part.z || 0);
+      if (part.rotation) {
+        partMesh.rotation.set(
+          part.rotation.x || 0,
+          part.rotation.y || 0,
+          part.rotation.z || 0
+        );
+      }
+      partMesh.castShadow = true;
+      group.add(partMesh);
+    });
+  }
+
+  return group;
+}
+
+// Helper to create geometry from definition
+function createGeometryFromDef(geoDef) {
+  switch (geoDef.type) {
+    case 'cylinder':
+      return new THREE.CylinderGeometry(
+        geoDef.radiusTop || geoDef.width / 2 || 0.25,
+        geoDef.radiusBottom || geoDef.width / 2 || 0.25,
+        geoDef.height || 0.3,
+        geoDef.segments || 16
+      );
+    case 'sphere':
+      return new THREE.SphereGeometry(
+        geoDef.radius || geoDef.width / 2 || 0.25,
+        geoDef.widthSegments || 16,
+        geoDef.heightSegments || 12
+      );
+    case 'cone':
+      return new THREE.ConeGeometry(
+        geoDef.radius || geoDef.width / 2 || 0.25,
+        geoDef.height || 0.3,
+        geoDef.segments || 16
+      );
+    case 'box':
+    default:
+      return new THREE.BoxGeometry(
+        geoDef.width || 0.5,
+        geoDef.height || 0.3,
+        geoDef.depth || 0.5
+      );
+  }
+}
+
+// Spawn a custom model on the desk
+function spawnCustomModel(modelId) {
+  const model = extensibilityState.customModels.find(m => m.id === modelId);
+  if (!model) {
+    console.error('Custom model not found:', modelId);
+    return;
+  }
+
+  // Use the same logic as palette spawning
+  const fullModelId = `custom-${modelId}`;
+  const creator = PRESET_CREATORS[fullModelId];
+  if (!creator) {
+    console.error('Creator not found for model:', fullModelId);
+    return;
+  }
+
+  // Create object at center of visible table area
+  const object = creator();
+  object.position.set(0, 0, 0);
+  scene.add(object);
+  deskObjects.push(object);
+
+  // Register collision
+  registerCollisionHelper(object);
+
+  // Save state
+  saveState();
+
+  console.log('Spawned custom model:', model.name);
+}
+
+// Delete a custom model
+async function deleteCustomModel(modelId) {
+  try {
+    const result = await window.electronAPI.extDeleteModel(modelId);
+    if (result.success) {
+      // Remove from state
+      extensibilityState.customModels = extensibilityState.customModels.filter(m => m.id !== modelId);
+      updateModelsListUI();
+      registerCustomModels();
+    } else {
+      console.error('Failed to delete model:', result.error);
+    }
+  } catch (error) {
+    console.error('Error deleting model:', error);
+  }
+}
+
+// Delete a custom program
+async function deleteCustomProgram(programId) {
+  try {
+    const result = await window.electronAPI.extDeleteProgram(programId);
+    if (result.success) {
+      // Remove from state
+      extensibilityState.customPrograms = extensibilityState.customPrograms.filter(p => p.id !== programId);
+      updateProgramsListUI();
+    } else {
+      console.error('Failed to delete program:', result.error);
+    }
+  } catch (error) {
+    console.error('Error deleting program:', error);
+  }
+}
+
+// Load model from file
+async function loadModelFromFile() {
+  try {
+    const result = await window.electronAPI.extSelectModelFile();
+    if (result.canceled) return;
+
+    if (result.success && result.model) {
+      // Add to state if not already present
+      const existingIndex = extensibilityState.customModels.findIndex(m => m.id === result.model.id);
+      if (existingIndex >= 0) {
+        extensibilityState.customModels[existingIndex] = result.model;
+      } else {
+        extensibilityState.customModels.push(result.model);
+      }
+      updateModelsListUI();
+      registerCustomModels();
+    } else if (result.error) {
+      alert('Error loading model: ' + result.error);
+    }
+  } catch (error) {
+    console.error('Error loading model file:', error);
+    alert('Error loading model file: ' + error.message);
+  }
+}
+
+// Load models from folder
+async function loadModelsFromFolder() {
+  try {
+    const result = await window.electronAPI.extSelectModelFolder();
+    if (result.canceled) return;
+
+    if (result.success && result.models) {
+      // Add/update models in state
+      result.models.forEach(model => {
+        const existingIndex = extensibilityState.customModels.findIndex(m => m.id === model.id);
+        if (existingIndex >= 0) {
+          extensibilityState.customModels[existingIndex] = model;
+        } else {
+          extensibilityState.customModels.push(model);
+        }
+      });
+      updateModelsListUI();
+      registerCustomModels();
+
+      if (result.errors && result.errors.length > 0) {
+        console.warn('Some models failed to load:', result.errors);
+      }
+    } else if (result.error) {
+      alert('Error loading models: ' + result.error);
+    }
+  } catch (error) {
+    console.error('Error loading models from folder:', error);
+    alert('Error loading models: ' + error.message);
+  }
+}
+
+// Load program from folder
+async function loadProgramFromFolder() {
+  try {
+    const result = await window.electronAPI.extSelectProgram();
+    if (result.canceled) return;
+
+    if (result.success && result.program) {
+      // Add to state if not already present
+      const existingIndex = extensibilityState.customPrograms.findIndex(p => p.id === result.program.id);
+      if (existingIndex >= 0) {
+        extensibilityState.customPrograms[existingIndex] = result.program;
+      } else {
+        extensibilityState.customPrograms.push(result.program);
+      }
+      updateProgramsListUI();
+    } else if (result.error) {
+      alert('Error loading program: ' + result.error);
+    }
+  } catch (error) {
+    console.error('Error loading program:', error);
+    alert('Error loading program: ' + error.message);
+  }
+}
+
+// Load programs from folder
+async function loadProgramsFromFolder() {
+  try {
+    const result = await window.electronAPI.extSelectProgramFolder();
+    if (result.canceled) return;
+
+    if (result.success && result.programs) {
+      // Add/update programs in state
+      result.programs.forEach(program => {
+        const existingIndex = extensibilityState.customPrograms.findIndex(p => p.id === program.id);
+        if (existingIndex >= 0) {
+          extensibilityState.customPrograms[existingIndex] = program;
+        } else {
+          extensibilityState.customPrograms.push(program);
+        }
+      });
+      updateProgramsListUI();
+
+      if (result.errors && result.errors.length > 0) {
+        console.warn('Some programs failed to load:', result.errors);
+      }
+    } else if (result.error) {
+      alert('Error loading programs: ' + result.error);
+    }
+  } catch (error) {
+    console.error('Error loading programs from folder:', error);
+    alert('Error loading programs: ' + error.message);
+  }
+}
+
+// Editor functions
+function getEditorFormData() {
+  return {
+    id: document.getElementById('editor-object-id')?.value || '',
+    name: document.getElementById('editor-object-name')?.value || '',
+    icon: document.getElementById('editor-object-icon')?.value || '📦',
+    category: document.getElementById('editor-object-category')?.value || 'custom',
+    geometry: {
+      type: document.getElementById('editor-geometry-type')?.value || 'box',
+      width: parseFloat(document.getElementById('editor-geo-width')?.value) || 0.5,
+      height: parseFloat(document.getElementById('editor-geo-height')?.value) || 0.3,
+      depth: parseFloat(document.getElementById('editor-geo-depth')?.value) || 0.5
+    },
+    material: {
+      color: document.getElementById('editor-material-color')?.value || '#3b82f6',
+      roughness: parseFloat(document.getElementById('editor-roughness')?.value) || 0.5,
+      metalness: 0.2
+    }
+  };
+}
+
+function cleanupEditorPreview() {
+  if (extensibilityState.editorPreviewObject) {
+    scene.remove(extensibilityState.editorPreviewObject);
+    extensibilityState.editorPreviewObject = null;
+  }
+  // Reset preview container
+  const container = document.getElementById('editor-preview-container');
+  if (container) {
+    container.innerHTML = '<div class="editor-preview-placeholder">Click "Preview" to see your object</div>';
+  }
+}
+
+function previewEditorObject() {
+  const modelDef = getEditorFormData();
+
+  // Validate required fields
+  if (!modelDef.id) {
+    alert('Please enter an Object ID');
+    return;
+  }
+  if (!modelDef.name) {
+    alert('Please enter a Display Name');
+    return;
+  }
+
+  // Clean up previous preview
+  cleanupEditorPreview();
+
+  // Create preview object
+  const previewObj = createCustomObject(modelDef);
+  previewObj.position.set(0, 0, 0);
+
+  scene.add(previewObj);
+  extensibilityState.editorPreviewObject = previewObj;
+
+  // Update preview container with message
+  const container = document.getElementById('editor-preview-container');
+  if (container) {
+    container.innerHTML = `
+      <div style="text-align: center;">
+        <div style="color: #22c55e; font-size: 14px; margin-bottom: 8px;">Preview Active</div>
+        <div style="color: rgba(255,255,255,0.5); font-size: 11px;">Object spawned on desk. Check the 3D view.</div>
+      </div>
+    `;
+  }
+}
+
+async function saveEditorObject() {
+  const modelDef = getEditorFormData();
+
+  // Validate required fields
+  if (!modelDef.id) {
+    alert('Please enter an Object ID');
+    return;
+  }
+  if (!modelDef.name) {
+    alert('Please enter a Display Name');
+    return;
+  }
+
+  try {
+    const result = await window.electronAPI.extExportModel(modelDef);
+    if (result.canceled) return;
+
+    if (result.success) {
+      console.log('Model exported to:', result.filePath);
+    } else if (result.error) {
+      alert('Error saving model: ' + result.error);
+    }
+  } catch (error) {
+    console.error('Error saving model:', error);
+    alert('Error saving model: ' + error.message);
+  }
+}
+
+async function addEditorObjectToPalette() {
+  const modelDef = getEditorFormData();
+
+  // Validate required fields
+  if (!modelDef.id) {
+    alert('Please enter an Object ID');
+    return;
+  }
+  if (!modelDef.name) {
+    alert('Please enter a Display Name');
+    return;
+  }
+
+  try {
+    const result = await window.electronAPI.extSaveModel(modelDef);
+    if (result.success) {
+      // Add to state
+      const existingIndex = extensibilityState.customModels.findIndex(m => m.id === modelDef.id);
+      if (existingIndex >= 0) {
+        extensibilityState.customModels[existingIndex] = modelDef;
+      } else {
+        extensibilityState.customModels.push(modelDef);
+      }
+      updateModelsListUI();
+      registerCustomModels();
+      console.log('Model added to palette:', modelDef.name);
+    } else if (result.error) {
+      alert('Error adding model: ' + result.error);
+    }
+  } catch (error) {
+    console.error('Error adding model to palette:', error);
+    alert('Error adding model: ' + error.message);
+  }
+}
+
+function clearEditorForm() {
+  document.getElementById('editor-object-id').value = '';
+  document.getElementById('editor-object-name').value = '';
+  document.getElementById('editor-object-icon').value = '';
+  document.getElementById('editor-object-category').value = 'trinkets';
+  document.getElementById('editor-geometry-type').value = 'box';
+  document.getElementById('editor-material-color').value = '#3b82f6';
+  document.getElementById('editor-geo-width').value = '0.5';
+  document.getElementById('editor-geo-height').value = '0.3';
+  document.getElementById('editor-geo-depth').value = '0.5';
+  document.getElementById('editor-roughness').value = '0.5';
+
+  cleanupEditorPreview();
+}
+
+// Set up extensibility event listeners
+function setupExtensibilityEventListeners() {
+  // Open button
+  const openBtn = document.getElementById('open-extensibility-btn');
+  if (openBtn) {
+    openBtn.addEventListener('click', openExtensibilityModal);
+  }
+
+  // Close button
+  const closeBtn = document.getElementById('extensibility-close-btn');
+  if (closeBtn) {
+    closeBtn.addEventListener('click', closeExtensibilityModal);
+  }
+
+  // Tab buttons
+  document.querySelectorAll('.extensibility-tab').forEach(tab => {
+    tab.addEventListener('click', () => {
+      switchExtensibilityTab(tab.dataset.tab);
+    });
+  });
+
+  // Models panel buttons
+  const loadModelBtn = document.getElementById('ext-load-model-btn');
+  if (loadModelBtn) {
+    loadModelBtn.addEventListener('click', loadModelFromFile);
+  }
+
+  const loadModelFolderBtn = document.getElementById('ext-load-model-folder-btn');
+  if (loadModelFolderBtn) {
+    loadModelFolderBtn.addEventListener('click', loadModelsFromFolder);
+  }
+
+  // Programs panel buttons
+  const loadProgramBtn = document.getElementById('ext-load-program-btn');
+  if (loadProgramBtn) {
+    loadProgramBtn.addEventListener('click', loadProgramFromFolder);
+  }
+
+  const loadProgramFolderBtn = document.getElementById('ext-load-program-folder-btn');
+  if (loadProgramFolderBtn) {
+    loadProgramFolderBtn.addEventListener('click', loadProgramsFromFolder);
+  }
+
+  // Editor panel buttons
+  const previewBtn = document.getElementById('editor-preview-btn');
+  if (previewBtn) {
+    previewBtn.addEventListener('click', previewEditorObject);
+  }
+
+  const saveBtn = document.getElementById('editor-save-btn');
+  if (saveBtn) {
+    saveBtn.addEventListener('click', saveEditorObject);
+  }
+
+  const addToPaletteBtn = document.getElementById('editor-add-to-palette-btn');
+  if (addToPaletteBtn) {
+    addToPaletteBtn.addEventListener('click', addEditorObjectToPalette);
+  }
+
+  const clearBtn = document.getElementById('editor-clear-btn');
+  if (clearBtn) {
+    clearBtn.addEventListener('click', clearEditorForm);
+  }
+
+  // Close modal on Escape key
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && extensibilityState.isModalOpen) {
+      closeExtensibilityModal();
+    }
+  });
+
+  // Click outside modal to close
+  document.addEventListener('click', (e) => {
+    const modal = document.getElementById('extensibility-modal');
+    if (extensibilityState.isModalOpen && modal && !modal.contains(e.target)) {
+      // Check if click was on the open button
+      const openBtn = document.getElementById('open-extensibility-btn');
+      if (openBtn && openBtn.contains(e.target)) return;
+      closeExtensibilityModal();
+    }
+  });
+}
+
+// Make functions available globally for onclick handlers
+window.spawnCustomModel = spawnCustomModel;
+window.deleteCustomModel = deleteCustomModel;
+window.deleteCustomProgram = deleteCustomProgram;
+
+// Initialize extensibility system when app loads
+function initExtensibility() {
+  setupExtensibilityEventListeners();
+  // Load saved data on startup
+  loadExtensibilityData();
+}
+
+// Extend init function to include extensibility initialization
+const originalInitFunction = init;
+init = function() {
+  originalInitFunction();
+  initExtensibility();
+};
+
+// ============================================================================
 // START APPLICATION
 // ============================================================================
 init();

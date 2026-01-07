@@ -8503,8 +8503,9 @@ function enterPenDrawingMode() {
   penDrawingMode.active = true;
   makePenDrawingAngle(penDrawingMode.heldPen);
 
-  // Use the pen's line width setting
+  // Use the pen's line width and save folder settings
   penDrawingMode.lineWidth = penDrawingMode.heldPen.userData.lineWidth || 2;
+  penDrawingMode.saveFolder = penDrawingMode.heldPen.userData.drawingsSaveFolder || null;
 
   // Stop normal dragging - pen is now attached to cursor in drawing mode
   if (isDragging && selectedObject === penDrawingMode.heldPen) {
@@ -8535,9 +8536,10 @@ function enterPenDrawingModeWithPen(pen) {
   // Tilt pen to drawing angle
   makePenDrawingAngle(pen);
 
-  // Use the pen's line width and showRay settings
+  // Use the pen's line width, showRay, and save folder settings
   penDrawingMode.lineWidth = pen.userData.lineWidth || 2;
   penDrawingMode.showRay = pen.userData.showDrawingRay || false;
+  penDrawingMode.saveFolder = pen.userData.drawingsSaveFolder || null;
 
   // If user was dragging this pen, stop dragging
   if (isDragging && selectedObject === pen) {

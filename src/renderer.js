@@ -9080,6 +9080,9 @@ async function saveDrawingToFile(drawableObject) {
       );
       if (result.success) {
         console.log('Drawing also saved to custom folder:', result.filePath);
+        // Store the custom folder path and file path for later deletion
+        drawableObject.userData.customFolderPath = customFolder;
+        drawableObject.userData.customFilePath = result.filePath;
       } else {
         console.error('Error saving to custom folder:', result.error);
       }
@@ -9157,14 +9160,30 @@ async function deleteDrawingFile(drawableObject) {
   if (!drawableObject) return;
 
   const objectId = drawableObject.userData.id;
+
+  // Delete from app data storage
   try {
     if (window.electronAPI && window.electronAPI.saveObjectData) {
       // Pass null to delete the file
       await window.electronAPI.saveObjectData(objectId, 'drawing', null);
-      console.log('Drawing deleted for object:', objectId);
+      console.log('Drawing deleted from app data for object:', objectId);
     }
   } catch (err) {
-    console.error('Error deleting drawing:', err);
+    console.error('Error deleting drawing from app data:', err);
+  }
+
+  // Delete from custom folder if it was saved there
+  if (drawableObject.userData.customFilePath && window.electronAPI && window.electronAPI.deleteDrawingFile) {
+    try {
+      const result = await window.electronAPI.deleteDrawingFile(drawableObject.userData.customFilePath);
+      if (result.success) {
+        console.log('Drawing deleted from custom folder:', drawableObject.userData.customFilePath);
+      } else {
+        console.error('Error deleting from custom folder:', result.error);
+      }
+    } catch (err) {
+      console.error('Error deleting drawing from custom folder:', err);
+    }
   }
 }
 

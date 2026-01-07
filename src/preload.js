@@ -33,6 +33,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   getDefaultDrawingsFolder: () => ipcRenderer.invoke('get-default-drawings-folder'),
   selectDrawingsFolder: () => ipcRenderer.invoke('select-drawings-folder'),
   saveDrawingFile: (folderPath, fileName, dataUrl) => ipcRenderer.invoke('save-drawing-file', folderPath, fileName, dataUrl),
+  deleteDrawingFile: (filePath) => ipcRenderer.invoke('delete-drawing-file', filePath),
   // Activity log - live log recording to file
   startLogRecording: (headerContent) => ipcRenderer.invoke('start-log-recording', headerContent),
   appendLogEntry: (logEntry) => ipcRenderer.invoke('append-log-entry', logEntry),

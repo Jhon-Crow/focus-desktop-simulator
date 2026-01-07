@@ -1206,6 +1206,25 @@ ipcMain.handle('save-drawing-file', async (event, folderPath, fileName, dataUrl)
   }
 });
 
+// Delete drawing file from custom folder
+ipcMain.handle('delete-drawing-file', async (event, filePath) => {
+  try {
+    // Check if file exists before attempting deletion
+    if (fs.existsSync(filePath)) {
+      fs.unlinkSync(filePath);
+      console.log('Drawing file deleted:', filePath);
+      return { success: true };
+    } else {
+      // File doesn't exist, but that's okay (already deleted or never existed)
+      console.log('Drawing file not found (may have been already deleted):', filePath);
+      return { success: true };
+    }
+  } catch (error) {
+    console.error('Error deleting drawing file:', error);
+    return { success: false, error: error.message };
+  }
+});
+
 // ============================================================================
 // WINDOW SETTINGS
 // ============================================================================

@@ -7050,10 +7050,13 @@ function createCard(options = {}) {
 
   // Add title on back if configured
   if (group.userData.showTitleOnBack && group.userData.backTitle) {
+    // Draw text background for better readability
+    backCtx.fillStyle = 'rgba(0,0,0,0.5)';
+    backCtx.fillRect(10, 80, 108, 30);
     backCtx.fillStyle = 'rgba(255,255,255,0.9)';
     backCtx.font = 'bold 14px Arial';
     backCtx.textAlign = 'center';
-    backCtx.fillText(group.userData.backTitle, 64, 95);
+    backCtx.fillText(group.userData.backTitle, 64, 100);
   }
 
   const backTexture = new THREE.CanvasTexture(backCanvas);
@@ -7075,6 +7078,15 @@ function createCard(options = {}) {
   }
 
   group.position.y = getDeskSurfaceY() + cardThickness / 2;
+
+  // If card has custom back image or back title, update visuals to render them properly
+  // (the initial back texture only renders the default pattern)
+  if (group.userData.backImage || (group.userData.showTitleOnBack && group.userData.backTitle)) {
+    // Need to use setTimeout to ensure the card object is fully added to scene first
+    setTimeout(() => {
+      updateCardVisuals(group);
+    }, 0);
+  }
 
   return group;
 }

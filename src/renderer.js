@@ -1460,6 +1460,23 @@ let playerModeState = {
   bigPlayerButtonTypes: ['prev', 'play', 'stop', 'next']
 };
 
+// Card reading mode state (similar to book reading mode, but uses left/right arrows for flipping)
+let cardReadingState = {
+  active: false,
+  card: null,
+  originalCameraPos: null,
+  originalCameraYaw: null,
+  originalCameraPitch: null,
+  middleMouseDownTime: 0,
+  holdTimeout: null,
+  // Zoom and pan controls for card reading mode
+  zoomDistance: 0.4, // Distance from card
+  panOffsetX: 0,
+  panOffsetZ: 0,
+  // Cached card world position
+  cardWorldPos: null
+};
+
 // Double-click tracking for laptop desktop
 let laptopDoubleClickState = {
   lastClickTime: 0,
@@ -7074,14 +7091,14 @@ function createCard(options = {}) {
 
   // Set initial flip state
   if (group.userData.isFlipped) {
-    group.rotation.z = Math.PI; // Flipped to show front
+    group.rotation.x = Math.PI; // Flipped to show front
   }
 
   group.position.y = getDeskSurfaceY() + cardThickness / 2;
 
-  // If card has custom back image or back title, update visuals to render them properly
-  // (the initial back texture only renders the default pattern)
-  if (group.userData.backImage || (group.userData.showTitleOnBack && group.userData.backTitle)) {
+  // If card has custom images or back title, update visuals to render them properly
+  // (the initial texture only renders the default pattern/content)
+  if (group.userData.backImage || group.userData.frontImage || (group.userData.showTitleOnBack && group.userData.backTitle)) {
     // Need to use setTimeout to ensure the card object is fully added to scene first
     setTimeout(() => {
       updateCardVisuals(group);
@@ -7156,8 +7173,8 @@ function flipCard(cardObject) {
   // Toggle flip state
   cardObject.userData.isFlipped = !cardObject.userData.isFlipped;
 
-  // Animate the flip
-  const startRotation = cardObject.rotation.z;
+  // Animate the flip around the X axis (flips the card over like turning a page)
+  const startRotation = cardObject.rotation.x;
   const targetRotation = cardObject.userData.isFlipped ? Math.PI : 0;
   const duration = 300;
   const startTime = Date.now();
@@ -7171,12 +7188,12 @@ function flipCard(cardObject) {
       ? 2 * progress * progress
       : 1 - Math.pow(-2 * progress + 2, 2) / 2;
 
-    cardObject.rotation.z = startRotation + (targetRotation - startRotation) * eased;
+    cardObject.rotation.x = startRotation + (targetRotation - startRotation) * eased;
 
     if (progress < 1) {
       requestAnimationFrame(animateFlip);
     } else {
-      cardObject.rotation.z = targetRotation;
+      cardObject.rotation.x = targetRotation;
       saveState();
     }
   }
@@ -7204,49 +7221,81 @@ function updateCardVisuals(cardObject) {
     frontCanvas.height = 180;
     const frontCtx = frontCanvas.getContext('2d');
 
-    // Fill background
-    frontCtx.fillStyle = cardData.mainColor || '#ffffff';
-    frontCtx.fillRect(0, 0, 128, 180);
+    // Helper to draw front content (title and description)
+    const drawFrontContent = () => {
+      // Add border
+      frontCtx.strokeStyle = 'rgba(0,0,0,0.2)';
+      frontCtx.lineWidth = 2;
+      frontCtx.strokeRect(4, 4, 120, 172);
 
-    // Add border
-    frontCtx.strokeStyle = 'rgba(0,0,0,0.2)';
-    frontCtx.lineWidth = 2;
-    frontCtx.strokeRect(4, 4, 120, 172);
+      // Add title
+      if (cardData.title) {
+        frontCtx.fillStyle = cardData.accentColor || '#1a1a1a';
+        frontCtx.font = 'bold 12px Arial';
+        frontCtx.textAlign = 'center';
+        frontCtx.fillText(cardData.title, 64, 20);
+      }
 
-    // Add title
-    if (cardData.title) {
-      frontCtx.fillStyle = cardData.accentColor || '#1a1a1a';
-      frontCtx.font = 'bold 12px Arial';
-      frontCtx.textAlign = 'center';
-      frontCtx.fillText(cardData.title, 64, 20);
+      // Add description with word wrap
+      // If there's a front image, description starts below the image (around y=110)
+      // If no front image, description starts higher (around y=35, right after title)
+      if (cardData.description) {
+        frontCtx.fillStyle = cardData.accentColor || '#1a1a1a';
+        frontCtx.font = '10px Arial';
+        frontCtx.textAlign = 'center';
+        const words = cardData.description.split(' ');
+        let line = '';
+        // Start description at different Y depending on whether we have a front image
+        let y = cardData.frontImage ? 110 : 35;
+        const maxWidth = 110;
+        words.forEach(word => {
+          const testLine = line + word + ' ';
+          const metrics = frontCtx.measureText(testLine);
+          if (metrics.width > maxWidth && line !== '') {
+            frontCtx.fillText(line, 64, y);
+            line = word + ' ';
+            y += 14;
+          } else {
+            line = testLine;
+          }
+        });
+        frontCtx.fillText(line, 64, y);
+      }
+
+      const frontTexture = new THREE.CanvasTexture(frontCanvas);
+      frontFace.material.map = frontTexture;
+      frontFace.material.needsUpdate = true;
+    };
+
+    // Check for custom front image
+    if (cardData.frontImage) {
+      const img = new Image();
+      img.onload = () => {
+        // Fill background first
+        frontCtx.fillStyle = cardData.mainColor || '#ffffff';
+        frontCtx.fillRect(0, 0, 128, 180);
+        // Draw image in upper portion of card (below title)
+        // Image area: from y=25 to y=100, centered horizontally
+        const imgWidth = 100;
+        const imgHeight = 70;
+        const imgX = (128 - imgWidth) / 2;
+        const imgY = 30;
+        frontCtx.drawImage(img, imgX, imgY, imgWidth, imgHeight);
+        drawFrontContent();
+      };
+      img.onerror = () => {
+        // Fallback if image fails to load
+        frontCtx.fillStyle = cardData.mainColor || '#ffffff';
+        frontCtx.fillRect(0, 0, 128, 180);
+        drawFrontContent();
+      };
+      img.src = cardData.frontImage;
+    } else {
+      // No front image - fill background and draw content
+      frontCtx.fillStyle = cardData.mainColor || '#ffffff';
+      frontCtx.fillRect(0, 0, 128, 180);
+      drawFrontContent();
     }
-
-    // Add description with word wrap
-    if (cardData.description) {
-      frontCtx.fillStyle = cardData.accentColor || '#1a1a1a';
-      frontCtx.font = '10px Arial';
-      frontCtx.textAlign = 'center';
-      const words = cardData.description.split(' ');
-      let line = '';
-      let y = 90;
-      const maxWidth = 110;
-      words.forEach(word => {
-        const testLine = line + word + ' ';
-        const metrics = frontCtx.measureText(testLine);
-        if (metrics.width > maxWidth && line !== '') {
-          frontCtx.fillText(line, 64, y);
-          line = word + ' ';
-          y += 14;
-        } else {
-          line = testLine;
-        }
-      });
-      frontCtx.fillText(line, 64, y);
-    }
-
-    const frontTexture = new THREE.CanvasTexture(frontCanvas);
-    frontFace.material.map = frontTexture;
-    frontFace.material.needsUpdate = true;
   }
 
   // Update back face texture
@@ -11881,6 +11930,16 @@ function setupEventListeners() {
       }
     }
 
+    // Arrow keys for card reading mode - left/right to flip card
+    if ((e.key === 'ArrowLeft' || e.key === 'ArrowRight') && !e.altKey && !e.ctrlKey) {
+      if (cardReadingState.active && cardReadingState.card) {
+        e.preventDefault();
+        // Flip card on any arrow key press (both directions flip the card)
+        flipCard(cardReadingState.card);
+        return;
+      }
+    }
+
     // Arrow keys for book - page navigation in reading mode, or when aimed at book
     if ((e.key === 'ArrowLeft' || e.key === 'ArrowRight' || e.key === 'ArrowUp' || e.key === 'ArrowDown') && !e.altKey && !e.ctrlKey) {
       // In inspection+drawing mode, arrow keys pan the view
@@ -13310,6 +13369,15 @@ function onMouseDown(event) {
             enterPlayerMode(object);
             playerModeState.holdTimeout = null; // Mark as already handled
           }, 300);
+        } else if (object.userData.type === 'card') {
+          // For cards, enter card reading mode after holding for 300ms
+          cardReadingState.middleMouseDownTime = Date.now();
+          cardReadingState.card = object;
+          cardReadingState.holdTimeout = setTimeout(() => {
+            // Enter card reading mode after holding for 300ms
+            enterCardReadingMode(object);
+            cardReadingState.holdTimeout = null; // Mark as already handled
+          }, 300);
         } else {
           // Perform quick toggle interaction based on object type
           // Pass the clicked mesh so we can detect sub-component clicks (like power button)
@@ -13393,6 +13461,12 @@ function onMouseDown(event) {
   // If in book reading mode, LMB click exits reading mode
   if (bookReadingState.active) {
     exitBookReadingMode();
+    return;
+  }
+
+  // If in card reading mode, LMB click exits reading mode
+  if (cardReadingState.active) {
+    exitCardReadingMode();
     return;
   }
 
@@ -14411,6 +14485,18 @@ function onMouseUp(event) {
       if (playerModeState.player) {
         performQuickInteraction(playerModeState.player, null);
         playerModeState.player = null;
+      }
+    }
+
+    // If user releases before the card reading mode hold timeout fired, cancel it and flip card
+    if (cardReadingState.holdTimeout) {
+      clearTimeout(cardReadingState.holdTimeout);
+      cardReadingState.holdTimeout = null;
+
+      // Quick click on card - flip it
+      if (cardReadingState.card) {
+        flipCard(cardReadingState.card);
+        cardReadingState.card = null;
       }
     }
     return;
@@ -16002,6 +16088,21 @@ function updateCustomizationPanel(object) {
                    placeholder="Enter card title"
                    style="width: 100%; padding: 10px; background: rgba(255,255,255,0.1); border: 1px solid rgba(255,255,255,0.2); border-radius: 8px; color: #fff; box-sizing: border-box;">
           </div>
+          <div style="margin-bottom: 12px;">
+            <label style="color: rgba(255,255,255,0.7); display: block; margin-bottom: 8px; font-size: 12px;">Front Image</label>
+            <div style="display: flex; flex-direction: column; gap: 8px;">
+              <input type="file" id="card-front-image-edit" accept="image/*" style="display: none;">
+              <button id="card-front-image-btn-edit" style="padding: 10px 15px; background: rgba(79, 70, 229, 0.3); border: 1px solid rgba(79, 70, 229, 0.5); border-radius: 8px; color: #fff; cursor: pointer;">
+                ${object.userData.frontImage ? '🖼️ Change Front Image' : '📁 Upload Front Image'}
+              </button>
+              ${object.userData.frontImage ? `
+                <button id="card-front-image-clear-edit" style="padding: 10px 15px; background: rgba(239, 68, 68, 0.2); border: 1px solid rgba(239, 68, 68, 0.4); border-radius: 8px; color: #ef4444; cursor: pointer;">
+                  Clear Front Image
+                </button>
+                <div style="color: rgba(255,255,255,0.5); font-size: 11px;">Custom front image set</div>
+              ` : ''}
+            </div>
+          </div>
           <div>
             <label style="color: rgba(255,255,255,0.7); display: block; margin-bottom: 8px; font-size: 12px;">Description</label>
             <textarea id="card-description-edit" placeholder="Enter card description"
@@ -16024,7 +16125,7 @@ function updateCustomizationPanel(object) {
               Show title on back
             </label>
           </div>
-          <div>
+          <div style="margin-bottom: 12px;">
             <label style="color: rgba(255,255,255,0.7); display: block; margin-bottom: 8px; font-size: 12px;">Custom Back Image</label>
             <div style="display: flex; flex-direction: column; gap: 8px;">
               <input type="file" id="card-back-image-edit" accept="image/*" style="display: none;">
@@ -16035,6 +16136,11 @@ function updateCustomizationPanel(object) {
                 <button id="card-back-image-clear-edit" style="padding: 10px 15px; background: rgba(239, 68, 68, 0.2); border: 1px solid rgba(239, 68, 68, 0.4); border-radius: 8px; color: #ef4444; cursor: pointer;">
                   Clear Back Image
                 </button>
+                <label style="display: flex; align-items: center; gap: 8px; color: rgba(255,255,255,0.7); cursor: pointer; font-size: 12px; margin-top: 8px;">
+                  <input type="checkbox" id="card-copy-back-to-front-edit" ${object.userData.frontImage === object.userData.backImage && object.userData.frontImage ? 'checked' : ''}
+                         style="width: 16px; height: 16px;">
+                  Use same image on front
+                </label>
                 <div style="color: rgba(255,255,255,0.5); font-size: 11px;">Custom back image set</div>
               ` : ''}
             </div>
@@ -16048,7 +16154,7 @@ function updateCustomizationPanel(object) {
         </div>
 
         <div style="margin-top: 15px; color: rgba(255,255,255,0.4); font-size: 11px;">
-          Tip: Middle-click on card to quickly flip it
+          Tip: Middle-click to flip card, hold to enter reading mode (use ← → arrows to flip)
         </div>
       `;
       setupCardCustomizationHandlers(object);
@@ -17434,11 +17540,15 @@ function setupCardCustomizationHandlers(object) {
   setTimeout(() => {
     const titleInput = document.getElementById('card-title-edit');
     const descriptionInput = document.getElementById('card-description-edit');
+    const frontImageInput = document.getElementById('card-front-image-edit');
+    const frontImageBtn = document.getElementById('card-front-image-btn-edit');
+    const frontImageClearBtn = document.getElementById('card-front-image-clear-edit');
     const backTitleInput = document.getElementById('card-back-title-edit');
     const showBackTitleCheckbox = document.getElementById('card-show-back-title-edit');
     const backImageInput = document.getElementById('card-back-image-edit');
     const backImageBtn = document.getElementById('card-back-image-btn-edit');
     const backImageClearBtn = document.getElementById('card-back-image-clear-edit');
+    const copyBackToFrontCheckbox = document.getElementById('card-copy-back-to-front-edit');
     const flipBtn = document.getElementById('card-flip-edit');
 
     // Title input - live update
@@ -17462,6 +17572,41 @@ function setupCardCustomizationHandlers(object) {
         object.userData.description = descriptionInput.value;
         updateCardVisuals(object);
         saveState();
+      });
+    }
+
+    // Front image upload
+    if (frontImageBtn && frontImageInput) {
+      frontImageBtn.addEventListener('click', () => {
+        frontImageInput.click();
+      });
+
+      frontImageInput.addEventListener('change', (e) => {
+        const file = e.target.files[0];
+        if (file && file.type.startsWith('image/')) {
+          const reader = new FileReader();
+          reader.onload = (event) => {
+            object.userData.frontImage = event.target.result;
+            updateCardVisuals(object);
+            saveState();
+
+            // Refresh the customization panel to show clear button
+            updateCustomizationPanel(object);
+          };
+          reader.readAsDataURL(file);
+        }
+      });
+    }
+
+    // Clear front image button
+    if (frontImageClearBtn) {
+      frontImageClearBtn.addEventListener('click', () => {
+        object.userData.frontImage = null;
+        updateCardVisuals(object);
+        saveState();
+
+        // Refresh the customization panel to remove clear button
+        updateCustomizationPanel(object);
       });
     }
 
@@ -17498,7 +17643,7 @@ function setupCardCustomizationHandlers(object) {
             updateCardVisuals(object);
             saveState();
 
-            // Refresh the customization panel to show clear button
+            // Refresh the customization panel to show clear button and checkbox
             updateCustomizationPanel(object);
           };
           reader.readAsDataURL(file);
@@ -17510,10 +17655,30 @@ function setupCardCustomizationHandlers(object) {
     if (backImageClearBtn) {
       backImageClearBtn.addEventListener('click', () => {
         object.userData.backImage = null;
+        // Also clear front image if it was synced
+        if (object.userData.frontImage === object.userData.backImage) {
+          object.userData.frontImage = null;
+        }
         updateCardVisuals(object);
         saveState();
 
         // Refresh the customization panel to remove clear button
+        updateCustomizationPanel(object);
+      });
+    }
+
+    // Copy back image to front checkbox
+    if (copyBackToFrontCheckbox) {
+      copyBackToFrontCheckbox.addEventListener('change', () => {
+        if (copyBackToFrontCheckbox.checked && object.userData.backImage) {
+          object.userData.frontImage = object.userData.backImage;
+        } else {
+          object.userData.frontImage = null;
+        }
+        updateCardVisuals(object);
+        saveState();
+
+        // Refresh the customization panel
         updateCustomizationPanel(object);
       });
     }
@@ -22816,6 +22981,118 @@ function exitBookReadingMode() {
 }
 
 // ============================================================================
+// CARD READING MODE (similar to book reading mode, but for cards with flip control)
+// ============================================================================
+
+function enterCardReadingMode(card) {
+  if (cardReadingState.active) return;
+
+  cardReadingState.active = true;
+  cardReadingState.card = card;
+
+  // Reset zoom and pan offsets
+  cardReadingState.zoomDistance = 0.4;
+  cardReadingState.panOffsetX = 0;
+  cardReadingState.panOffsetZ = 0;
+
+  // Store original camera state
+  cardReadingState.originalCameraPos = camera.position.clone();
+  cardReadingState.originalCameraYaw = cameraLookState.yaw;
+  cardReadingState.originalCameraPitch = cameraLookState.pitch;
+
+  // Log entering card reading mode
+  activityLog.add('MODE', 'Entered card reading mode', {
+    cardType: card.userData.type,
+    cardId: card.userData.id
+  });
+
+  // Get card position in world coordinates and cache it
+  const cardWorldPos = new THREE.Vector3();
+  card.getWorldPosition(cardWorldPos);
+  cardReadingState.cardWorldPos = cardWorldPos;
+
+  // Calculate target camera position - at comfortable reading height above the card
+  const targetCameraPos = new THREE.Vector3(
+    cardWorldPos.x,
+    cardWorldPos.y + cardReadingState.zoomDistance,
+    cardWorldPos.z + 0.3
+  );
+
+  // Animate camera to reading position
+  const startPos = camera.position.clone();
+  const startTime = Date.now();
+  const duration = 400;
+
+  function animateToReading() {
+    const elapsed = Date.now() - startTime;
+    const progress = Math.min(elapsed / duration, 1);
+    const eased = 1 - Math.pow(1 - progress, 3); // Ease out cubic
+
+    camera.position.lerpVectors(startPos, targetCameraPos, eased);
+
+    // Point camera down at card
+    const lookAtY = cardWorldPos.y + 0.01;
+    const verticalDist = camera.position.y - lookAtY;
+    const horizontalDist = Math.abs(camera.position.z - cardWorldPos.z);
+    const targetPitch = -Math.atan2(verticalDist, horizontalDist);
+    cameraLookState.pitch = cardReadingState.originalCameraPitch + (targetPitch - cardReadingState.originalCameraPitch) * eased;
+    updateCameraLook();
+
+    if (progress < 1) {
+      requestAnimationFrame(animateToReading);
+    }
+  }
+
+  animateToReading();
+}
+
+function exitCardReadingMode() {
+  if (!cardReadingState.active) return;
+
+  // Log exiting card reading mode
+  activityLog.add('MODE', 'Exited card reading mode', {
+    cardType: cardReadingState.card ? cardReadingState.card.userData.type : null,
+    cardId: cardReadingState.card ? cardReadingState.card.userData.id : null
+  });
+
+  cardReadingState.active = false;
+
+  // Animate camera back to original position
+  if (cardReadingState.originalCameraPos) {
+    const startPos = camera.position.clone();
+    const targetPos = cardReadingState.originalCameraPos;
+    const startPitch = cameraLookState.pitch;
+    const targetPitch = cardReadingState.originalCameraPitch;
+    const startYaw = cameraLookState.yaw;
+    const targetYaw = cardReadingState.originalCameraYaw;
+    const startTime = Date.now();
+    const duration = 300;
+
+    function animateFromReading() {
+      const elapsed = Date.now() - startTime;
+      const progress = Math.min(elapsed / duration, 1);
+      const eased = 1 - Math.pow(1 - progress, 3);
+
+      camera.position.lerpVectors(startPos, targetPos, eased);
+
+      // Restore camera look direction
+      cameraLookState.pitch = startPitch + (targetPitch - startPitch) * eased;
+      cameraLookState.yaw = startYaw + (targetYaw - startYaw) * eased;
+      updateCameraLook();
+
+      if (progress < 1) {
+        requestAnimationFrame(animateFromReading);
+      }
+    }
+
+    animateFromReading();
+  }
+
+  cardReadingState.card = null;
+  cardReadingState.cardWorldPos = null;
+}
+
+// ============================================================================
 // INSPECTION + DRAWING MODE (for notebooks/paper)
 // ============================================================================
 
@@ -24656,8 +24933,8 @@ async function saveStateImmediate() {
           if (obj.userData.backImage) {
             data.backImage = obj.userData.backImage;
           }
-          // Save rotation state for flip
-          data.rotationZ = obj.rotation.z;
+          // Save rotation state for flip (around X axis)
+          data.rotationX = obj.rotation.x;
           break;
       }
 
@@ -25306,9 +25583,12 @@ async function loadState() {
                 // Restore custom images
                 if (objData.frontImage) obj.userData.frontImage = objData.frontImage;
                 if (objData.backImage) obj.userData.backImage = objData.backImage;
-                // Restore rotation state
-                if (objData.rotationZ !== undefined) {
-                  obj.rotation.z = objData.rotationZ;
+                // Restore rotation state (around X axis for flip)
+                if (objData.rotationX !== undefined) {
+                  obj.rotation.x = objData.rotationX;
+                } else if (objData.rotationZ !== undefined) {
+                  // Backwards compatibility: old saves used rotationZ
+                  obj.rotation.x = objData.rotationZ;
                 }
                 // Update card visuals with restored content
                 updateCardVisuals(obj);

@@ -21842,14 +21842,20 @@ async function loadDocToDocument(docObject, file) {
         console.log('[DOC-UPLOAD]', fileExtension.toUpperCase(), 'processed, pageCount:', pageCount);
       }
 
-      console.log('[DOC-UPLOAD] Storing content, totalPages:', pageCount);
+      console.log('[DOC-UPLOAD] Storing content, initial pageCount estimate:', pageCount);
       // Store the processed content
       docObject.userData.htmlContent = htmlContent;
-      docObject.userData.totalPages = pageCount;
       docObject.userData.currentPage = 0;
       docObject.userData.renderedPages = {}; // Cache for rendered page canvases
       docObject.userData.pageTextures = {}; // Cache for THREE.Texture objects
       docObject.userData.isLoadingDoc = false; // Clear loading flag
+
+      // Calculate accurate page count based on actual canvas rendering
+      const canvasWidth = docObject.userData.docResolution || 512;
+      const canvasHeight = Math.round(canvasWidth * 1.36);
+      const accuratePageCount = calculateDocumentPageCount(htmlContent, canvasWidth, canvasHeight);
+      docObject.userData.totalPages = accuratePageCount;
+      console.log('[DOC-UPLOAD] Accurate pageCount:', accuratePageCount, 'at resolution:', canvasWidth);
 
       // Update document thickness based on page count
       console.log('[DOC-UPLOAD] Updating document thickness');
@@ -22017,6 +22023,90 @@ function renderDocumentPageToCanvas(htmlContent, pageIndex, totalPages, width, h
   ctx.fillText(`Page ${pageIndex + 1} of ${totalPages}`, width / 2, height - 15);
 
   return canvas;
+}
+
+// Calculate actual page count based on content and resolution
+// This measures how much text actually fits per page at the current canvas size
+function calculateDocumentPageCount(htmlContent, canvasWidth, canvasHeight) {
+  if (!htmlContent) return 1;
+
+  // Extract text content from HTML
+  const tempDiv = document.createElement('div');
+  tempDiv.innerHTML = htmlContent;
+  const text = tempDiv.textContent || tempDiv.innerText || '';
+
+  if (!text || text.length === 0) return 1;
+
+  // Create a temporary canvas to measure text
+  const canvas = document.createElement('canvas');
+  canvas.width = canvasWidth;
+  canvas.height = canvasHeight;
+  const ctx = canvas.getContext('2d');
+  ctx.font = '14px Arial, sans-serif';
+
+  const padding = 20;
+  const maxWidth = canvasWidth - padding * 2;
+  const lineHeight = 20;
+  const maxTextHeight = canvasHeight - padding * 2 - 30; // Leave room for page number
+
+  const words = text.split(/\s+/);
+  let pageCount = 1;
+  let y = 0;
+  let line = '';
+
+  for (const word of words) {
+    const testLine = line + word + ' ';
+    const metrics = ctx.measureText(testLine);
+
+    if (metrics.width > maxWidth && line !== '') {
+      // Move to next line
+      line = word + ' ';
+      y += lineHeight;
+
+      // Check if we need a new page
+      if (y + lineHeight > maxTextHeight) {
+        pageCount++;
+        y = 0;
+      }
+    } else {
+      line = testLine;
+    }
+  }
+
+  // If there's remaining text on the last line, account for it
+  if (line.trim()) {
+    y += lineHeight;
+    if (y > maxTextHeight) {
+      pageCount++;
+    }
+  }
+
+  return Math.max(1, pageCount);
+}
+
+// Recalculate and update page count when resolution changes
+function recalculateDocumentPages(docObject) {
+  if (!docObject.userData.htmlContent) return;
+
+  const canvasWidth = docObject.userData.docResolution || 512;
+  const canvasHeight = Math.round(canvasWidth * 1.36); // A4-ish ratio
+
+  const oldTotalPages = docObject.userData.totalPages || 1;
+  const newTotalPages = calculateDocumentPageCount(docObject.userData.htmlContent, canvasWidth, canvasHeight);
+
+  docObject.userData.totalPages = newTotalPages;
+
+  // Ensure current page doesn't exceed new total
+  if (docObject.userData.currentPage >= newTotalPages) {
+    docObject.userData.currentPage = newTotalPages - 1;
+  }
+
+  // Update thickness if page count changed significantly
+  if (newTotalPages !== oldTotalPages) {
+    updateDocumentThickness(docObject);
+  }
+
+  console.log('[DOC] Recalculated pages: old=', oldTotalPages, 'new=', newTotalPages, 'resolution=', canvasWidth);
 }
 
 // Update document pages with content
@@ -22522,7 +22612,16 @@ function setupDocumentCustomizationHandlers(object) {
         }
         resolutionDebounceTimer = setTimeout(() => {
           if (object.userData.isOpen && object.userData.htmlContent) {
+            // Recalculate page count when resolution changes - more/fewer pages may be needed
+            recalculateDocumentPages(object);
             updateDocumentPagesWithContent(object);
+            // Update page navigation UI if modal is open
+            const pageNav = document.getElementById('document-page-nav');
+            if (pageNav) {
+              const currentPage = object.userData.currentPage || 0;
+              const totalPages = object.userData.totalPages || 1;
+              pageNav.textContent = `Page ${currentPage + 1} / ${totalPages}`;
+            }
           }
         }, 50); // 50ms debounce for smooth updates
       });
@@ -22536,7 +22635,16 @@ function setupDocumentCustomizationHandlers(object) {
         }
         // Re-render document pages with new resolution
         if (object.userData.isOpen && object.userData.htmlContent) {
+          // Recalculate page count when resolution changes
+          recalculateDocumentPages(object);
           updateDocumentPagesWithContent(object);
+          // Update page navigation UI if modal is open
+          const pageNav = document.getElementById('document-page-nav');
+          if (pageNav) {
+            const currentPage = object.userData.currentPage || 0;
+            const totalPages = object.userData.totalPages || 1;
+            pageNav.textContent = `Page ${currentPage + 1} / ${totalPages}`;
+          }
         }
         saveState();
       });

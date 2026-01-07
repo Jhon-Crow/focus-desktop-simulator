@@ -3012,7 +3012,9 @@ const PRESET_CREATORS = {
   metronome: createMetronome,
   'cassette-player': createCassettePlayer,
   'big-cassette-player': createBigCassettePlayer,
-  dictaphone: createDictaphone
+  dictaphone: createDictaphone,
+  'card-deck': createCardDeck,
+  card: createCard
 };
 
 // ============================================================================
@@ -3100,6 +3102,14 @@ const PALETTE_CATEGORIES = {
     icon: '💻',
     variants: [
       { id: 'laptop', name: 'Laptop', icon: '💻' }
+    ],
+    activeIndex: 0
+  },
+  games: {
+    name: 'Games',
+    icon: '🃏',
+    variants: [
+      { id: 'card-deck', name: 'Card Deck', icon: '🃏' }
     ],
     activeIndex: 0
   }
@@ -6743,6 +6753,589 @@ function createDictaphone(options = {}) {
   group.position.y = getDeskSurfaceY();
 
   return group;
+}
+
+// ============================================================================
+// CARD DECK AND CARDS
+// ============================================================================
+
+function createCardDeck(options = {}) {
+  const group = new THREE.Group();
+
+  // Default card dimensions (standard playing card ratio ~2.5:3.5)
+  const cardWidth = 0.08;
+  const cardHeight = 0.112;
+  const cardThickness = 0.002;
+  const deckHeight = 0.06; // Height of full deck (~30 cards worth)
+
+  group.userData = {
+    type: 'card-deck',
+    name: 'Card Deck',
+    interactive: true,
+    // Deck configuration
+    deckTitle: options.deckTitle || '',
+    showTitleOnBack: options.showTitleOnBack !== undefined ? options.showTitleOnBack : true,
+    customBackImage: options.customBackImage || null, // Data URL for custom back image
+    // Card templates for this deck
+    cardTemplates: options.cardTemplates || [
+      // Default empty card template
+      { title: '', description: '', frontImage: null }
+    ],
+    // Colors
+    mainColor: options.mainColor || '#1e3a5f', // Dark blue deck box
+    accentColor: options.accentColor || '#c41e3a', // Red card back pattern
+    // State
+    cardsDrawn: options.cardsDrawn || 0
+  };
+
+  // Materials
+  const boxMaterial = new THREE.MeshStandardMaterial({
+    color: new THREE.Color(group.userData.mainColor),
+    roughness: 0.6,
+    metalness: 0.1
+  });
+
+  const cardBackMaterial = new THREE.MeshStandardMaterial({
+    color: new THREE.Color(group.userData.accentColor),
+    roughness: 0.4,
+    metalness: 0.0
+  });
+
+  // Deck box (open-top box to hold cards)
+  const boxWallThickness = 0.004;
+  const boxInnerWidth = cardWidth + 0.006;
+  const boxInnerHeight = cardHeight + 0.006;
+  const boxDepth = deckHeight + 0.01;
+
+  // Bottom of box
+  const bottomGeometry = new THREE.BoxGeometry(boxInnerWidth + boxWallThickness * 2, boxWallThickness, boxInnerHeight + boxWallThickness * 2);
+  const bottom = new THREE.Mesh(bottomGeometry, boxMaterial);
+  bottom.position.y = boxWallThickness / 2;
+  bottom.castShadow = true;
+  group.add(bottom);
+
+  // Front wall (shorter to show cards)
+  const frontWallHeight = boxDepth * 0.4;
+  const frontWallGeometry = new THREE.BoxGeometry(boxInnerWidth + boxWallThickness * 2, frontWallHeight, boxWallThickness);
+  const frontWall = new THREE.Mesh(frontWallGeometry, boxMaterial);
+  frontWall.position.set(0, boxWallThickness + frontWallHeight / 2, boxInnerHeight / 2 + boxWallThickness / 2);
+  frontWall.castShadow = true;
+  group.add(frontWall);
+
+  // Back wall (full height)
+  const backWallGeometry = new THREE.BoxGeometry(boxInnerWidth + boxWallThickness * 2, boxDepth, boxWallThickness);
+  const backWall = new THREE.Mesh(backWallGeometry, boxMaterial);
+  backWall.position.set(0, boxWallThickness + boxDepth / 2, -boxInnerHeight / 2 - boxWallThickness / 2);
+  backWall.castShadow = true;
+  group.add(backWall);
+
+  // Left wall
+  const sideWallGeometry = new THREE.BoxGeometry(boxWallThickness, boxDepth, boxInnerHeight + boxWallThickness * 2);
+  const leftWall = new THREE.Mesh(sideWallGeometry, boxMaterial);
+  leftWall.position.set(-boxInnerWidth / 2 - boxWallThickness / 2, boxWallThickness + boxDepth / 2, 0);
+  leftWall.castShadow = true;
+  group.add(leftWall);
+
+  // Right wall
+  const rightWall = new THREE.Mesh(sideWallGeometry, boxMaterial);
+  rightWall.position.set(boxInnerWidth / 2 + boxWallThickness / 2, boxWallThickness + boxDepth / 2, 0);
+  rightWall.castShadow = true;
+  group.add(rightWall);
+
+  // Stack of cards inside the box (visual representation)
+  const cardStackGeometry = new THREE.BoxGeometry(cardWidth, deckHeight * 0.9, cardHeight);
+  const cardStack = new THREE.Mesh(cardStackGeometry, cardBackMaterial);
+  cardStack.position.set(0, boxWallThickness + deckHeight * 0.45, 0);
+  cardStack.name = 'cardStack';
+  cardStack.castShadow = true;
+  group.add(cardStack);
+
+  // Top card face (showing the back pattern)
+  const topCardGeometry = new THREE.PlaneGeometry(cardWidth - 0.004, cardHeight - 0.004);
+
+  // Create canvas for the card back pattern
+  const backCanvas = document.createElement('canvas');
+  backCanvas.width = 128;
+  backCanvas.height = 180;
+  const backCtx = backCanvas.getContext('2d');
+
+  // Fill background with accent color
+  backCtx.fillStyle = group.userData.accentColor;
+  backCtx.fillRect(0, 0, 128, 180);
+
+  // Add a simple pattern
+  backCtx.strokeStyle = 'rgba(255,255,255,0.3)';
+  backCtx.lineWidth = 2;
+  // Diamond pattern
+  for (let i = 0; i < 5; i++) {
+    for (let j = 0; j < 7; j++) {
+      const cx = 12 + i * 26;
+      const cy = 12 + j * 26;
+      backCtx.beginPath();
+      backCtx.moveTo(cx, cy - 10);
+      backCtx.lineTo(cx + 10, cy);
+      backCtx.lineTo(cx, cy + 10);
+      backCtx.lineTo(cx - 10, cy);
+      backCtx.closePath();
+      backCtx.stroke();
+    }
+  }
+
+  // Add border
+  backCtx.strokeStyle = 'rgba(255,255,255,0.5)';
+  backCtx.lineWidth = 4;
+  backCtx.strokeRect(4, 4, 120, 172);
+
+  // Add title if configured
+  if (group.userData.showTitleOnBack && group.userData.deckTitle) {
+    backCtx.fillStyle = 'rgba(255,255,255,0.9)';
+    backCtx.font = 'bold 14px Arial';
+    backCtx.textAlign = 'center';
+    backCtx.fillText(group.userData.deckTitle, 64, 95);
+  }
+
+  const backTexture = new THREE.CanvasTexture(backCanvas);
+  const topCardMaterial = new THREE.MeshStandardMaterial({
+    map: backTexture,
+    roughness: 0.3,
+    metalness: 0.0
+  });
+
+  const topCard = new THREE.Mesh(topCardGeometry, topCardMaterial);
+  topCard.rotation.x = -Math.PI / 2;
+  topCard.position.set(0, boxWallThickness + deckHeight * 0.9 + 0.001, 0);
+  topCard.name = 'topCard';
+  group.add(topCard);
+
+  group.position.y = getDeskSurfaceY();
+
+  return group;
+}
+
+function createCard(options = {}) {
+  const group = new THREE.Group();
+
+  // Card dimensions (standard playing card ratio)
+  const cardWidth = 0.08;
+  const cardHeight = 0.112;
+  const cardThickness = 0.002;
+
+  group.userData = {
+    type: 'card',
+    name: options.title || 'Card',
+    interactive: true,
+    // Card content
+    title: options.title || '',
+    description: options.description || '',
+    frontImage: options.frontImage || null, // Data URL for front image
+    // Back styling (inherited from deck or custom)
+    backColor: options.backColor || '#c41e3a',
+    backImage: options.backImage || null, // Data URL for custom back
+    backTitle: options.backTitle || '',
+    showTitleOnBack: options.showTitleOnBack !== undefined ? options.showTitleOnBack : false,
+    // Colors
+    mainColor: options.mainColor || '#ffffff', // Card front background
+    accentColor: options.accentColor || '#1a1a1a', // Text color
+    // State
+    isFlipped: options.isFlipped !== undefined ? options.isFlipped : false, // false = back showing, true = front showing
+    sourcedeckId: options.sourceDeckId || null
+  };
+
+  // Card body
+  const cardGeometry = new THREE.BoxGeometry(cardWidth, cardThickness, cardHeight);
+  const cardEdgeMaterial = new THREE.MeshStandardMaterial({
+    color: 0xf5f5f5,
+    roughness: 0.5,
+    metalness: 0.0
+  });
+  const cardBody = new THREE.Mesh(cardGeometry, cardEdgeMaterial);
+  cardBody.castShadow = true;
+  cardBody.receiveShadow = true;
+  group.add(cardBody);
+
+  // Front face (top when face-up)
+  const faceGeometry = new THREE.PlaneGeometry(cardWidth - 0.004, cardHeight - 0.004);
+
+  // Create front face canvas
+  const frontCanvas = document.createElement('canvas');
+  frontCanvas.width = 128;
+  frontCanvas.height = 180;
+  const frontCtx = frontCanvas.getContext('2d');
+
+  // Fill with white/main color
+  frontCtx.fillStyle = group.userData.mainColor;
+  frontCtx.fillRect(0, 0, 128, 180);
+
+  // Add border
+  frontCtx.strokeStyle = 'rgba(0,0,0,0.2)';
+  frontCtx.lineWidth = 2;
+  frontCtx.strokeRect(4, 4, 120, 172);
+
+  // Add title at top
+  if (group.userData.title) {
+    frontCtx.fillStyle = group.userData.accentColor;
+    frontCtx.font = 'bold 12px Arial';
+    frontCtx.textAlign = 'center';
+    frontCtx.fillText(group.userData.title, 64, 20);
+  }
+
+  // Add description in center
+  if (group.userData.description) {
+    frontCtx.fillStyle = group.userData.accentColor;
+    frontCtx.font = '10px Arial';
+    frontCtx.textAlign = 'center';
+    // Word wrap description
+    const words = group.userData.description.split(' ');
+    let line = '';
+    let y = 90;
+    const maxWidth = 110;
+    words.forEach(word => {
+      const testLine = line + word + ' ';
+      const metrics = frontCtx.measureText(testLine);
+      if (metrics.width > maxWidth && line !== '') {
+        frontCtx.fillText(line, 64, y);
+        line = word + ' ';
+        y += 14;
+      } else {
+        line = testLine;
+      }
+    });
+    frontCtx.fillText(line, 64, y);
+  }
+
+  const frontTexture = new THREE.CanvasTexture(frontCanvas);
+  const frontMaterial = new THREE.MeshStandardMaterial({
+    map: frontTexture,
+    roughness: 0.3,
+    metalness: 0.0
+  });
+
+  const frontFace = new THREE.Mesh(faceGeometry, frontMaterial);
+  frontFace.rotation.x = -Math.PI / 2;
+  frontFace.position.y = cardThickness / 2 + 0.0001;
+  frontFace.name = 'frontFace';
+  group.add(frontFace);
+
+  // Back face (bottom when face-up)
+  const backCanvas = document.createElement('canvas');
+  backCanvas.width = 128;
+  backCanvas.height = 180;
+  const backCtx = backCanvas.getContext('2d');
+
+  // Fill with back color
+  backCtx.fillStyle = group.userData.backColor;
+  backCtx.fillRect(0, 0, 128, 180);
+
+  // Add pattern
+  backCtx.strokeStyle = 'rgba(255,255,255,0.3)';
+  backCtx.lineWidth = 2;
+  for (let i = 0; i < 5; i++) {
+    for (let j = 0; j < 7; j++) {
+      const cx = 12 + i * 26;
+      const cy = 12 + j * 26;
+      backCtx.beginPath();
+      backCtx.moveTo(cx, cy - 10);
+      backCtx.lineTo(cx + 10, cy);
+      backCtx.lineTo(cx, cy + 10);
+      backCtx.lineTo(cx - 10, cy);
+      backCtx.closePath();
+      backCtx.stroke();
+    }
+  }
+
+  // Add border
+  backCtx.strokeStyle = 'rgba(255,255,255,0.5)';
+  backCtx.lineWidth = 4;
+  backCtx.strokeRect(4, 4, 120, 172);
+
+  // Add title on back if configured
+  if (group.userData.showTitleOnBack && group.userData.backTitle) {
+    backCtx.fillStyle = 'rgba(255,255,255,0.9)';
+    backCtx.font = 'bold 14px Arial';
+    backCtx.textAlign = 'center';
+    backCtx.fillText(group.userData.backTitle, 64, 95);
+  }
+
+  const backTexture = new THREE.CanvasTexture(backCanvas);
+  const backMaterial = new THREE.MeshStandardMaterial({
+    map: backTexture,
+    roughness: 0.3,
+    metalness: 0.0
+  });
+
+  const backFace = new THREE.Mesh(faceGeometry, backMaterial);
+  backFace.rotation.x = Math.PI / 2;
+  backFace.position.y = -cardThickness / 2 - 0.0001;
+  backFace.name = 'backFace';
+  group.add(backFace);
+
+  // Set initial flip state
+  if (group.userData.isFlipped) {
+    group.rotation.z = Math.PI; // Flipped to show front
+  }
+
+  group.position.y = getDeskSurfaceY() + cardThickness / 2;
+
+  return group;
+}
+
+// Draw a card from the deck
+function drawCardFromDeck(deckObject) {
+  if (!deckObject || deckObject.userData.type !== 'card-deck') return null;
+
+  const deckData = deckObject.userData;
+
+  // Get a card template (cycle through templates)
+  const templateIndex = deckData.cardsDrawn % Math.max(1, deckData.cardTemplates.length);
+  const template = deckData.cardTemplates[templateIndex] || { title: '', description: '', frontImage: null };
+
+  // Create new card with deck's styling
+  const cardOptions = {
+    title: template.title || `Card ${deckData.cardsDrawn + 1}`,
+    description: template.description || '',
+    frontImage: template.frontImage,
+    backColor: deckData.accentColor,
+    backImage: deckData.customBackImage,
+    backTitle: deckData.deckTitle,
+    showTitleOnBack: deckData.showTitleOnBack,
+    mainColor: '#ffffff',
+    accentColor: '#1a1a1a',
+    isFlipped: false, // Start with back showing
+    sourceDeckId: deckObject.userData.id
+  };
+
+  // Position the card near the deck
+  const deckPos = deckObject.position;
+  const offsetX = 0.15; // Place card to the right of deck
+
+  const card = addObjectToDesk('card', {
+    ...cardOptions,
+    x: deckPos.x + offsetX,
+    z: deckPos.z
+  });
+
+  if (card) {
+    // Increment cards drawn counter
+    deckData.cardsDrawn++;
+    saveState();
+
+    // Log card draw
+    activityLog.add('OBJECT', 'Card drawn from deck', {
+      deckId: deckObject.userData.id,
+      cardId: card.userData.id,
+      cardNumber: deckData.cardsDrawn
+    });
+  }
+
+  return card;
+}
+
+// Flip a card
+function flipCard(cardObject) {
+  if (!cardObject || cardObject.userData.type !== 'card') return;
+
+  // Toggle flip state
+  cardObject.userData.isFlipped = !cardObject.userData.isFlipped;
+
+  // Animate the flip
+  const startRotation = cardObject.rotation.z;
+  const targetRotation = cardObject.userData.isFlipped ? Math.PI : 0;
+  const duration = 300;
+  const startTime = Date.now();
+
+  function animateFlip() {
+    const elapsed = Date.now() - startTime;
+    const progress = Math.min(elapsed / duration, 1);
+
+    // Ease in-out
+    const eased = progress < 0.5
+      ? 2 * progress * progress
+      : 1 - Math.pow(-2 * progress + 2, 2) / 2;
+
+    cardObject.rotation.z = startRotation + (targetRotation - startRotation) * eased;
+
+    if (progress < 1) {
+      requestAnimationFrame(animateFlip);
+    } else {
+      cardObject.rotation.z = targetRotation;
+      saveState();
+    }
+  }
+
+  animateFlip();
+
+  // Log card flip
+  activityLog.add('CLICK', 'Card flipped', {
+    cardId: cardObject.userData.id,
+    showingFront: cardObject.userData.isFlipped
+  });
+}
+
+// Update card visuals (when editing card content)
+function updateCardVisuals(cardObject) {
+  if (!cardObject || cardObject.userData.type !== 'card') return;
+
+  const cardData = cardObject.userData;
+
+  // Update front face texture
+  const frontFace = cardObject.getObjectByName('frontFace');
+  if (frontFace) {
+    const frontCanvas = document.createElement('canvas');
+    frontCanvas.width = 128;
+    frontCanvas.height = 180;
+    const frontCtx = frontCanvas.getContext('2d');
+
+    // Fill background
+    frontCtx.fillStyle = cardData.mainColor || '#ffffff';
+    frontCtx.fillRect(0, 0, 128, 180);
+
+    // Add border
+    frontCtx.strokeStyle = 'rgba(0,0,0,0.2)';
+    frontCtx.lineWidth = 2;
+    frontCtx.strokeRect(4, 4, 120, 172);
+
+    // Add title
+    if (cardData.title) {
+      frontCtx.fillStyle = cardData.accentColor || '#1a1a1a';
+      frontCtx.font = 'bold 12px Arial';
+      frontCtx.textAlign = 'center';
+      frontCtx.fillText(cardData.title, 64, 20);
+    }
+
+    // Add description with word wrap
+    if (cardData.description) {
+      frontCtx.fillStyle = cardData.accentColor || '#1a1a1a';
+      frontCtx.font = '10px Arial';
+      frontCtx.textAlign = 'center';
+      const words = cardData.description.split(' ');
+      let line = '';
+      let y = 90;
+      const maxWidth = 110;
+      words.forEach(word => {
+        const testLine = line + word + ' ';
+        const metrics = frontCtx.measureText(testLine);
+        if (metrics.width > maxWidth && line !== '') {
+          frontCtx.fillText(line, 64, y);
+          line = word + ' ';
+          y += 14;
+        } else {
+          line = testLine;
+        }
+      });
+      frontCtx.fillText(line, 64, y);
+    }
+
+    const frontTexture = new THREE.CanvasTexture(frontCanvas);
+    frontFace.material.map = frontTexture;
+    frontFace.material.needsUpdate = true;
+  }
+
+  // Update back face texture
+  const backFace = cardObject.getObjectByName('backFace');
+  if (backFace) {
+    const backCanvas = document.createElement('canvas');
+    backCanvas.width = 128;
+    backCanvas.height = 180;
+    const backCtx = backCanvas.getContext('2d');
+
+    // Fill with back color
+    backCtx.fillStyle = cardData.backColor || '#c41e3a';
+    backCtx.fillRect(0, 0, 128, 180);
+
+    // Add pattern
+    backCtx.strokeStyle = 'rgba(255,255,255,0.3)';
+    backCtx.lineWidth = 2;
+    for (let i = 0; i < 5; i++) {
+      for (let j = 0; j < 7; j++) {
+        const cx = 12 + i * 26;
+        const cy = 12 + j * 26;
+        backCtx.beginPath();
+        backCtx.moveTo(cx, cy - 10);
+        backCtx.lineTo(cx + 10, cy);
+        backCtx.lineTo(cx, cy + 10);
+        backCtx.lineTo(cx - 10, cy);
+        backCtx.closePath();
+        backCtx.stroke();
+      }
+    }
+
+    // Add border
+    backCtx.strokeStyle = 'rgba(255,255,255,0.5)';
+    backCtx.lineWidth = 4;
+    backCtx.strokeRect(4, 4, 120, 172);
+
+    // Add title on back if configured
+    if (cardData.showTitleOnBack && cardData.backTitle) {
+      backCtx.fillStyle = 'rgba(255,255,255,0.9)';
+      backCtx.font = 'bold 14px Arial';
+      backCtx.textAlign = 'center';
+      backCtx.fillText(cardData.backTitle, 64, 95);
+    }
+
+    const backTexture = new THREE.CanvasTexture(backCanvas);
+    backFace.material.map = backTexture;
+    backFace.material.needsUpdate = true;
+  }
+}
+
+// Update deck visuals (when editing deck settings)
+function updateDeckVisuals(deckObject) {
+  if (!deckObject || deckObject.userData.type !== 'card-deck') return;
+
+  const deckData = deckObject.userData;
+
+  // Update top card texture
+  const topCard = deckObject.getObjectByName('topCard');
+  if (topCard) {
+    const backCanvas = document.createElement('canvas');
+    backCanvas.width = 128;
+    backCanvas.height = 180;
+    const backCtx = backCanvas.getContext('2d');
+
+    // Fill with accent color
+    backCtx.fillStyle = deckData.accentColor || '#c41e3a';
+    backCtx.fillRect(0, 0, 128, 180);
+
+    // Add pattern
+    backCtx.strokeStyle = 'rgba(255,255,255,0.3)';
+    backCtx.lineWidth = 2;
+    for (let i = 0; i < 5; i++) {
+      for (let j = 0; j < 7; j++) {
+        const cx = 12 + i * 26;
+        const cy = 12 + j * 26;
+        backCtx.beginPath();
+        backCtx.moveTo(cx, cy - 10);
+        backCtx.lineTo(cx + 10, cy);
+        backCtx.lineTo(cx, cy + 10);
+        backCtx.lineTo(cx - 10, cy);
+        backCtx.closePath();
+        backCtx.stroke();
+      }
+    }
+
+    // Add border
+    backCtx.strokeStyle = 'rgba(255,255,255,0.5)';
+    backCtx.lineWidth = 4;
+    backCtx.strokeRect(4, 4, 120, 172);
+
+    // Add title if configured
+    if (deckData.showTitleOnBack && deckData.deckTitle) {
+      backCtx.fillStyle = 'rgba(255,255,255,0.9)';
+      backCtx.font = 'bold 14px Arial';
+      backCtx.textAlign = 'center';
+      backCtx.fillText(deckData.deckTitle, 64, 95);
+    }
+
+    const backTexture = new THREE.CanvasTexture(backCanvas);
+    topCard.material.map = backTexture;
+    topCard.material.needsUpdate = true;
+  }
+
+  // Update card stack color
+  const cardStack = deckObject.getObjectByName('cardStack');
+  if (cardStack) {
+    cardStack.material.color.set(deckData.accentColor || '#c41e3a');
+  }
 }
 
 // Toggle dictaphone recording
@@ -17275,7 +17868,9 @@ function openInteractionModal(object) {
     'books': '📕',
     'magazine': '📰',
     'notebook': '📓',
-    'paper': '📄'
+    'paper': '📄',
+    'card-deck': '🃏',
+    'card': '🎴'
   };
 
   title.textContent = object.userData.name;
@@ -17690,6 +18285,71 @@ function getInteractionContent(object) {
         </div>
       `;
 
+    case 'card-deck':
+      return `
+        <div class="timer-controls">
+          <div class="timer-display">
+            <div class="time" style="font-size: 24px;">🃏 Card Deck</div>
+            <div style="color: rgba(255,255,255,0.6); margin-top: 10px;">
+              Cards drawn: ${object.userData.cardsDrawn || 0}
+            </div>
+          </div>
+          <div style="margin-top: 15px;">
+            <label style="color: rgba(255,255,255,0.7); display: block; margin-bottom: 8px;">Deck Title</label>
+            <input type="text" id="deck-title" value="${object.userData.deckTitle || ''}"
+                   placeholder="Enter deck title"
+                   style="width: 100%; padding: 10px; background: rgba(255,255,255,0.1); border: 1px solid rgba(255,255,255,0.2); border-radius: 8px; color: #fff;">
+          </div>
+          <div style="margin-top: 15px;">
+            <label style="display: flex; align-items: center; gap: 10px; color: rgba(255,255,255,0.7); cursor: pointer;">
+              <input type="checkbox" id="deck-show-title" ${object.userData.showTitleOnBack ? 'checked' : ''}>
+              Show title on card backs
+            </label>
+          </div>
+          <div class="timer-buttons" style="margin-top: 15px;">
+            <button class="timer-btn start" id="deck-draw">Draw Card</button>
+            <button class="timer-btn reset" id="deck-reset">Reset Counter</button>
+          </div>
+          <div style="margin-top: 15px; padding: 15px; background: rgba(79, 70, 229, 0.1); border: 1px solid rgba(79, 70, 229, 0.3); border-radius: 8px;">
+            <div style="color: rgba(255,255,255,0.8); font-size: 13px; margin-bottom: 10px;">Quick actions:</div>
+            <ul style="color: rgba(255,255,255,0.7); font-size: 12px; margin: 0; padding-left: 20px; line-height: 1.8;">
+              <li><strong>Middle-click</strong> on deck to draw a card</li>
+              <li><strong>Middle-click</strong> on a card to flip it</li>
+            </ul>
+          </div>
+        </div>
+      `;
+
+    case 'card':
+      return `
+        <div class="timer-controls">
+          <div class="timer-display">
+            <div class="time" style="font-size: 24px;">🎴 Card</div>
+            <div style="color: rgba(255,255,255,0.6); margin-top: 10px;">
+              ${object.userData.isFlipped ? 'Front side showing' : 'Back side showing'}
+            </div>
+          </div>
+          <div style="margin-top: 15px;">
+            <label style="color: rgba(255,255,255,0.7); display: block; margin-bottom: 8px;">Card Title</label>
+            <input type="text" id="card-title" value="${object.userData.title || ''}"
+                   placeholder="Enter card title"
+                   style="width: 100%; padding: 10px; background: rgba(255,255,255,0.1); border: 1px solid rgba(255,255,255,0.2); border-radius: 8px; color: #fff;">
+          </div>
+          <div style="margin-top: 15px;">
+            <label style="color: rgba(255,255,255,0.7); display: block; margin-bottom: 8px;">Description</label>
+            <textarea id="card-description" placeholder="Enter card description"
+                      style="width: 100%; height: 80px; padding: 10px; background: rgba(255,255,255,0.1); border: 1px solid rgba(255,255,255,0.2); border-radius: 8px; color: #fff; resize: vertical;">${object.userData.description || ''}</textarea>
+          </div>
+          <div class="timer-buttons" style="margin-top: 15px;">
+            <button class="timer-btn start" id="card-flip">Flip Card</button>
+            <button class="timer-btn pause" id="card-save">Save Changes</button>
+          </div>
+          <div style="margin-top: 15px; color: rgba(255,255,255,0.5); font-size: 12px;">
+            Tip: Middle-click on card to quickly flip it
+          </div>
+        </div>
+      `;
+
     default:
       return `<p style="color: rgba(255,255,255,0.7);">No interactions available for this object.</p>`;
   }
@@ -17729,6 +18389,12 @@ function setupInteractionHandlers(object) {
       break;
     case 'magazine':
       setupMagazineHandlers(object);
+      break;
+    case 'card-deck':
+      setupCardDeckHandlers(object);
+      break;
+    case 'card':
+      setupCardHandlers(object);
       break;
   }
 }
@@ -20269,6 +20935,16 @@ function performQuickInteraction(object, clickedMesh = null) {
       openInteractionModal(object);
       break;
 
+    case 'card-deck':
+      // Draw a card from the deck
+      drawCardFromDeck(object);
+      break;
+
+    case 'card':
+      // Flip the card
+      flipCard(object);
+      break;
+
     default:
       // For non-toggle objects, open the interaction modal instead
       if (object.userData.interactive) {
@@ -20685,6 +21361,108 @@ function setupMagazineHandlers(object) {
         content.innerHTML = getInteractionContent(object);
         setupMagazineHandlers(object);
       }
+    });
+  }
+}
+
+// ============================================================================
+// CARD DECK AND CARD HANDLERS
+// ============================================================================
+function setupCardDeckHandlers(object) {
+  const drawBtn = document.getElementById('deck-draw');
+  const resetBtn = document.getElementById('deck-reset');
+  const titleInput = document.getElementById('deck-title');
+  const showTitleCheckbox = document.getElementById('deck-show-title');
+
+  if (drawBtn) {
+    drawBtn.addEventListener('click', () => {
+      drawCardFromDeck(object);
+
+      // Refresh modal
+      const content = document.getElementById('interaction-content');
+      content.innerHTML = getInteractionContent(object);
+      setupCardDeckHandlers(object);
+    });
+  }
+
+  if (resetBtn) {
+    resetBtn.addEventListener('click', () => {
+      object.userData.cardsDrawn = 0;
+      saveState();
+
+      // Refresh modal
+      const content = document.getElementById('interaction-content');
+      content.innerHTML = getInteractionContent(object);
+      setupCardDeckHandlers(object);
+
+      // Log reset
+      activityLog.add('CLICK', 'Deck counter reset', {
+        deckId: object.userData.id
+      });
+    });
+  }
+
+  if (titleInput) {
+    titleInput.addEventListener('change', (e) => {
+      object.userData.deckTitle = e.target.value;
+      updateDeckVisuals(object);
+      saveState();
+    });
+  }
+
+  if (showTitleCheckbox) {
+    showTitleCheckbox.addEventListener('change', (e) => {
+      object.userData.showTitleOnBack = e.target.checked;
+      updateDeckVisuals(object);
+      saveState();
+    });
+  }
+}
+
+function setupCardHandlers(object) {
+  const flipBtn = document.getElementById('card-flip');
+  const saveBtn = document.getElementById('card-save');
+  const titleInput = document.getElementById('card-title');
+  const descriptionInput = document.getElementById('card-description');
+
+  if (flipBtn) {
+    flipBtn.addEventListener('click', () => {
+      flipCard(object);
+
+      // Refresh modal after flip animation
+      setTimeout(() => {
+        const content = document.getElementById('interaction-content');
+        if (content && interactionObject === object) {
+          content.innerHTML = getInteractionContent(object);
+          setupCardHandlers(object);
+        }
+      }, 350);
+    });
+  }
+
+  if (saveBtn) {
+    saveBtn.addEventListener('click', () => {
+      // Save card content changes
+      if (titleInput) {
+        object.userData.title = titleInput.value;
+        object.userData.name = titleInput.value || 'Card';
+      }
+      if (descriptionInput) {
+        object.userData.description = descriptionInput.value;
+      }
+
+      // Update visuals
+      updateCardVisuals(object);
+      saveState();
+
+      // Log save
+      activityLog.add('CLICK', 'Card content saved', {
+        cardId: object.userData.id,
+        title: object.userData.title
+      });
+
+      // Close modal
+      closeInteractionModal();
     });
   }
 }
@@ -23535,6 +24313,43 @@ async function saveStateImmediate() {
           data.recordMicrophonePanorama = obj.userData.recordMicrophonePanorama === true;
           data.recordEnvironmentPanorama = obj.userData.recordEnvironmentPanorama !== false;
           break;
+        case 'card-deck':
+          // Save deck configuration
+          data.deckTitle = obj.userData.deckTitle || '';
+          data.showTitleOnBack = obj.userData.showTitleOnBack;
+          data.cardsDrawn = obj.userData.cardsDrawn || 0;
+          // Save card templates (for custom decks)
+          if (obj.userData.cardTemplates && obj.userData.cardTemplates.length > 0) {
+            data.cardTemplates = obj.userData.cardTemplates;
+          }
+          // Save custom back image if set
+          if (obj.userData.customBackImage) {
+            data.customBackImage = obj.userData.customBackImage;
+          }
+          break;
+        case 'card':
+          // Save card content
+          data.title = obj.userData.title || '';
+          data.description = obj.userData.description || '';
+          data.isFlipped = obj.userData.isFlipped || false;
+          // Save back styling
+          data.backColor = obj.userData.backColor;
+          data.backTitle = obj.userData.backTitle || '';
+          data.showTitleOnBack = obj.userData.showTitleOnBack;
+          // Save source deck reference
+          if (obj.userData.sourceDeckId !== undefined) {
+            data.sourceDeckId = obj.userData.sourceDeckId;
+          }
+          // Save custom images if set
+          if (obj.userData.frontImage) {
+            data.frontImage = obj.userData.frontImage;
+          }
+          if (obj.userData.backImage) {
+            data.backImage = obj.userData.backImage;
+          }
+          // Save rotation state for flip
+          data.rotationZ = obj.rotation.z;
+          break;
       }
 
       // Save sound-related properties for all object types (generic approach)
@@ -24148,6 +24963,46 @@ async function loadState() {
                 if (objData.recordEnvironmentPanorama !== undefined) {
                   obj.userData.recordEnvironmentPanorama = objData.recordEnvironmentPanorama;
                 }
+                break;
+              case 'card-deck':
+                // Restore deck configuration
+                if (objData.deckTitle !== undefined) obj.userData.deckTitle = objData.deckTitle;
+                if (objData.showTitleOnBack !== undefined) obj.userData.showTitleOnBack = objData.showTitleOnBack;
+                if (objData.cardsDrawn !== undefined) obj.userData.cardsDrawn = objData.cardsDrawn;
+                // Restore card templates
+                if (objData.cardTemplates) {
+                  obj.userData.cardTemplates = objData.cardTemplates;
+                }
+                // Restore custom back image
+                if (objData.customBackImage) {
+                  obj.userData.customBackImage = objData.customBackImage;
+                }
+                // Update deck visuals with restored settings
+                updateDeckVisuals(obj);
+                break;
+              case 'card':
+                // Restore card content
+                if (objData.title !== undefined) {
+                  obj.userData.title = objData.title;
+                  obj.userData.name = objData.title || 'Card';
+                }
+                if (objData.description !== undefined) obj.userData.description = objData.description;
+                if (objData.isFlipped !== undefined) obj.userData.isFlipped = objData.isFlipped;
+                // Restore back styling
+                if (objData.backColor) obj.userData.backColor = objData.backColor;
+                if (objData.backTitle !== undefined) obj.userData.backTitle = objData.backTitle;
+                if (objData.showTitleOnBack !== undefined) obj.userData.showTitleOnBack = objData.showTitleOnBack;
+                // Restore source deck reference
+                if (objData.sourceDeckId !== undefined) obj.userData.sourceDeckId = objData.sourceDeckId;
+                // Restore custom images
+                if (objData.frontImage) obj.userData.frontImage = objData.frontImage;
+                if (objData.backImage) obj.userData.backImage = objData.backImage;
+                // Restore rotation state
+                if (objData.rotationZ !== undefined) {
+                  obj.rotation.z = objData.rotationZ;
+                }
+                // Update card visuals with restored content
+                updateCardVisuals(obj);
                 break;
             }
 

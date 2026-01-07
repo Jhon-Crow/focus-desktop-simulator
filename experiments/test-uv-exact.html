@@ -1,0 +1,339 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Exact UV Test - Issue #105</title>
+    <style>
+        body { margin: 0; font-family: Arial, sans-serif; }
+        #container { display: flex; height: 100vh; }
+        #canvas-container { flex: 1; position: relative; }
+        #info {
+            position: absolute;
+            top: 10px;
+            left: 10px;
+            background: rgba(255,255,255,0.95);
+            padding: 15px;
+            border-radius: 8px;
+            font-size: 12px;
+            max-width: 400px;
+            z-index: 10;
+        }
+        #controls {
+            position: absolute;
+            bottom: 10px;
+            left: 10px;
+            background: rgba(255,255,255,0.95);
+            padding: 15px;
+            border-radius: 8px;
+            z-index: 10;
+        }
+        #side-panel {
+            width: 350px;
+            padding: 15px;
+            background: #f0f0f0;
+            overflow-y: auto;
+        }
+        #drawing-canvas {
+            width: 300px;
+            height: 300px;
+            border: 2px solid #333;
+            background: white;
+        }
+        button { margin: 5px; padding: 8px 15px; cursor: pointer; }
+        input[type="range"] { width: 150px; }
+        .success { color: green; font-weight: bold; }
+        .error { color: red; font-weight: bold; }
+        h3 { margin-top: 15px; }
+        #debug-log {
+            height: 250px;
+            overflow-y: auto;
+            font-size: 11px;
+            background: #fff;
+            padding: 10px;
+            font-family: monospace;
+        }
+    </style>
+</head>
+<body>
+    <div id="container">
+        <div id="canvas-container">
+            <div id="info">
+                <h3>Exact UV Test - Issue #105</h3>
+                <p><strong>This test matches renderer.js exactly</strong></p>
+                <hr>
+                <p><strong>UV:</strong> <span id="uv-display">-</span></p>
+                <p><strong>Canvas:</strong> <span id="canvas-display">-</span></p>
+                <p><strong>World:</strong> <span id="world-display">-</span></p>
+                <p><strong>Rotation:</strong> <span id="rotation-display">0</span>°</p>
+                <hr>
+                <p><strong>Draw on the paper!</strong></p>
+                <p>Verify drawing appears under cursor at all rotations.</p>
+            </div>
+            <div id="controls">
+                <label>Rotation: <input type="range" id="rotation-slider" min="-180" max="180" value="0"></label>
+                <br>
+                <button id="clear-btn">Clear</button>
+                <button id="test-all">Run All Tests</button>
+            </div>
+        </div>
+        <div id="side-panel">
+            <h3>2D Canvas (flipY=true applied)</h3>
+            <canvas id="drawing-canvas" width="512" height="512"></canvas>
+
+            <h3>UV Mapping Reference</h3>
+            <pre style="font-size: 10px; background: #333; color: #0f0; padding: 10px;">
++Y Face (top) UV:
+pos(-0.14, -0.20) → UV(0, 1) Back-Left
+pos(+0.14, -0.20) → UV(1, 1) Back-Right
+pos(-0.14, +0.20) → UV(0, 0) Front-Left
+pos(+0.14, +0.20) → UV(1, 0) Front-Right
+
+Canvas coords (from code):
+x = uv.x * 512
+y = (1 - uv.y) * 512
+            </pre>
+
+            <h3>Test Results</h3>
+            <div id="debug-log"></div>
+        </div>
+    </div>
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script>
+        // Setup - matching renderer.js setup
+        const container = document.getElementById('canvas-container');
+        const scene = new THREE.Scene();
+        scene.background = new THREE.Color(0xcccccc);
+
+        // Camera looking down at desk (similar to Focus Desktop Simulator)
+        const camera = new THREE.PerspectiveCamera(60, container.clientWidth / container.clientHeight, 0.1, 1000);
+        camera.position.set(0, 3, 3);
+        camera.lookAt(0, 0, 0);
+
+        const renderer = new THREE.WebGLRenderer({ antialias: true });
+        renderer.setSize(container.clientWidth, container.clientHeight);
+        container.appendChild(renderer.domElement);
+
+        // Lighting
+        scene.add(new THREE.AmbientLight(0xffffff, 0.6));
+        const dirLight = new THREE.DirectionalLight(0xffffff, 0.8);
+        dirLight.position.set(5, 10, 5);
+        scene.add(dirLight);
+
+        // 2D Canvas preview
+        const drawingCanvas = document.getElementById('drawing-canvas');
+        const drawingCtx = drawingCanvas.getContext('2d');
+
+        // 3D texture canvas
+        const textureCanvas = document.createElement('canvas');
+        textureCanvas.width = 512;
+        textureCanvas.height = 512;
+        const textureCtx = textureCanvas.getContext('2d');
+
+        function clearCanvases() {
+            [textureCtx, drawingCtx].forEach(ctx => {
+                ctx.fillStyle = 'white';
+                ctx.fillRect(0, 0, 512, 512);
+                drawGrid(ctx);
+            });
+            texture.needsUpdate = true;
+        }
+
+        function drawGrid(ctx) {
+            ctx.strokeStyle = '#eee';
+            for (let i = 0; i <= 8; i++) {
+                const pos = i * 64;
+                ctx.beginPath();
+                ctx.moveTo(pos, 0); ctx.lineTo(pos, 512);
+                ctx.moveTo(0, pos); ctx.lineTo(512, pos);
+                ctx.stroke();
+            }
+            // Center lines
+            ctx.strokeStyle = '#ccc';
+            ctx.lineWidth = 2;
+            ctx.beginPath();
+            ctx.moveTo(256, 0); ctx.lineTo(256, 512);
+            ctx.moveTo(0, 256); ctx.lineTo(512, 256);
+            ctx.stroke();
+            ctx.lineWidth = 1;
+            // Corner labels
+            ctx.fillStyle = '#999';
+            ctx.font = '12px Arial';
+            ctx.fillText('(0,0) TOP', 5, 15);
+            ctx.fillText('(512,0)', 455, 15);
+            ctx.fillText('(0,512) BOTTOM', 5, 505);
+            ctx.fillText('(512,512)', 445, 505);
+        }
+
+        // Create texture - EXACTLY like renderer.js
+        const texture = new THREE.CanvasTexture(textureCanvas);
+        texture.flipY = true;  // Matches renderer.js line 8725
+        texture.needsUpdate = true;
+
+        // Paper dimensions from renderer.js
+        const PAPER_WIDTH = 0.28;
+        const PAPER_DEPTH = 0.4;
+        const PAPER_HEIGHT = 0.01;
+
+        // Create paper
+        const paperGeometry = new THREE.BoxGeometry(PAPER_WIDTH, PAPER_HEIGHT, PAPER_DEPTH);
+        const paperMaterial = new THREE.MeshStandardMaterial({ map: texture, roughness: 0.95 });
+        const paper = new THREE.Mesh(paperGeometry, paperMaterial);
+        paper.position.y = PAPER_HEIGHT / 2;
+        scene.add(paper);
+
+        // Desk
+        const desk = new THREE.Mesh(
+            new THREE.BoxGeometry(2, 0.05, 2),
+            new THREE.MeshStandardMaterial({ color: 0x8B4513 })
+        );
+        desk.position.y = -0.025;
+        scene.add(desk);
+
+        // Axes helper
+        const axes = new THREE.AxesHelper(0.3);
+        axes.position.y = 0.02;
+        scene.add(axes);
+
+        clearCanvases();
+
+        // Raycaster
+        const raycaster = new THREE.Raycaster();
+        const mouse = new THREE.Vector2();
+
+        function log(msg, cls = '') {
+            const el = document.getElementById('debug-log');
+            el.innerHTML = `<div class="${cls}">${msg}</div>` + el.innerHTML;
+        }
+
+        // Drawing - EXACTLY like addDrawingPoint in renderer.js
+        let isDrawing = false;
+        let lastCoords = null;
+
+        renderer.domElement.addEventListener('mousedown', e => {
+            if (e.button === 0) { isDrawing = true; lastCoords = null; handleDraw(e); }
+        });
+        renderer.domElement.addEventListener('mouseup', () => { isDrawing = false; lastCoords = null; });
+        renderer.domElement.addEventListener('mousemove', e => handleDraw(e));
+
+        function handleDraw(e) {
+            const rect = renderer.domElement.getBoundingClientRect();
+            mouse.x = ((e.clientX - rect.left) / rect.width) * 2 - 1;
+            mouse.y = -((e.clientY - rect.top) / rect.height) * 2 + 1;
+
+            raycaster.setFromCamera(mouse, camera);
+            const intersects = raycaster.intersectObject(paper);
+
+            if (intersects.length > 0) {
+                const uv = intersects[0].uv;
+                const point = intersects[0].point;
+
+                // EXACT code from renderer.js addDrawingPoint():
+                const canvasSize = 512;
+                const coords = {
+                    x: Math.floor(uv.x * canvasSize),
+                    y: Math.floor((1 - uv.y) * canvasSize)
+                };
+
+                // Update display
+                document.getElementById('uv-display').textContent = `(${uv.x.toFixed(3)}, ${uv.y.toFixed(3)})`;
+                document.getElementById('canvas-display').textContent = `(${coords.x}, ${coords.y})`;
+                document.getElementById('world-display').textContent = `(${point.x.toFixed(3)}, ${point.z.toFixed(3)})`;
+
+                if (isDrawing) {
+                    if (lastCoords) {
+                        [textureCtx, drawingCtx].forEach(ctx => {
+                            ctx.strokeStyle = 'blue';
+                            ctx.lineWidth = 4;
+                            ctx.lineCap = 'round';
+                            ctx.beginPath();
+                            ctx.moveTo(lastCoords.x, lastCoords.y);
+                            ctx.lineTo(coords.x, coords.y);
+                            ctx.stroke();
+                        });
+                        texture.needsUpdate = true;
+                    }
+                    lastCoords = { ...coords };
+                }
+            }
+        }
+
+        // Rotation
+        document.getElementById('rotation-slider').addEventListener('input', e => {
+            const deg = parseFloat(e.target.value);
+            paper.rotation.y = deg * Math.PI / 180;
+            document.getElementById('rotation-display').textContent = deg.toFixed(0);
+        });
+
+        // Clear
+        document.getElementById('clear-btn').addEventListener('click', () => {
+            clearCanvases();
+            log('Cleared');
+        });
+
+        // Run all tests
+        document.getElementById('test-all').addEventListener('click', () => {
+            const testAngles = [0, 45, 90, 135, 180];
+            let allPassed = true;
+
+            log('=== Running Tests ===', 'success');
+
+            testAngles.forEach(deg => {
+                paper.rotation.y = deg * Math.PI / 180;
+
+                // Cast ray at screen center
+                raycaster.setFromCamera(new THREE.Vector2(0, 0), camera);
+                const hits = raycaster.intersectObject(paper);
+
+                if (hits.length > 0) {
+                    const uv = hits[0].uv;
+                    const canvasX = Math.floor(uv.x * 512);
+                    const canvasY = Math.floor((1 - uv.y) * 512);
+
+                    // At center, UV should be approximately (0.5, 0.5) regardless of rotation
+                    // This gives canvas (256, 256)
+                    const tolerance = 30; // Allow some variance for camera angle
+                    const centerOk = Math.abs(canvasX - 256) < tolerance && Math.abs(canvasY - 256) < tolerance;
+
+                    if (centerOk) {
+                        log(`${deg}°: UV(${uv.x.toFixed(2)}, ${uv.y.toFixed(2)}) → canvas(${canvasX}, ${canvasY}) ✓`, 'success');
+                    } else {
+                        log(`${deg}°: UV(${uv.x.toFixed(2)}, ${uv.y.toFixed(2)}) → canvas(${canvasX}, ${canvasY}) ✗ Expected ~(256,256)`, 'error');
+                        allPassed = false;
+                    }
+                } else {
+                    log(`${deg}°: No intersection!`, 'error');
+                    allPassed = false;
+                }
+            });
+
+            paper.rotation.y = 0;
+            document.getElementById('rotation-slider').value = 0;
+            document.getElementById('rotation-display').textContent = '0';
+
+            if (allPassed) {
+                log('=== ALL TESTS PASSED ===', 'success');
+            } else {
+                log('=== SOME TESTS FAILED ===', 'error');
+            }
+        });
+
+        // Animate
+        function animate() {
+            requestAnimationFrame(animate);
+            renderer.render(scene, camera);
+        }
+        animate();
+
+        // Resize
+        window.addEventListener('resize', () => {
+            camera.aspect = container.clientWidth / container.clientHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(container.clientWidth, container.clientHeight);
+        });
+
+        log('Test initialized with flipY=true');
+    </script>
+</body>
+</html>

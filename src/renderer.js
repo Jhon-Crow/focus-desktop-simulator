@@ -14327,13 +14327,13 @@ function onMouseWheel(event) {
       const scaleDelta = event.deltaY > 0 ? 0.95 : 1.05;
       const minScale = 0.3;
       // Books, magazines, cassette player, and dictaphone can be scaled larger for reading/interaction
-      let maxScale = 3.0;
+      let maxScale = 6.0;
       if (object.userData.type === 'magazine' || object.userData.type === 'cassette-player' || object.userData.type === 'big-cassette-player') {
-        maxScale = 10.0;
+        maxScale = 20.0;
       } else if (object.userData.type === 'books') {
-        maxScale = 5.0;
+        maxScale = 10.0;
       } else if (object.userData.type === 'dictaphone') {
-        maxScale = 6.0; // 2x of the default 3.0 scale
+        maxScale = 12.0; // 2x of the default 6.0 scale
       }
 
       const oldScale = object.scale.x;
@@ -14434,13 +14434,13 @@ function onMouseWheel(event) {
         const scaleDelta = event.deltaY > 0 ? 0.95 : 1.05;
         const minScale = 0.3;
         // Books, magazines, cassette player, and dictaphone can be scaled larger for reading/interaction
-        let maxScale = 3.0;
+        let maxScale = 6.0;
         if (object.userData.type === 'magazine' || object.userData.type === 'cassette-player' || object.userData.type === 'big-cassette-player') {
-          maxScale = 10.0;
+          maxScale = 20.0;
         } else if (object.userData.type === 'books') {
-          maxScale = 5.0;
+          maxScale = 10.0;
         } else if (object.userData.type === 'dictaphone') {
-          maxScale = 6.0; // 2x of the default 3.0 scale
+          maxScale = 12.0; // 2x of the default 6.0 scale
         }
 
         const oldScale = object.scale.x;

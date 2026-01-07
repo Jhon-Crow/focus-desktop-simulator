@@ -7368,79 +7368,58 @@ function flipCard(cardObject, direction = null) {
   // Prevent flipping if animation is in progress
   if (cardObject.userData.isFlipping) return;
 
-  // Determine target state
-  // isFlipped = false means back is showing (rotation.x = π)
-  // isFlipped = true means front is showing (rotation.x = 0)
+  // Current state: isFlipped = false means back is showing, true means front is showing
   const wasShowingFront = cardObject.userData.isFlipped;
 
+  // Determine target state based on direction or toggle
   let willShowFront;
   if (direction === 1) {
-    // ArrowRight: show front (page 2)
-    willShowFront = true;
+    willShowFront = true;  // ArrowRight: show front
   } else if (direction === -1) {
-    // ArrowLeft: show back (page 1)
-    willShowFront = false;
+    willShowFront = false; // ArrowLeft: show back
   } else {
-    // No direction: toggle
-    willShowFront = !wasShowingFront;
+    willShowFront = !wasShowingFront; // Toggle
   }
 
   // If already showing the requested side, do nothing
   if (willShowFront === wasShowingFront) return;
 
-  // Update state
+  // Update logical state
   cardObject.userData.isFlipped = willShowFront;
   cardObject.userData.isFlipping = true;
 
-  // Calculate start and target rotations
-  // Use modulo to normalize rotation to [0, 2π) range
-  let currentRotation = cardObject.rotation.x % (2 * Math.PI);
-  if (currentRotation < 0) currentRotation += 2 * Math.PI;
-
-  // Determine the closest equivalent rotation for current state
-  // If back was showing, current should be near π (or near 3π = π + 2π)
-  // If front was showing, current should be near 0 (or near 2π)
-  let startRotation;
-  if (wasShowingFront) {
-    // Was showing front (should be near 0 or 2π)
-    startRotation = currentRotation < Math.PI ? currentRotation : currentRotation - 2 * Math.PI;
-  } else {
-    // Was showing back (should be near π)
-    if (currentRotation < Math.PI / 2) {
-      startRotation = currentRotation + Math.PI; // Adjust if rotation drifted below 0
-    } else if (currentRotation > 3 * Math.PI / 2) {
-      startRotation = currentRotation - Math.PI; // Adjust if rotation drifted above 2π
-    } else {
-      startRotation = Math.PI; // Use exact value for clean start
-    }
-  }
-
-  // Target rotation
+  // Target rotation: 0 = front visible, π = back visible
   const targetRotation = willShowFront ? 0 : Math.PI;
 
-  // Calculate delta for smooth animation
-  const delta = targetRotation - startRotation;
+  // Get current rotation, clamping to sensible range
+  let startRotation = cardObject.rotation.x;
 
+  // Normalize start rotation to be close to target for shortest path
+  // If we're at π and going to 0, we want to rotate by -π
+  // If we're at 0 and going to π, we want to rotate by +π
+  while (startRotation > Math.PI * 2) startRotation -= Math.PI * 2;
+  while (startRotation < -Math.PI) startRotation += Math.PI * 2;
+
+  // Animation parameters
   const duration = 300;
   const startTime = Date.now();
-  const actualStartRotation = cardObject.rotation.x;
-  const actualDelta = targetRotation - actualStartRotation;
 
   function animateFlip() {
     const elapsed = Date.now() - startTime;
     const progress = Math.min(elapsed / duration, 1);
 
-    // Ease in-out
+    // Ease in-out curve
     const eased = progress < 0.5
       ? 2 * progress * progress
       : 1 - Math.pow(-2 * progress + 2, 2) / 2;
 
-    cardObject.rotation.x = actualStartRotation + actualDelta * eased;
+    // Interpolate rotation
+    cardObject.rotation.x = startRotation + (targetRotation - startRotation) * eased;
 
     if (progress < 1) {
       requestAnimationFrame(animateFlip);
     } else {
-      // Set final rotation to exact target value
+      // Set exact final rotation and clear animation flag
       cardObject.rotation.x = targetRotation;
       cardObject.userData.isFlipping = false;
       saveState();
@@ -7454,9 +7433,9 @@ function flipCard(cardObject, direction = null) {
     cardId: cardObject.userData.id,
     showingFront: willShowFront,
     direction: direction,
-    startRotation: actualStartRotation.toFixed(4),
-    delta: actualDelta.toFixed(4),
-    targetRotation: targetRotation.toFixed(4)
+    startRotation: startRotation.toFixed(4),
+    targetRotation: targetRotation.toFixed(4),
+    delta: (targetRotation - startRotation).toFixed(4)
   });
 }
 

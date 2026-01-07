@@ -12591,8 +12591,14 @@ function onMouseDown(event) {
       return;
     }
 
-    // In reading mode, MMB does nothing (use LMB click to exit reading mode)
+    // In reading mode, MMB hold exits reading mode
     if (bookReadingState.active) {
+      bookReadingState.middleMouseDownTime = Date.now();
+      bookReadingState.holdTimeout = setTimeout(() => {
+        // Hold for 300ms - exit reading mode
+        exitBookReadingMode();
+        bookReadingState.holdTimeout = null; // Mark as already handled
+      }, 300);
       return;
     }
 
@@ -13718,8 +13724,12 @@ function onMouseUp(event) {
       return;
     }
 
-    // If in reading mode, don't exit on release - stay in mode until user clicks elsewhere
+    // If in reading mode, MMB quick release cancels the hold timeout (don't exit)
     if (bookReadingState.active) {
+      if (bookReadingState.holdTimeout) {
+        clearTimeout(bookReadingState.holdTimeout);
+        bookReadingState.holdTimeout = null;
+      }
       return;
     }
 

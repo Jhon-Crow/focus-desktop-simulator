@@ -1,0 +1,114 @@
+Focus Desktop Simulator - Activity Log
+Generated: 2026-01-06T15:48:20.399Z
+Session Duration: 88.21s
+
+================================================================================
+
+
+[2026-01-06T15:48:22.225Z] [+90.03s] [SYSTEM] Log recording started
+  Details: {
+    "filePath": "I:\\Загрузки\\focuse-desktop-sim\\activity-log-2026-01-06T15-48-20-400Z.txt"
+  }
+
+[2026-01-06T15:48:22.874Z] [+90.68s] [MODE] Exited book reading mode
+  Details: {
+    "bookType": "books",
+    "bookId": 9
+  }
+
+[2026-01-06T15:48:23.049Z] [+90.86s] [MODE] Pointer lock activated (FPS camera mode)
+  Details: {
+    "cameraPosition": {
+      "x": "0.35",
+      "y": "3.12",
+      "z": "4.36"
+    }
+  }
+
+[2026-01-06T15:48:24.894Z] [+92.70s] [MODE] Entered book reading mode
+  Details: {
+    "bookType": "books",
+    "bookId": 9
+  }
+
+[2026-01-06T15:48:27.269Z] [+95.08s] [CAMERA] Quick navigation to corner
+  Details: {
+    "corner": "bottom-right",
+    "key": "KeyC",
+    "cameraPosition": {
+      "x": "-1.254",
+      "y": "1.701",
+      "z": "1.128"
+    },
+    "panOffset": {
+      "x": "-0.766",
+      "z": "-0.903"
+    },
+    "zoomDistance": "0.850"
+  }
+
+[2026-01-06T15:48:30.293Z] [+98.10s] [CAMERA] Quick navigation to corner
+  Details: {
+    "corner": "bottom-left",
+    "key": "KeyZ",
+    "cameraPosition": {
+      "x": "0.337",
+      "y": "1.701",
+      "z": "1.309"
+    },
+    "panOffset": {
+      "x": "0.825",
+      "z": "-0.722"
+    },
+    "zoomDistance": "0.850"
+  }
+
+[2026-01-06T15:48:33.501Z] [+101.31s] [CAMERA] Quick navigation to corner
+  Details: {
+    "corner": "top-right",
+    "key": "KeyE",
+    "cameraPosition": {
+      "x": "-1.928",
+      "y": "1.701",
+      "z": "2.154"
+    },
+    "panOffset": {
+      "x": "-1.441",
+      "z": "0.123"
+    },
+    "zoomDistance": "0.850"
+  }
+
+[2026-01-06T15:48:36.149Z] [+103.96s] [CAMERA] Quick navigation to corner
+  Details: {
+    "corner": "top-left",
+    "key": "KeyQ",
+    "cameraPosition": {
+      "x": "0.768",
+      "y": "1.701",
+      "z": "2.428"
+    },
+    "panOffset": {
+      "x": "1.255",
+      "z": "0.397"
+    },
+    "zoomDistance": "0.850"
+  }
+
+[2026-01-06T15:48:38.974Z] [+106.78s] [MODE] Entered edit mode (customization panel)
+  Details: {
+    "objectType": "books",
+    "objectId": 9,
+    "objectName": "Book"
+  }
+
+[2026-01-06T15:48:39.022Z] [+106.83s] [MODE] Pointer lock deactivated
+
+[2026-01-06T15:48:40.410Z] [+108.22s] [UI] Menu opened
+
+[2026-01-06T15:48:41.522Z] [+109.33s] [USER_ACTION] Stop log recording button clicked
+
+
+================================================================================
+
+Session ended: 2026-01-06T15:48:41.522Z

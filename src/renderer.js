@@ -11405,7 +11405,7 @@ function setupEventListeners() {
         if (wasdKey === 'KeyA') bookReadingState.panOffsetX -= panSpeed;
         if (wasdKey === 'KeyD') bookReadingState.panOffsetX += panSpeed;
 
-        // Clamp pan offsets to reasonable limits
+        // Clamp pan offsets to reasonable limits (fixed bounds allow full navigation)
         bookReadingState.panOffsetX = Math.max(-1.5, Math.min(1.5, bookReadingState.panOffsetX));
         bookReadingState.panOffsetZ = Math.max(-1.5, Math.min(1.5, bookReadingState.panOffsetZ));
 
@@ -11491,6 +11491,203 @@ function setupEventListeners() {
         camera.position.x = Math.max(-8, Math.min(8, camera.position.x));
         camera.position.z = Math.max(-5, Math.min(12, camera.position.z));
         camera.position.y = Math.max(1, Math.min(8, camera.position.y));
+      }
+    }
+
+    // Quick navigation shortcuts in reading mode: Q, E, Z, C
+    // Aligns book corners with screen corners regardless of zoom level
+    // Q - top-left corner of book at top-left corner of screen
+    // E - top-right corner of book at top-right corner of screen
+    // Z - bottom-left corner of book at bottom-left corner of screen
+    // C - bottom-right corner of book at bottom-right corner of screen
+    const quickNavKey = e.code;
+    if (quickNavKey === 'KeyQ' || quickNavKey === 'KeyE' || quickNavKey === 'KeyZ' || quickNavKey === 'KeyC') {
+      // Don't process if typing in an input field
+      if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
+
+      // Only works in reading mode
+      if (bookReadingState.active && bookReadingState.book && bookReadingState.bookWorldPos) {
+        e.preventDefault();
+        const bookWorldPos = bookReadingState.bookWorldPos;
+
+        // Calculate visible area at the book plane by unprojecting viewport corners
+        // This approach is exact and handles all camera transformations (FOV, aspect, rotation)
+        const bookY = bookWorldPos.y;
+
+        // Create a horizontal plane at the book's Y level
+        const bookPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), -bookY);
+
+        // IMPORTANT: Save current camera position and temporarily move camera to centered position
+        // This ensures consistent intersection calculations regardless of current pan offsets
+        // Without this, repeated presses of the same key cause "jumpy" behavior because
+        // intersections depend on current camera position
+        const savedCameraPos = camera.position.clone();
+        const centeredCameraPos = new THREE.Vector3(
+          bookWorldPos.x,  // No pan offset X
+          bookWorldPos.y + bookReadingState.zoomDistance,
+          bookWorldPos.z + 0.65  // No pan offset Z
+        );
+        camera.position.copy(centeredCameraPos);
+        camera.updateMatrixWorld();
+
+        // Unproject the four corners of the viewport to find where they hit the book plane
+        // Viewport corners in NDC (Normalized Device Coordinates):
+        // In Three.js NDC: X: -1 (left) to +1 (right), Y: -1 (top) to +1 (bottom)
+        const raycaster = new THREE.Raycaster();
+        const corners = [
+          new THREE.Vector2(-1, -1), // top-left (left + top)
+          new THREE.Vector2(1, -1),  // top-right (right + top)
+          new THREE.Vector2(-1, 1),  // bottom-left (left + bottom)
+          new THREE.Vector2(1, 1)    // bottom-right (right + bottom)
+        ];
+
+        const intersections = corners.map(corner => {
+          raycaster.setFromCamera(corner, camera);
+          const intersectPoint = new THREE.Vector3();
+          raycaster.ray.intersectPlane(bookPlane, intersectPoint);
+          return intersectPoint;
+        });
+
+        // Restore camera position (will be updated with new pan offsets below)
+        camera.position.copy(savedCameraPos);
+
+        // Book dimensions when open (two pages side by side)
+        // Each page is 0.28 wide, so open book is ~0.56 wide (0.28 * 2)
+        // Book depth is 0.38
+        const bookType = bookReadingState.book.userData.type;
+        let bookHalfWidth, bookHalfDepth;
+
+        if (bookType === 'magazine') {
+          // Magazine: 0.22 x 0.30 closed, open width is ~0.44
+          bookHalfWidth = 0.22; // Half of open magazine width
+          bookHalfDepth = 0.15; // Half of magazine depth
+        } else {
+          // Book: 0.28 x 0.38 closed, open width is ~0.56
+          bookHalfWidth = 0.28; // Half of open book width
+          bookHalfDepth = 0.19; // Half of book depth
+        }
+
+        // Calculate camera shifts to align book corners with viewport corners
+        // The idea: shift camera so that the desired book corner appears at the desired viewport corner
+        //
+        // Current viewport corners hit these points on book plane:
+        // - Top-left viewport corner → intersections[0]
+        // - Top-right viewport corner → intersections[1]
+        // - Bottom-left viewport corner → intersections[2]
+        // - Bottom-right viewport corner → intersections[3]
+        //
+        // Book corners in world space:
+        // Camera is at (bookX, bookY + zoomDistance, bookZ + 0.65), looking down towards -Z
+        // From camera's perspective:
+        // - Top corners have larger Z (closer to camera, towards +Z)
+        // - Bottom corners have smaller Z (farther from camera, towards -Z)
+        // - Left corners have negative X (towards -X)
+        // - Right corners have positive X (towards +X)
+        //
+        // - Top-left: (bookX - bookHalfWidth, bookY, bookZ + bookHalfDepth)
+        // - Top-right: (bookX + bookHalfWidth, bookY, bookZ + bookHalfDepth)
+        // - Bottom-left: (bookX - bookHalfWidth, bookY, bookZ - bookHalfDepth)
+        // - Bottom-right: (bookX + bookHalfWidth, bookY, bookZ - bookHalfDepth)
+        //
+        // To align book's top-left with viewport's top-left, we need to shift camera by:
+        // deltaX = (bookX - bookHalfWidth) - intersections[0].x
+        // deltaZ = (bookZ + bookHalfDepth) - intersections[0].z
+
+        const bookTopLeftX = bookWorldPos.x - bookHalfWidth;  // Left side (negative X)
+        const bookTopLeftZ = bookWorldPos.z + bookHalfDepth;  // Top = larger Z (closer to camera)
+        const bookTopRightX = bookWorldPos.x + bookHalfWidth;  // Right side (positive X)
+        const bookTopRightZ = bookWorldPos.z + bookHalfDepth;  // Top = larger Z (closer to camera)
+        const bookBottomLeftX = bookWorldPos.x - bookHalfWidth;  // Left side (negative X)
+        const bookBottomLeftZ = bookWorldPos.z - bookHalfDepth;  // Bottom = smaller Z (farther from camera)
+        const bookBottomRightX = bookWorldPos.x + bookHalfWidth;  // Right side (positive X)
+        const bookBottomRightZ = bookWorldPos.z - bookHalfDepth;  // Bottom = smaller Z (farther from camera)
+
+        // Calculate shifts for each corner alignment
+        // Note: intersections are calculated from CENTERED camera position (panOffset = 0, 0)
+        // This ensures consistent results regardless of current camera position
+        // intersections[N] represents where viewport corner N hits the book plane when camera is centered
+        // To align book corner with viewport corner: panOffset = viewportCorner - bookCorner
+        // (with X inverted because camera movement is opposite to scene appearance)
+
+        if (quickNavKey === 'KeyQ') {
+          // Q - align book's top-left with viewport's top-left
+          // Note: X-axis is inverted because moving camera right makes content appear left
+          const shiftX = intersections[0].x - bookTopLeftX;  // Inverted X
+          const shiftZ = bookTopLeftZ - intersections[0].z;
+          bookReadingState.panOffsetX = shiftX;
+          bookReadingState.panOffsetZ = shiftZ;
+        } else if (quickNavKey === 'KeyE') {
+          // E - align book's top-right with viewport's top-right
+          // Note: X-axis is inverted because moving camera right makes content appear left
+          const shiftX = intersections[1].x - bookTopRightX;  // Inverted X
+          const shiftZ = bookTopRightZ - intersections[1].z;
+          bookReadingState.panOffsetX = shiftX;
+          bookReadingState.panOffsetZ = shiftZ;
+        } else if (quickNavKey === 'KeyZ') {
+          // Z - align book's bottom-left with viewport's bottom-left
+          // Note: X-axis is inverted because moving camera right makes content appear left
+          const shiftX = intersections[2].x - bookBottomLeftX;  // Inverted X
+          const shiftZ = bookBottomLeftZ - intersections[2].z;
+          bookReadingState.panOffsetX = shiftX;
+          bookReadingState.panOffsetZ = shiftZ;
+        } else if (quickNavKey === 'KeyC') {
+          // C - align book's bottom-right with viewport's bottom-right
+          // Note: X-axis is inverted because moving camera right makes content appear left
+          const shiftX = intersections[3].x - bookBottomRightX;  // Inverted X
+          const shiftZ = bookBottomRightZ - intersections[3].z;
+          bookReadingState.panOffsetX = shiftX;
+          bookReadingState.panOffsetZ = shiftZ;
+        }
+
+        // Note: No constraints applied here - the shift values are calculated precisely
+        // to align book corners with viewport corners. Applying constraints would
+        // defeat the purpose of corner alignment.
+
+        // Update camera position with calculated offsets
+        camera.position.set(
+          bookWorldPos.x + bookReadingState.panOffsetX,
+          bookWorldPos.y + bookReadingState.zoomDistance,
+          bookWorldPos.z + 0.65 + bookReadingState.panOffsetZ
+        );
+
+        // Log camera jump for debugging and analysis
+        const cornerNames = {
+          'KeyQ': 'top-left',
+          'KeyE': 'top-right',
+          'KeyZ': 'bottom-left',
+          'KeyC': 'bottom-right'
+        };
+        activityLog.add('CAMERA', 'Quick navigation to corner', {
+          corner: cornerNames[quickNavKey],
+          key: quickNavKey,
+          cameraPosition: {
+            x: camera.position.x.toFixed(3),
+            y: camera.position.y.toFixed(3),
+            z: camera.position.z.toFixed(3)
+          },
+          panOffset: {
+            x: bookReadingState.panOffsetX.toFixed(3),
+            z: bookReadingState.panOffsetZ.toFixed(3)
+          },
+          zoomDistance: bookReadingState.zoomDistance.toFixed(3),
+          bookWorldPos: {
+            x: bookWorldPos.x.toFixed(3),
+            y: bookWorldPos.y.toFixed(3),
+            z: bookWorldPos.z.toFixed(3)
+          },
+          bookDimensions: {
+            halfWidth: bookHalfWidth.toFixed(3),
+            halfDepth: bookHalfDepth.toFixed(3)
+          },
+          viewportIntersections: {
+            topLeft: `(${intersections[0].x.toFixed(3)}, ${intersections[0].z.toFixed(3)})`,
+            topRight: `(${intersections[1].x.toFixed(3)}, ${intersections[1].z.toFixed(3)})`,
+            bottomLeft: `(${intersections[2].x.toFixed(3)}, ${intersections[2].z.toFixed(3)})`,
+            bottomRight: `(${intersections[3].x.toFixed(3)}, ${intersections[3].z.toFixed(3)})`
+          }
+        });
+
+        return;
       }
     }
   });

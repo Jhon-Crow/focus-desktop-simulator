@@ -1,0 +1,136 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Viewport Corner Raycasting Test</title>
+  <style>
+    body { margin: 0; overflow: hidden; font-family: monospace; }
+    #info {
+      position: absolute;
+      top: 10px;
+      left: 10px;
+      background: rgba(0, 0, 0, 0.8);
+      color: white;
+      padding: 10px;
+      font-size: 12px;
+      max-width: 400px;
+    }
+    #canvas-container { width: 100vw; height: 100vh; }
+  </style>
+</head>
+<body>
+  <div id="info">
+    <h3>Viewport Corner Raycasting Test</h3>
+    <div id="output"></div>
+  </div>
+  <div id="canvas-container"></div>
+
+  <script type="module">
+    import * as THREE from 'https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js';
+
+    const scene = new THREE.Scene();
+    scene.background = new THREE.Color(0x333333);
+
+    const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+
+    const renderer = new THREE.WebGLRenderer({ antialias: true });
+    renderer.setSize(window.innerWidth, window.innerHeight);
+    document.getElementById('canvas-container').appendChild(renderer.domElement);
+
+    // Create a horizontal plane (book plane)
+    const bookY = 0;
+    const planeGeometry = new THREE.PlaneGeometry(2, 2);
+    const planeMaterial = new THREE.MeshBasicMaterial({
+      color: 0x888888,
+      side: THREE.DoubleSide,
+      wireframe: false
+    });
+    const plane = new THREE.Mesh(planeGeometry, planeMaterial);
+    plane.rotation.x = -Math.PI / 2;
+    plane.position.y = bookY;
+    scene.add(plane);
+
+    // Add grid helper
+    const gridHelper = new THREE.GridHelper(4, 20);
+    gridHelper.position.y = bookY;
+    scene.add(gridHelper);
+
+    // Position camera similar to book reading mode
+    // Camera is above and behind the book
+    const bookWorldPos = { x: 0, y: bookY, z: 0 };
+    const zoomDistance = 0.85;
+    camera.position.set(
+      bookWorldPos.x,
+      bookWorldPos.y + zoomDistance,
+      bookWorldPos.z + 0.65
+    );
+    camera.lookAt(bookWorldPos.x, bookWorldPos.y, bookWorldPos.z);
+
+    // Create the book plane for raycasting
+    const bookPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), -bookY);
+
+    // Unproject viewport corners
+    const raycaster = new THREE.Raycaster();
+    const corners = [
+      { ndc: new THREE.Vector2(-1, 1), name: 'Top-Left' },
+      { ndc: new THREE.Vector2(1, 1), name: 'Top-Right' },
+      { ndc: new THREE.Vector2(-1, -1), name: 'Bottom-Left' },
+      { ndc: new THREE.Vector2(1, -1), name: 'Bottom-Right' }
+    ];
+
+    const intersections = corners.map((corner, index) => {
+      raycaster.setFromCamera(corner.ndc, camera);
+      const intersectPoint = new THREE.Vector3();
+      raycaster.ray.intersectPlane(bookPlane, intersectPoint);
+
+      // Add sphere at intersection point
+      const sphereGeometry = new THREE.SphereGeometry(0.05, 16, 16);
+      const sphereMaterial = new THREE.MeshBasicMaterial({
+        color: [0xff0000, 0x00ff00, 0x0000ff, 0xffff00][index]
+      });
+      const sphere = new THREE.Mesh(sphereGeometry, sphereMaterial);
+      sphere.position.copy(intersectPoint);
+      scene.add(sphere);
+
+      return { ...corner, intersection: intersectPoint };
+    });
+
+    // Display results
+    let output = '<strong>Camera Position:</strong><br>';
+    output += `x: ${camera.position.x.toFixed(3)}, `;
+    output += `y: ${camera.position.y.toFixed(3)}, `;
+    output += `z: ${camera.position.z.toFixed(3)}<br><br>`;
+
+    output += '<strong>Viewport Corner Intersections:</strong><br>';
+    intersections.forEach((corner, i) => {
+      const colors = ['🔴', '🟢', '🔵', '🟡'];
+      output += `${colors[i]} ${corner.name} (NDC: ${corner.ndc.x}, ${corner.ndc.y}):<br>`;
+      output += `&nbsp;&nbsp;x: ${corner.intersection.x.toFixed(3)}, `;
+      output += `z: ${corner.intersection.z.toFixed(3)}<br>`;
+    });
+
+    output += '<br><strong>Analysis:</strong><br>';
+    output += `Top corners Z: ${intersections[0].intersection.z.toFixed(3)} (TL), ${intersections[1].intersection.z.toFixed(3)} (TR)<br>`;
+    output += `Bottom corners Z: ${intersections[2].intersection.z.toFixed(3)} (BL), ${intersections[3].intersection.z.toFixed(3)} (BR)<br>`;
+
+    if (intersections[0].intersection.z < intersections[2].intersection.z) {
+      output += '<br>✅ Top corners have SMALLER Z than bottom corners';
+    } else {
+      output += '<br>✅ Top corners have LARGER Z than bottom corners';
+    }
+
+    document.getElementById('output').innerHTML = output;
+
+    function animate() {
+      requestAnimationFrame(animate);
+      renderer.render(scene, camera);
+    }
+    animate();
+
+    window.addEventListener('resize', () => {
+      camera.aspect = window.innerWidth / window.innerHeight;
+      camera.updateProjectionMatrix();
+      renderer.setSize(window.innerWidth, window.innerHeight);
+    });
+  </script>
+</body>
+</html>

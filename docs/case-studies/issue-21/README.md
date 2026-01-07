@@ -4,7 +4,7 @@
 
 **Issue**: [#21 - Add cards](https://github.com/Jhon-Crow/focus-desktop-simulator/issues/21)
 **PR**: [#116](https://github.com/Jhon-Crow/focus-desktop-simulator/pull/116)
-**Status**: In Progress (Bug Fix Round)
+**Status**: In Progress (Bug Fix Round 4)
 
 ## Timeline / Sequence of Events
 
@@ -178,8 +178,118 @@ Test cases to verify the fix:
 4. Set title on back for the deck with "Show title" enabled
 5. Draw a card - verify it has the title on back with background
 
+---
+
+## Phase 5: Card Flip and Back Image Fit Issues (Round 4)
+
+### User Feedback (Comment 4 - 2026-01-07T18:07:14Z)
+
+The user reported multiple issues:
+
+1. **Back image fit selector needed**: "Настройки ширины нужны для картинки на рубашке" (Width settings needed for back image)
+2. **Use back image as background**: "Добавь возможность не занимать часть оборотной стороны картинкой, а использовать её в качестве фона" (Add option to use image as full background instead of partial area)
+3. **Card flip not working**: "Всё ещё не переворачивается карточка" (Card still doesn't flip)
+4. **Arrow key flip outside reading mode**: "Листание должно работать вне read mode, просто при наведённом прицеле и нажатии левой/правой стрелки (как у книг)" (Flipping should work outside read mode, just by aiming and pressing arrow keys like books)
+
+### Activity Log Analysis
+
+The user provided an activity log (`activity-log-2026-01-07T18-05-11-405Z.txt`) showing:
+
+```
+[2026-01-07T18:05:18.770Z] Card flipped
+  Details: {
+    "cardId": 14,
+    "showingFront": false,
+    "startRotation": "3.1416",
+    "delta": "3.1416",
+    "targetRotation": "3.1416"
+  }
+```
+
+**Root Cause of Flip Bug**:
+- The `flipCard` function calculated `delta = Math.PI` (3.1416) regardless of current rotation
+- Animation went from `actualStartRotation + delta * eased` (e.g., 3.1416 + 3.1416 = 6.2832)
+- But then snapped to `targetRotation = 3.1416` (Math.PI) at the end
+- This created a visual jump/reset instead of smooth flip
+
+### Solution Implemented (Round 4)
+
+#### Fix 1: Complete Rewrite of `flipCard` Function
+
+New implementation with directional control (like book pages):
+
+```javascript
+// Flip a card (like turning a book page)
+// direction: 1 = flip to show front (like ArrowRight), -1 = flip to show back (like ArrowLeft)
+// If no direction specified, toggles to the opposite side
+function flipCard(cardObject, direction = null) {
+  // ...
+  // Now calculates actualDelta = targetRotation - actualStartRotation
+  // Animates directly to target without snapping
+}
+```
+
+Key changes:
+- Added `direction` parameter for directional flipping
+- Added `isFlipping` flag to prevent double-flip during animation
+- Fixed animation to use `actualDelta = targetRotation - actualStartRotation`
+- No more snap at end - animation goes directly to target
+
+#### Fix 2: Arrow Key Flipping Outside Reading Mode
+
+Added card flip support similar to book page navigation:
+
+```javascript
+// Card flip navigation (when not in reading mode, but aimed at card) - like book page turning
+let cardObject = null;
+// Check if aimed at card via raycast...
+if (cardObject) {
+  const direction = e.key === 'ArrowRight' ? 1 : -1;
+  flipCard(cardObject, direction);
+}
+```
+
+#### Fix 3: Back Image Fit Selector
+
+Added `backImageFit` property with three modes:
+- `fill` (default): Image covers entire card (used as background)
+- `contain`: Image fits within a bounded area, maintaining aspect ratio
+- `cover`: Image fills area, may crop to maintain aspect ratio
+
+UI added to card customization panel with dropdown selector.
+
+#### Fix 4: Updated Card Reading Mode
+
+Reading mode now uses directional flipping:
+- ArrowLeft = show back (page 1)
+- ArrowRight = show front (page 2)
+
+### Files Changed
+
+- `src/renderer.js`:
+  - Rewrote `flipCard()` function with direction support
+  - Added arrow key handling for cards outside reading mode
+  - Added `backImageFit` property to card userData
+  - Updated `updateCardVisuals()` to handle back image fit modes
+  - Added back image fit selector UI to customization panel
+  - Added event handler for back image fit selector
+  - Updated save/load to persist `backImageFit`
+
+### Verification Test Cases
+
+1. **Card flip with toggle**: Middle-click card, verify it flips to other side
+2. **Card flip with arrows outside reading mode**: Aim at card, press ← → arrows, verify flip
+3. **Directional flip**: Press → to show front, ← to show back
+4. **Back image as background**: Upload back image, select "Full card background (fill)"
+5. **Back image contained**: Upload back image, select "Fit within area (contain)"
+6. **State persistence**: Save, reload, verify back image fit setting persists
+
+---
+
 ## References
 
 - Original Issue: https://github.com/Jhon-Crow/focus-desktop-simulator/issues/21
 - Pull Request: https://github.com/Jhon-Crow/focus-desktop-simulator/pull/116
-- User Feedback Comment: https://github.com/Jhon-Crow/focus-desktop-simulator/pull/116#issuecomment-3719244194
+- User Feedback Comment (Round 3): https://github.com/Jhon-Crow/focus-desktop-simulator/pull/116#issuecomment-3719244194
+- User Feedback Comment (Round 4): https://github.com/Jhon-Crow/focus-desktop-simulator/pull/116#issuecomment-3720106751
+- Activity Log: `logs/activity-log-2026-01-07T18-05-11-405Z.txt`

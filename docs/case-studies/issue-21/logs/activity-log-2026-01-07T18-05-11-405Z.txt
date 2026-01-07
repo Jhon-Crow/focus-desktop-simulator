@@ -1,0 +1,77 @@
+Focus Desktop Simulator - Activity Log
+Generated: 2026-01-07T18:05:11.404Z
+Session Duration: 7.98s
+
+================================================================================
+
+
+[2026-01-07T18:05:16.332Z] [+12.91s] [SYSTEM] Log recording started
+  Details: {
+    "filePath": "I:\\Загрузки\\focuse-desktop-sim\\activity-log-2026-01-07T18-05-11-405Z.txt"
+  }
+
+[2026-01-07T18:05:17.120Z] [+13.70s] [MODE] Pointer lock activated (FPS camera mode)
+  Details: {
+    "cameraPosition": {
+      "x": "-1.02",
+      "y": "0.50",
+      "z": "3.24"
+    }
+  }
+
+[2026-01-07T18:05:18.770Z] [+15.35s] [CLICK] Card flipped
+  Details: {
+    "cardId": 14,
+    "showingFront": false,
+    "startRotation": "3.1416",
+    "delta": "3.1416",
+    "targetRotation": "3.1416"
+  }
+
+[2026-01-07T18:05:19.746Z] [+16.32s] [CLICK] Card flipped
+  Details: {
+    "cardId": 14,
+    "showingFront": true,
+    "startRotation": "3.1416",
+    "delta": "-3.1416",
+    "targetRotation": "0.0000"
+  }
+
+[2026-01-07T18:05:24.263Z] [+20.84s] [MODE] Entered card reading mode
+  Details: {
+    "cardType": "card",
+    "cardId": 14
+  }
+
+[2026-01-07T18:05:24.958Z] [+21.54s] [CLICK] Card flipped
+  Details: {
+    "cardId": 14,
+    "showingFront": false,
+    "startRotation": "3.1416",
+    "delta": "3.1416",
+    "targetRotation": "3.1416"
+  }
+
+[2026-01-07T18:05:25.654Z] [+22.23s] [CLICK] Card flipped
+  Details: {
+    "cardId": 14,
+    "showingFront": true,
+    "startRotation": "3.1416",
+    "delta": "-3.1416",
+    "targetRotation": "0.0000"
+  }
+
+[2026-01-07T18:05:26.618Z] [+23.20s] [MODE] Exited card reading mode
+  Details: {
+    "cardType": "card",
+    "cardId": 14
+  }
+
+[2026-01-07T18:05:30.810Z] [+27.39s] [MODE] Pointer lock deactivated
+
+[2026-01-07T18:05:33.370Z] [+29.95s] [USER_ACTION] Stop log recording button clicked
+
+
+================================================================================
+
+Session ended: 2026-01-07T18:05:33.371Z

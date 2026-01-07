@@ -7137,8 +7137,9 @@ function createCard(options = {}) {
     // Colors
     mainColor: options.mainColor || '#ffffff', // Card front background
     accentColor: options.accentColor || '#1a1a1a', // Text color
-    // Image fit settings: 'contain' (fit within area), 'cover' (fill area), 'fill' (full card)
+    // Image fit settings: 'contain' (fit within area), 'cover' (fill area), 'fill' (full card, no overlay)
     frontImageFit: options.frontImageFit || 'contain',
+    backImageFit: options.backImageFit || 'fill', // Default to fill for back image (full card background)
     // State
     isFlipped: options.isFlipped !== undefined ? options.isFlipped : false, // false = back showing, true = front showing
     sourcedeckId: options.sourceDeckId || null
@@ -7358,42 +7359,72 @@ function drawCardFromDeck(deckObject) {
   return card;
 }
 
-// Flip a card
-function flipCard(cardObject) {
+// Flip a card (like turning a book page)
+// direction: 1 = flip to show front (like ArrowRight), -1 = flip to show back (like ArrowLeft)
+// If no direction specified, toggles to the opposite side
+function flipCard(cardObject, direction = null) {
   if (!cardObject || cardObject.userData.type !== 'card') return;
 
-  // Toggle flip state
-  cardObject.userData.isFlipped = !cardObject.userData.isFlipped;
+  // Prevent flipping if animation is in progress
+  if (cardObject.userData.isFlipping) return;
 
-  // Animate the flip around the X axis (flips the card over like turning a page)
-  // isFlipped = true means front showing → rotation.x = 0 (front face on top)
-  // isFlipped = false means back showing → rotation.x = Math.PI (back face on top)
+  // Determine target state
+  // isFlipped = false means back is showing (rotation.x = π)
+  // isFlipped = true means front is showing (rotation.x = 0)
+  const wasShowingFront = cardObject.userData.isFlipped;
 
-  // Normalize current rotation to [0, 2π) range to handle edge cases
-  let startRotation = cardObject.rotation.x % (2 * Math.PI);
-  if (startRotation < 0) startRotation += 2 * Math.PI;
-
-  // Target rotation based on flip state
-  const targetRotation = cardObject.userData.isFlipped ? 0 : Math.PI;
-
-  // Calculate the shortest rotation path (always should be ~180 degrees for a flip)
-  // If we're going from ~0 to PI, delta should be PI (flip forward)
-  // If we're going from ~PI to 0 (or 2PI), delta should be PI (flip backward)
-  let delta = targetRotation - startRotation;
-
-  // Ensure we always rotate 180 degrees (PI radians) in the correct direction
-  // This handles cases where rotation might have drifted due to floating point or other issues
-  if (cardObject.userData.isFlipped) {
-    // Flipping to front (target = 0): rotate by -PI from current position
-    delta = -Math.PI;
+  let willShowFront;
+  if (direction === 1) {
+    // ArrowRight: show front (page 2)
+    willShowFront = true;
+  } else if (direction === -1) {
+    // ArrowLeft: show back (page 1)
+    willShowFront = false;
   } else {
-    // Flipping to back (target = PI): rotate by +PI from current position
-    delta = Math.PI;
+    // No direction: toggle
+    willShowFront = !wasShowingFront;
   }
+
+  // If already showing the requested side, do nothing
+  if (willShowFront === wasShowingFront) return;
+
+  // Update state
+  cardObject.userData.isFlipped = willShowFront;
+  cardObject.userData.isFlipping = true;
+
+  // Calculate start and target rotations
+  // Use modulo to normalize rotation to [0, 2π) range
+  let currentRotation = cardObject.rotation.x % (2 * Math.PI);
+  if (currentRotation < 0) currentRotation += 2 * Math.PI;
+
+  // Determine the closest equivalent rotation for current state
+  // If back was showing, current should be near π (or near 3π = π + 2π)
+  // If front was showing, current should be near 0 (or near 2π)
+  let startRotation;
+  if (wasShowingFront) {
+    // Was showing front (should be near 0 or 2π)
+    startRotation = currentRotation < Math.PI ? currentRotation : currentRotation - 2 * Math.PI;
+  } else {
+    // Was showing back (should be near π)
+    if (currentRotation < Math.PI / 2) {
+      startRotation = currentRotation + Math.PI; // Adjust if rotation drifted below 0
+    } else if (currentRotation > 3 * Math.PI / 2) {
+      startRotation = currentRotation - Math.PI; // Adjust if rotation drifted above 2π
+    } else {
+      startRotation = Math.PI; // Use exact value for clean start
+    }
+  }
+
+  // Target rotation
+  const targetRotation = willShowFront ? 0 : Math.PI;
+
+  // Calculate delta for smooth animation
+  const delta = targetRotation - startRotation;
 
   const duration = 300;
   const startTime = Date.now();
-  const actualStartRotation = cardObject.rotation.x; // Use actual value for smooth animation
+  const actualStartRotation = cardObject.rotation.x;
+  const actualDelta = targetRotation - actualStartRotation;
 
   function animateFlip() {
     const elapsed = Date.now() - startTime;
@@ -7404,13 +7435,14 @@ function flipCard(cardObject) {
       ? 2 * progress * progress
       : 1 - Math.pow(-2 * progress + 2, 2) / 2;
 
-    cardObject.rotation.x = actualStartRotation + delta * eased;
+    cardObject.rotation.x = actualStartRotation + actualDelta * eased;
 
     if (progress < 1) {
       requestAnimationFrame(animateFlip);
     } else {
-      // Set final rotation to exact target value (normalized)
+      // Set final rotation to exact target value
       cardObject.rotation.x = targetRotation;
+      cardObject.userData.isFlipping = false;
       saveState();
     }
   }
@@ -7420,9 +7452,10 @@ function flipCard(cardObject) {
   // Log card flip with rotation details
   activityLog.add('CLICK', 'Card flipped', {
     cardId: cardObject.userData.id,
-    showingFront: cardObject.userData.isFlipped,
+    showingFront: willShowFront,
+    direction: direction,
     startRotation: actualStartRotation.toFixed(4),
-    delta: delta.toFixed(4),
+    delta: actualDelta.toFixed(4),
     targetRotation: targetRotation.toFixed(4)
   });
 }
@@ -7625,8 +7658,62 @@ function updateCardVisuals(cardObject) {
     if (cardData.backImage) {
       const img = new Image();
       img.onload = () => {
-        // Draw image covering the entire canvas
-        backCtx.drawImage(img, 0, 0, 128, 180);
+        const fitMode = cardData.backImageFit || 'fill';
+
+        if (fitMode === 'fill') {
+          // Fill entire card with image (use as background)
+          backCtx.drawImage(img, 0, 0, 128, 180);
+        } else {
+          // First draw the default back pattern as background
+          drawDefaultBackPattern(backCtx, cardData);
+
+          // Then draw the image in a bounded area
+          const imgRatio = img.width / img.height;
+          const canvasRatio = 128 / 180;
+
+          // Define the area for the image (similar to front side)
+          const areaX = 10;
+          const areaY = 30; // Start below top border
+          const areaWidth = 108;
+          const areaHeight = 120; // Leave space for title at bottom
+
+          let imgX, imgY, imgWidth, imgHeight;
+
+          if (fitMode === 'contain') {
+            // Fit image within area maintaining aspect ratio
+            if (imgRatio > areaWidth / areaHeight) {
+              imgWidth = areaWidth;
+              imgHeight = imgWidth / imgRatio;
+              imgX = areaX;
+              imgY = areaY + (areaHeight - imgHeight) / 2;
+            } else {
+              imgHeight = areaHeight;
+              imgWidth = imgHeight * imgRatio;
+              imgX = areaX + (areaWidth - imgWidth) / 2;
+              imgY = areaY;
+            }
+          } else if (fitMode === 'cover') {
+            // Fill area, may crop image
+            if (imgRatio > areaWidth / areaHeight) {
+              imgHeight = areaHeight;
+              imgWidth = imgHeight * imgRatio;
+              imgX = areaX + (areaWidth - imgWidth) / 2;
+              imgY = areaY;
+            } else {
+              imgWidth = areaWidth;
+              imgHeight = imgWidth / imgRatio;
+              imgX = areaX;
+              imgY = areaY + (areaHeight - imgHeight) / 2;
+            }
+          }
+
+          backCtx.save();
+          backCtx.beginPath();
+          backCtx.rect(areaX, areaY, areaWidth, areaHeight);
+          backCtx.clip();
+          backCtx.drawImage(img, imgX, imgY, imgWidth, imgHeight);
+          backCtx.restore();
+        }
         drawBackContent();
       };
       img.onerror = () => {
@@ -12257,12 +12344,13 @@ function setupEventListeners() {
       }
     }
 
-    // Arrow keys for card reading mode - left/right to flip card
+    // Arrow keys for card reading mode - left/right to flip card (like book pages)
     if ((e.key === 'ArrowLeft' || e.key === 'ArrowRight') && !e.altKey && !e.ctrlKey) {
       if (cardReadingState.active && cardReadingState.card) {
         e.preventDefault();
-        // Flip card on any arrow key press (both directions flip the card)
-        flipCard(cardReadingState.card);
+        // ArrowLeft = show back (page 1), ArrowRight = show front (page 2)
+        const direction = e.key === 'ArrowRight' ? 1 : -1;
+        flipCard(cardReadingState.card, direction);
         return;
       }
     }
@@ -12392,6 +12480,32 @@ function setupEventListeners() {
               animatePageTurn(bookObject, 1);
             }
           }
+        }
+
+        // Card flip navigation (when not in reading mode, but aimed at card) - like book page turning
+        // Check if crosshair is aimed at a card
+        let cardObject = null;
+        if (interactionObject && interactionObject.userData.type === 'card') {
+          cardObject = interactionObject;
+        } else {
+          // Raycast from center of screen to find card
+          const centerMouse = new THREE.Vector2(0, 0);
+          raycaster.setFromCamera(centerMouse, camera);
+          const intersects = raycaster.intersectObjects(deskObjects, true);
+          for (const hit of intersects) {
+            const obj = getParentDeskObject(hit.object);
+            if (obj && obj.userData.type === 'card') {
+              cardObject = obj;
+              break;
+            }
+          }
+        }
+
+        if (cardObject) {
+          e.preventDefault();
+          // ArrowLeft = show back (page 1), ArrowRight = show front (page 2)
+          const direction = e.key === 'ArrowRight' ? 1 : -1;
+          flipCard(cardObject, direction);
         }
       }
     }
@@ -16563,6 +16677,14 @@ function updateCustomizationPanel(object) {
                 <button id="card-back-image-clear-edit" style="padding: 10px 15px; background: rgba(239, 68, 68, 0.2); border: 1px solid rgba(239, 68, 68, 0.4); border-radius: 8px; color: #ef4444; cursor: pointer;">
                   Clear Back Image
                 </button>
+                <div style="margin-top: 8px;">
+                  <label style="color: rgba(255,255,255,0.6); display: block; margin-bottom: 6px; font-size: 11px;">Image Fit</label>
+                  <select id="card-back-image-fit-edit" style="width: 100%; padding: 8px; background: rgba(255,255,255,0.1); border: 1px solid rgba(255,255,255,0.2); border-radius: 6px; color: #fff; font-size: 12px;">
+                    <option value="fill" ${(object.userData.backImageFit || 'fill') === 'fill' ? 'selected' : ''}>Full card background (fill)</option>
+                    <option value="contain" ${object.userData.backImageFit === 'contain' ? 'selected' : ''}>Fit within area (contain)</option>
+                    <option value="cover" ${object.userData.backImageFit === 'cover' ? 'selected' : ''}>Fill area, may crop (cover)</option>
+                  </select>
+                </div>
                 <label style="display: flex; align-items: center; gap: 8px; color: rgba(255,255,255,0.7); cursor: pointer; font-size: 12px; margin-top: 8px;">
                   <input type="checkbox" id="card-copy-back-to-front-edit" ${object.userData.frontImage === object.userData.backImage && object.userData.frontImage ? 'checked' : ''}
                          style="width: 16px; height: 16px;">
@@ -16581,7 +16703,7 @@ function updateCustomizationPanel(object) {
         </div>
 
         <div style="margin-top: 15px; color: rgba(255,255,255,0.4); font-size: 11px;">
-          Tip: Middle-click to flip card, hold to enter reading mode (use ← → arrows to flip)
+          Tip: Use ← → arrows when aimed at card to flip (← = back, → = front). Middle-click to toggle, hold for reading mode.
         </div>
       `;
       setupCardCustomizationHandlers(object);
@@ -18042,6 +18164,16 @@ function setupCardCustomizationHandlers(object) {
     if (frontImageFitSelect) {
       frontImageFitSelect.addEventListener('change', () => {
         object.userData.frontImageFit = frontImageFitSelect.value;
+        updateCardVisuals(object);
+        saveState();
+      });
+    }
+
+    // Back image fit selector
+    const backImageFitSelect = document.getElementById('card-back-image-fit-edit');
+    if (backImageFitSelect) {
+      backImageFitSelect.addEventListener('change', () => {
+        object.userData.backImageFit = backImageFitSelect.value;
         updateCardVisuals(object);
         saveState();
       });
@@ -26403,6 +26535,10 @@ async function saveStateImmediate() {
           if (obj.userData.frontImageFit && obj.userData.frontImageFit !== 'contain') {
             data.frontImageFit = obj.userData.frontImageFit;
           }
+          // Save back image fit mode
+          if (obj.userData.backImageFit && obj.userData.backImageFit !== 'fill') {
+            data.backImageFit = obj.userData.backImageFit;
+          }
           // Save rotation state for flip (around X axis)
           data.rotationX = obj.rotation.x;
           break;
@@ -27102,6 +27238,8 @@ async function loadState() {
                 if (objData.backImage) obj.userData.backImage = objData.backImage;
                 // Restore front image fit mode
                 if (objData.frontImageFit) obj.userData.frontImageFit = objData.frontImageFit;
+                // Restore back image fit mode
+                if (objData.backImageFit) obj.userData.backImageFit = objData.backImageFit;
                 // Restore rotation state (around X axis for flip)
                 if (objData.rotationX !== undefined) {
                   obj.rotation.x = objData.rotationX;

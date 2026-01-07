@@ -8649,7 +8649,7 @@ function worldToDrawingCoords(worldPos, drawableObject) {
 
   // Convert to normalized coordinates (0-1) in PAPER-LOCAL space
   // - localX maps to canvas X (left-right on the paper)
-  // - localZ maps to canvas Y, inverted (front of paper = top of canvas)
+  // - localZ maps to canvas Y, inverted (larger Z = toward camera = top of screen = smaller canvas Y)
   const normalizedX = (localX / width) + 0.5;
   const normalizedY = 1.0 - ((localZ / depth) + 0.5);
 
@@ -8724,6 +8724,7 @@ function updateDrawingTexture(drawableObject) {
   // Create or update texture
   if (!drawableObject.userData.drawingTexture) {
     const texture = new THREE.CanvasTexture(canvas);
+    texture.flipY = false; // Don't flip texture - we handle orientation in worldToDrawingCoords()
     texture.needsUpdate = true;
     drawableObject.userData.drawingTexture = texture;
 

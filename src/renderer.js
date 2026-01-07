@@ -22347,115 +22347,119 @@ function setupDocumentHandlers(object) {
 
 // Setup document customization handlers (for title, colors, etc.)
 function setupDocumentCustomizationHandlers(object) {
-  // Title input
-  const titleInput = document.getElementById('document-title-input');
-  if (titleInput) {
-    titleInput.value = object.userData.documentTitle || '';
-    titleInput.addEventListener('input', (e) => {
-      object.userData.documentTitle = e.target.value;
+  // Use setTimeout to ensure DOM is fully updated after addSoundSettingsToPanel
+  // which uses innerHTML += and recreates all DOM elements
+  setTimeout(() => {
+    // Title input
+    const titleInput = document.getElementById('document-title-input');
+    if (titleInput) {
+      titleInput.value = object.userData.documentTitle || '';
+      titleInput.addEventListener('input', (e) => {
+        object.userData.documentTitle = e.target.value;
 
-      // Update title texture
-      const closedGroup = object.getObjectByName('closedDocument');
-      if (closedGroup) {
-        const folderTitle = closedGroup.getObjectByName('folderTitle');
-        if (folderTitle && object.userData.createTitleTexture) {
-          const newTexture = object.userData.createTitleTexture(e.target.value, 280, 124, 40);
-          if (folderTitle.material.map) folderTitle.material.map.dispose();
-          folderTitle.material.map = newTexture;
-          folderTitle.material.needsUpdate = true;
-          folderTitle.visible = e.target.value.trim().length > 0;
+        // Update title texture
+        const closedGroup = object.getObjectByName('closedDocument');
+        if (closedGroup) {
+          const folderTitle = closedGroup.getObjectByName('folderTitle');
+          if (folderTitle && object.userData.createTitleTexture) {
+            const newTexture = object.userData.createTitleTexture(e.target.value, 280, 124, 40);
+            if (folderTitle.material.map) folderTitle.material.map.dispose();
+            folderTitle.material.map = newTexture;
+            folderTitle.material.needsUpdate = true;
+            folderTitle.visible = e.target.value.trim().length > 0;
+          }
         }
-      }
 
-      saveState();
-    });
-  }
+        saveState();
+      });
+    }
 
-  // Title color picker
-  const titleColorInput = document.getElementById('document-title-color');
-  if (titleColorInput) {
-    titleColorInput.value = object.userData.titleColor || '#333333';
-    titleColorInput.addEventListener('input', (e) => {
-      object.userData.titleColor = e.target.value;
+    // Title color picker
+    const titleColorInput = document.getElementById('document-title-color');
+    if (titleColorInput) {
+      titleColorInput.value = object.userData.titleColor || '#333333';
+      titleColorInput.addEventListener('input', (e) => {
+        object.userData.titleColor = e.target.value;
 
-      // Update title texture with new color
-      const closedGroup = object.getObjectByName('closedDocument');
-      if (closedGroup) {
-        const folderTitle = closedGroup.getObjectByName('folderTitle');
-        if (folderTitle && object.userData.createTitleTexture) {
-          const newTexture = object.userData.createTitleTexture(
-            object.userData.documentTitle || '',
-            280,
-            124,
-            40
-          );
-          if (folderTitle.material.map) folderTitle.material.map.dispose();
-          folderTitle.material.map = newTexture;
-          folderTitle.material.needsUpdate = true;
+        // Update title texture with new color
+        const closedGroup = object.getObjectByName('closedDocument');
+        if (closedGroup) {
+          const folderTitle = closedGroup.getObjectByName('folderTitle');
+          if (folderTitle && object.userData.createTitleTexture) {
+            const newTexture = object.userData.createTitleTexture(
+              object.userData.documentTitle || '',
+              280,
+              124,
+              40
+            );
+            if (folderTitle.material.map) folderTitle.material.map.dispose();
+            folderTitle.material.map = newTexture;
+            folderTitle.material.needsUpdate = true;
+          }
         }
-      }
 
-      saveState();
-    });
-  }
+        saveState();
+      });
+    }
 
-  // Folder color picker
-  const folderColorInput = document.getElementById('document-folder-color');
-  if (folderColorInput) {
-    folderColorInput.value = object.userData.mainColor || '#f59e0b';
-    folderColorInput.addEventListener('input', (e) => {
-      object.userData.mainColor = e.target.value;
+    // Folder color picker
+    const folderColorInput = document.getElementById('document-folder-color');
+    if (folderColorInput) {
+      folderColorInput.value = object.userData.mainColor || '#f59e0b';
+      folderColorInput.addEventListener('input', (e) => {
+        object.userData.mainColor = e.target.value;
 
-      // Update folder material color
-      const closedGroup = object.getObjectByName('closedDocument');
-      if (closedGroup) {
-        const folder = closedGroup.children.find(c => c.name === 'folder');
-        if (folder && folder.material) {
-          folder.material.color.set(e.target.value);
+        // Update folder material color
+        const closedGroup = object.getObjectByName('closedDocument');
+        if (closedGroup) {
+          const folder = closedGroup.children.find(c => c.name === 'folder');
+          if (folder && folder.material) {
+            folder.material.color.set(e.target.value);
+          }
         }
-      }
 
-      const openGroup = object.getObjectByName('openDocument');
-      if (openGroup) {
-        const folderBack = openGroup.getObjectByName('folderBack');
-        if (folderBack && folderBack.material) folderBack.material.color.set(e.target.value);
-      }
+        const openGroup = object.getObjectByName('openDocument');
+        if (openGroup) {
+          const folderBack = openGroup.getObjectByName('folderBack');
+          if (folderBack && folderBack.material) folderBack.material.color.set(e.target.value);
+        }
 
-      saveState();
-    });
-  }
+        saveState();
+      });
+    }
 
-  // Document file upload (edit mode)
-  const docEditInput = document.getElementById('document-doc-edit');
-  console.log('[DOC-UPLOAD-EDIT] Setting up document-doc-edit handler, element found:', !!docEditInput);
-  if (docEditInput) {
-    docEditInput.addEventListener('change', (e) => {
-      console.log('[DOC-UPLOAD-EDIT] Change event fired, files:', e.target.files.length);
-      const file = e.target.files[0];
-      if (file) {
-        const fileName = file.name.toLowerCase();
-        const extension = fileName.split('.').pop();
-        console.log('[DOC-UPLOAD-EDIT] File selected:', fileName, 'extension:', extension);
+    // Document file upload (edit mode)
+    const docEditInput = document.getElementById('document-doc-edit');
+    console.log('[DOC-UPLOAD-EDIT] Setting up document-doc-edit handler, element found:', !!docEditInput);
+    if (docEditInput) {
+      docEditInput.addEventListener('change', (e) => {
+        console.log('[DOC-UPLOAD-EDIT] Change event fired, files:', e.target.files.length);
+        const file = e.target.files[0];
+        if (file) {
+          const fileName = file.name.toLowerCase();
+          const extension = fileName.split('.').pop();
+          console.log('[DOC-UPLOAD-EDIT] File selected:', fileName, 'extension:', extension);
 
-        if (['doc', 'docx', 'rtf'].includes(extension)) {
-          console.log('[DOC-UPLOAD-EDIT] Valid extension, calling loadDocToDocument');
-          object.userData.docPath = file.name;
-          object.userData.docFile = file;
-          loadDocToDocument(object, file);
-          // Update customization panel to show new file
-          updateCustomizationPanel(object);
+          if (['doc', 'docx', 'rtf'].includes(extension)) {
+            console.log('[DOC-UPLOAD-EDIT] Valid extension, calling loadDocToDocument');
+            object.userData.docPath = file.name;
+            object.userData.docFile = file;
+            loadDocToDocument(object, file);
+            // Update customization panel to show new file
+            updateCustomizationPanel(object);
+          } else {
+            console.error('[DOC-UPLOAD-EDIT] Invalid file type:', extension);
+            alert('Invalid file type. Only doc, docx, and rtf are supported.');
+          }
         } else {
-          console.error('[DOC-UPLOAD-EDIT] Invalid file type:', extension);
-          alert('Invalid file type. Only doc, docx, and rtf are supported.');
+          console.log('[DOC-UPLOAD-EDIT] No file selected');
         }
-      } else {
-        console.log('[DOC-UPLOAD-EDIT] No file selected');
-      }
-      e.target.value = ''; // Reset input to allow selecting the same file again
-    });
-  } else {
-    console.error('[DOC-UPLOAD-EDIT] document-doc-edit element NOT FOUND');
-  }
+        e.target.value = ''; // Reset input to allow selecting the same file again
+      });
+    } else {
+      console.error('[DOC-UPLOAD-EDIT] document-doc-edit element NOT FOUND');
+    }
+  }, 0);
 }
 
 // ============================================================================

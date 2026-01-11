@@ -65,6 +65,21 @@ const CONFIG = {
     pixelSize: 4,           // Size of pixels (higher = more pixelated)
     normalEdgeStrength: 0.3, // Edge detection based on normals
     depthEdgeStrength: 0.4   // Edge detection based on depth
+  },
+  // Desk drawer settings (3 drawers on the left side of the desk)
+  drawers: {
+    count: 3,
+    width: 2.0,           // Width of each drawer
+    height: 0.5,          // Height of each drawer
+    depth: 1.8,           // Depth of drawer (how far it extends when open)
+    spacing: 0.1,         // Vertical spacing between drawers
+    wallThickness: 0.05,  // Thickness of drawer walls
+    handleWidth: 0.3,     // Width of drawer handle
+    handleHeight: 0.08,   // Height of drawer handle
+    maxOpenAmount: 1.6,   // How far drawer can slide out
+    slideSpeed: 0.15,     // Animation speed for drawer sliding
+    color: 0x654321,      // Drawer wood color (darker than desk)
+    handleColor: 0x8b4513 // Handle color (brass-like)
   }
 };
 
@@ -97,6 +112,20 @@ let debugState = {
   showCollisionRadii: false,
   collisionHelpers: [],  // Array of THREE.Mesh objects for visualizing collisions
   showCameraRay: false   // Show camera crosshair ray for debugging
+};
+
+// Drawer state (3 drawers on left side of desk)
+let drawerState = {
+  drawers: [],           // Array of THREE.Group for each drawer
+  drawerContainers: [],  // Array of THREE.Group for each drawer's content container
+  openAmounts: [0, 0, 0], // Current open amount (0 = closed, maxOpenAmount = fully open)
+  targetOpenAmounts: [0, 0, 0], // Target open amounts for animation
+  contents: [[], [], []], // Objects stored in each drawer (references to deskObjects)
+  isDraggingDrawer: false,
+  draggedDrawerIndex: -1,
+  dragStartZ: 0,
+  dragStartOpenAmount: 0,
+  drawerGroup: null      // Parent group for all drawers
 };
 
 // ============================================================================
@@ -2869,6 +2898,9 @@ function init() {
   // Create desk
   createDesk();
 
+  // Create drawers (3 drawers on left side of desk)
+  createDrawers();
+
   // Create floor
   createFloor();
 
@@ -3123,6 +3155,461 @@ function createDesk() {
 
   desk = deskGroup;
   scene.add(desk);
+}
+
+// ============================================================================
+// DRAWER CREATION (3 drawers on left side of desk)
+// ============================================================================
+function createDrawers() {
+  const dc = CONFIG.drawers;
+  const drawerGroup = new THREE.Group();
+  drawerGroup.name = 'drawerGroup';
+
+  // Calculate starting position (left side of desk, under surface)
+  // Drawers are positioned at negative X (left from camera perspective)
+  const startX = -CONFIG.desk.width / 2 + dc.width / 2 + 0.3; // Left edge with margin
+  const startZ = CONFIG.desk.depth / 2 - dc.depth / 2; // Near edge of desk (closer to camera)
+  const startY = -dc.height - dc.spacing; // Below desk surface
+
+  for (let i = 0; i < dc.count; i++) {
+    // Each drawer is a group containing: outer box, inner space, handle
+    const drawer = new THREE.Group();
+    drawer.name = `drawer-${i}`;
+    drawer.userData = {
+      type: 'drawer',
+      index: i,
+      interactive: true
+    };
+
+    // Position drawer vertically (top drawer is index 0)
+    const yOffset = startY - i * (dc.height + dc.spacing);
+    drawer.position.set(startX, yOffset, startZ);
+
+    // Drawer materials
+    const drawerMaterial = new THREE.MeshStandardMaterial({
+      color: dc.color,
+      roughness: 0.6,
+      metalness: 0.1
+    });
+
+    const handleMaterial = new THREE.MeshStandardMaterial({
+      color: dc.handleColor,
+      roughness: 0.3,
+      metalness: 0.6
+    });
+
+    // Drawer bottom
+    const bottomGeometry = new THREE.BoxGeometry(dc.width, dc.wallThickness, dc.depth);
+    const bottom = new THREE.Mesh(bottomGeometry, drawerMaterial);
+    bottom.position.y = -dc.height / 2 + dc.wallThickness / 2;
+    bottom.castShadow = true;
+    bottom.receiveShadow = true;
+    drawer.add(bottom);
+
+    // Drawer back wall
+    const backGeometry = new THREE.BoxGeometry(dc.width, dc.height - dc.wallThickness, dc.wallThickness);
+    const back = new THREE.Mesh(backGeometry, drawerMaterial);
+    back.position.y = dc.wallThickness / 2;
+    back.position.z = -dc.depth / 2 + dc.wallThickness / 2;
+    back.castShadow = true;
+    drawer.add(back);
+
+    // Drawer left wall
+    const sideGeometry = new THREE.BoxGeometry(dc.wallThickness, dc.height - dc.wallThickness, dc.depth - dc.wallThickness);
+    const leftWall = new THREE.Mesh(sideGeometry, drawerMaterial);
+    leftWall.position.x = -dc.width / 2 + dc.wallThickness / 2;
+    leftWall.position.y = dc.wallThickness / 2;
+    leftWall.position.z = dc.wallThickness / 2;
+    leftWall.castShadow = true;
+    drawer.add(leftWall);
+
+    // Drawer right wall
+    const rightWall = new THREE.Mesh(sideGeometry, drawerMaterial);
+    rightWall.position.x = dc.width / 2 - dc.wallThickness / 2;
+    rightWall.position.y = dc.wallThickness / 2;
+    rightWall.position.z = dc.wallThickness / 2;
+    rightWall.castShadow = true;
+    drawer.add(rightWall);
+
+    // Drawer front panel (with handle)
+    const frontGeometry = new THREE.BoxGeometry(dc.width, dc.height, dc.wallThickness);
+    const front = new THREE.Mesh(frontGeometry, drawerMaterial);
+    front.name = 'drawerFront';
+    front.position.z = dc.depth / 2 - dc.wallThickness / 2;
+    front.castShadow = true;
+    front.receiveShadow = true;
+    drawer.add(front);
+
+    // Handle on front panel
+    const handleGeometry = new THREE.BoxGeometry(dc.handleWidth, dc.handleHeight, dc.wallThickness * 2);
+    const handle = new THREE.Mesh(handleGeometry, handleMaterial);
+    handle.name = 'drawerHandle';
+    handle.position.z = dc.depth / 2;
+    handle.position.y = 0;
+    handle.castShadow = true;
+    drawer.add(handle);
+
+    // Content container (holds objects in the drawer)
+    // This container is positioned at drawer's internal bottom
+    const contentContainer = new THREE.Group();
+    contentContainer.name = `drawerContent-${i}`;
+    contentContainer.position.y = -dc.height / 2 + dc.wallThickness;
+    drawer.add(contentContainer);
+
+    drawerState.drawers.push(drawer);
+    drawerState.drawerContainers.push(contentContainer);
+    drawerGroup.add(drawer);
+  }
+
+  // Create drawer housing (the cabinet structure that holds the drawers)
+  const housingMaterial = new THREE.MeshStandardMaterial({
+    color: 0x4a3520, // Darker wood for housing
+    roughness: 0.7,
+    metalness: 0.1
+  });
+
+  // Housing dimensions
+  const housingWidth = dc.width + 0.15;
+  const housingHeight = dc.count * (dc.height + dc.spacing) + dc.spacing;
+  const housingDepth = dc.depth + 0.1;
+  const housingWallThickness = 0.08;
+
+  // Housing left wall
+  const housingLeftGeom = new THREE.BoxGeometry(housingWallThickness, housingHeight, housingDepth);
+  const housingLeft = new THREE.Mesh(housingLeftGeom, housingMaterial);
+  housingLeft.position.set(startX - housingWidth / 2 + housingWallThickness / 2,
+                            startY - (dc.count - 1) * (dc.height + dc.spacing) / 2,
+                            startZ);
+  housingLeft.castShadow = true;
+  drawerGroup.add(housingLeft);
+
+  // Housing right wall
+  const housingRight = new THREE.Mesh(housingLeftGeom, housingMaterial);
+  housingRight.position.set(startX + housingWidth / 2 - housingWallThickness / 2,
+                             startY - (dc.count - 1) * (dc.height + dc.spacing) / 2,
+                             startZ);
+  housingRight.castShadow = true;
+  drawerGroup.add(housingRight);
+
+  // Housing back wall
+  const housingBackGeom = new THREE.BoxGeometry(housingWidth - housingWallThickness * 2, housingHeight, housingWallThickness);
+  const housingBack = new THREE.Mesh(housingBackGeom, housingMaterial);
+  housingBack.position.set(startX,
+                            startY - (dc.count - 1) * (dc.height + dc.spacing) / 2,
+                            startZ - housingDepth / 2 + housingWallThickness / 2);
+  housingBack.castShadow = true;
+  drawerGroup.add(housingBack);
+
+  // Housing bottom
+  const housingBottomGeom = new THREE.BoxGeometry(housingWidth, housingWallThickness, housingDepth);
+  const housingBottom = new THREE.Mesh(housingBottomGeom, housingMaterial);
+  housingBottom.position.set(startX,
+                              startY - dc.count * (dc.height + dc.spacing) - housingWallThickness / 2 + dc.spacing,
+                              startZ);
+  housingBottom.castShadow = true;
+  housingBottom.receiveShadow = true;
+  drawerGroup.add(housingBottom);
+
+  // Housing top (connects to desk surface)
+  const housingTop = new THREE.Mesh(housingBottomGeom, housingMaterial);
+  housingTop.position.set(startX,
+                           0, // At desk surface level
+                           startZ);
+  housingTop.receiveShadow = true;
+  drawerGroup.add(housingTop);
+
+  drawerState.drawerGroup = drawerGroup;
+  scene.add(drawerGroup);
+
+  console.log('Created', dc.count, 'drawers on left side of desk');
+}
+
+// Get the inner bounds of a drawer (for placing objects)
+function getDrawerInnerBounds(drawerIndex) {
+  const dc = CONFIG.drawers;
+  const margin = 0.1;
+  return {
+    width: dc.width - dc.wallThickness * 2 - margin * 2,
+    depth: dc.depth - dc.wallThickness * 2 - margin * 2,
+    height: dc.height - dc.wallThickness - margin
+  };
+}
+
+// Check if a position is inside a drawer
+function isPositionInDrawer(position, drawerIndex) {
+  if (drawerIndex < 0 || drawerIndex >= drawerState.drawers.length) return false;
+
+  const drawer = drawerState.drawers[drawerIndex];
+  const dc = CONFIG.drawers;
+
+  // Get drawer world position
+  const drawerWorldPos = new THREE.Vector3();
+  drawer.getWorldPosition(drawerWorldPos);
+
+  // Calculate bounds
+  const halfWidth = dc.width / 2 - dc.wallThickness;
+  const halfDepth = dc.depth / 2 - dc.wallThickness;
+
+  return (
+    Math.abs(position.x - drawerWorldPos.x) < halfWidth &&
+    Math.abs(position.z - drawerWorldPos.z - drawerState.openAmounts[drawerIndex] / 2) < halfDepth
+  );
+}
+
+// Find which drawer (if any) the mouse is currently over
+function findDrawerUnderMouse(mousePosition, cameraRef) {
+  const raycaster = new THREE.Raycaster();
+  raycaster.setFromCamera(mousePosition, cameraRef);
+
+  // Check intersection with drawer fronts/handles
+  const drawerMeshes = [];
+  drawerState.drawers.forEach(drawer => {
+    drawer.traverse(child => {
+      if (child.isMesh) {
+        drawerMeshes.push(child);
+      }
+    });
+  });
+
+  const intersects = raycaster.intersectObjects(drawerMeshes, false);
+  if (intersects.length > 0) {
+    // Find the parent drawer
+    let obj = intersects[0].object;
+    while (obj && !obj.name.startsWith('drawer-')) {
+      obj = obj.parent;
+    }
+    if (obj && obj.userData.index !== undefined) {
+      return obj.userData.index;
+    }
+  }
+  return -1;
+}
+
+// Update drawer sliding animations and visibility of objects inside
+function updateDrawerAnimations() {
+  const dc = CONFIG.drawers;
+
+  for (let i = 0; i < drawerState.drawers.length; i++) {
+    const drawer = drawerState.drawers[i];
+    const currentOpen = drawerState.openAmounts[i];
+    const targetOpen = drawerState.targetOpenAmounts[i];
+
+    // Animate drawer sliding
+    if (Math.abs(currentOpen - targetOpen) > 0.001) {
+      const diff = targetOpen - currentOpen;
+      drawerState.openAmounts[i] += diff * dc.slideSpeed;
+
+      // Update drawer position (slides along Z axis towards camera)
+      drawer.position.z = CONFIG.desk.depth / 2 - dc.depth / 2 + drawerState.openAmounts[i];
+    }
+
+    // Update visibility of objects in drawer based on open amount
+    const isOpen = drawerState.openAmounts[i] > 0.1;
+    const container = drawerState.drawerContainers[i];
+
+    // Show/hide objects in drawer (optimization: don't render objects in closed drawers)
+    drawerState.contents[i].forEach(obj => {
+      // When drawer is closed, hide objects for performance
+      // When drawer starts opening, show objects
+      if (obj.visible !== isOpen) {
+        obj.visible = isOpen;
+
+        // Lazy loading for complex objects when drawer opens
+        if (isOpen && obj.userData.needsLazyLoad) {
+          performLazyLoad(obj);
+        }
+      }
+    });
+  }
+}
+
+// Toggle drawer open/closed
+function toggleDrawer(drawerIndex) {
+  if (drawerIndex < 0 || drawerIndex >= CONFIG.drawers.count) return;
+
+  const dc = CONFIG.drawers;
+  const isCurrentlyOpen = drawerState.targetOpenAmounts[drawerIndex] > dc.maxOpenAmount / 2;
+
+  drawerState.targetOpenAmounts[drawerIndex] = isCurrentlyOpen ? 0 : dc.maxOpenAmount;
+
+  // Save state when drawer state changes
+  saveState();
+}
+
+// Open a specific drawer
+function openDrawer(drawerIndex) {
+  if (drawerIndex < 0 || drawerIndex >= CONFIG.drawers.count) return;
+
+  drawerState.targetOpenAmounts[drawerIndex] = CONFIG.drawers.maxOpenAmount;
+  saveState();
+}
+
+// Close a specific drawer
+function closeDrawer(drawerIndex) {
+  if (drawerIndex < 0 || drawerIndex >= CONFIG.drawers.count) return;
+
+  drawerState.targetOpenAmounts[drawerIndex] = 0;
+  saveState();
+}
+
+// Set drawer open amount directly (for drag interaction)
+function setDrawerOpenAmount(drawerIndex, amount) {
+  if (drawerIndex < 0 || drawerIndex >= CONFIG.drawers.count) return;
+
+  const dc = CONFIG.drawers;
+  drawerState.targetOpenAmounts[drawerIndex] = Math.max(0, Math.min(dc.maxOpenAmount, amount));
+  drawerState.openAmounts[drawerIndex] = drawerState.targetOpenAmounts[drawerIndex]; // Immediate update for drag
+}
+
+// Put an object into a drawer
+function putObjectInDrawer(object, drawerIndex) {
+  if (drawerIndex < 0 || drawerIndex >= CONFIG.drawers.count) return false;
+  if (!object || object.userData.type === 'drawer') return false;
+
+  const dc = CONFIG.drawers;
+  const drawer = drawerState.drawers[drawerIndex];
+  const container = drawerState.drawerContainers[drawerIndex];
+  const bounds = getDrawerInnerBounds(drawerIndex);
+
+  // Calculate position relative to drawer's content container
+  // Get drawer world position
+  const drawerWorldPos = new THREE.Vector3();
+  drawer.getWorldPosition(drawerWorldPos);
+
+  // Calculate object's position relative to drawer
+  const relativeX = object.position.x - drawerWorldPos.x;
+  const relativeZ = object.position.z - drawerWorldPos.z - drawerState.openAmounts[drawerIndex];
+
+  // Clamp position to drawer bounds
+  const clampedX = Math.max(-bounds.width / 2, Math.min(bounds.width / 2, relativeX));
+  const clampedZ = Math.max(-bounds.depth / 2, Math.min(bounds.depth / 2, relativeZ));
+
+  // Store object's drawer info
+  object.userData.inDrawer = drawerIndex;
+  object.userData.drawerPosition = { x: clampedX, z: clampedZ };
+
+  // Mark complex objects for lazy loading when drawer reopens
+  if (['books', 'magazine', 'laptop'].includes(object.userData.type)) {
+    if (object.userData.pdfDataUrl || object.userData.isOn) {
+      object.userData.needsLazyLoad = true;
+    }
+  }
+
+  // Add to drawer contents tracking
+  if (!drawerState.contents[drawerIndex].includes(object)) {
+    drawerState.contents[drawerIndex].push(object);
+  }
+
+  // Reparent object to drawer container
+  scene.remove(object);
+  container.add(object);
+
+  // Set object position relative to container
+  object.position.set(clampedX, object.userData.originalY || 0, clampedZ);
+
+  // Hide object if drawer is closed
+  object.visible = drawerState.openAmounts[drawerIndex] > 0.1;
+
+  console.log('Put object', object.userData.type, 'in drawer', drawerIndex);
+  saveState();
+  return true;
+}
+
+// Take an object out of a drawer and put it back on the desk
+function takeObjectFromDrawer(object) {
+  if (object.userData.inDrawer === undefined) return false;
+
+  const drawerIndex = object.userData.inDrawer;
+  const container = drawerState.drawerContainers[drawerIndex];
+  const drawer = drawerState.drawers[drawerIndex];
+
+  // Get drawer world position
+  const drawerWorldPos = new THREE.Vector3();
+  drawer.getWorldPosition(drawerWorldPos);
+
+  // Get object's position relative to drawer
+  const relPos = object.userData.drawerPosition || { x: 0, z: 0 };
+
+  // Calculate world position for object
+  const worldX = drawerWorldPos.x + relPos.x;
+  const worldZ = drawerWorldPos.z + relPos.z + drawerState.openAmounts[drawerIndex];
+  const worldY = CONFIG.desk.height + (object.userData.originalY || 0);
+
+  // Remove from drawer container
+  container.remove(object);
+
+  // Remove from drawer contents tracking
+  const contentIndex = drawerState.contents[drawerIndex].indexOf(object);
+  if (contentIndex > -1) {
+    drawerState.contents[drawerIndex].splice(contentIndex, 1);
+  }
+
+  // Clear drawer info
+  delete object.userData.inDrawer;
+  delete object.userData.drawerPosition;
+  delete object.userData.needsLazyLoad;
+
+  // Add back to scene
+  scene.add(object);
+  object.position.set(worldX, worldY, worldZ);
+  object.visible = true;
+
+  console.log('Took object', object.userData.type, 'from drawer', drawerIndex);
+  saveState();
+  return true;
+}
+
+// Lazy load complex object data when drawer opens
+function performLazyLoad(object) {
+  console.log('Performing lazy load for', object.userData.type);
+  object.userData.needsLazyLoad = false;
+
+  // Specific lazy load actions per object type
+  switch (object.userData.type) {
+    case 'books':
+    case 'magazine':
+      // PDF pages are loaded on-demand, nothing extra needed here
+      // The page textures will be loaded when user interacts
+      break;
+    case 'laptop':
+      // Laptop screen content is rendered on-demand
+      if (object.userData.createDesktopTexture) {
+        object.userData.createDesktopTexture();
+      }
+      break;
+  }
+}
+
+// Find which drawer an object is over (for dropping into drawer)
+function findDrawerUnderObject(object) {
+  if (!object) return -1;
+
+  const dc = CONFIG.drawers;
+
+  for (let i = 0; i < drawerState.drawers.length; i++) {
+    const drawer = drawerState.drawers[i];
+    const openAmount = drawerState.openAmounts[i];
+
+    // Only consider open drawers for dropping
+    if (openAmount < 0.3) continue;
+
+    // Get drawer world position
+    const drawerWorldPos = new THREE.Vector3();
+    drawer.getWorldPosition(drawerWorldPos);
+
+    // Calculate drawer bounds including the open extension
+    const halfWidth = dc.width / 2;
+    const halfDepth = dc.depth / 2 + openAmount / 2;
+    const centerZ = drawerWorldPos.z + openAmount / 2;
+
+    // Check if object position is within drawer bounds
+    if (Math.abs(object.position.x - drawerWorldPos.x) < halfWidth &&
+        Math.abs(object.position.z - centerZ) < halfDepth) {
+      return i;
+    }
+  }
+
+  return -1;
 }
 
 // ============================================================================
@@ -14379,6 +14866,17 @@ function onMouseDown(event) {
 
   updateMousePosition(event);
 
+  // Check for drawer interaction first (drag to open/close)
+  const drawerIndex = findDrawerUnderMouse(mouse, camera);
+  if (drawerIndex >= 0) {
+    // Start dragging the drawer
+    drawerState.isDraggingDrawer = true;
+    drawerState.draggedDrawerIndex = drawerIndex;
+    drawerState.dragStartZ = event.clientY;
+    drawerState.dragStartOpenAmount = drawerState.openAmounts[drawerIndex];
+    return;
+  }
+
   raycaster.setFromCamera(mouse, camera);
 
   // Check if clicking on a tipping object (to catch it before it falls)
@@ -15009,6 +15507,17 @@ function onMouseDown(event) {
 }
 
 function onMouseMove(event) {
+  // Handle drawer dragging
+  if (drawerState.isDraggingDrawer && drawerState.draggedDrawerIndex >= 0) {
+    const deltaY = event.clientY - drawerState.dragStartZ;
+    // Convert screen movement to drawer open amount
+    // Dragging down (positive deltaY) opens the drawer
+    const sensitivity = 0.01;
+    const newOpenAmount = drawerState.dragStartOpenAmount + deltaY * sensitivity;
+    setDrawerOpenAmount(drawerState.draggedDrawerIndex, newOpenAmount);
+    return;
+  }
+
   // Use pointer lock movement data if locked, otherwise use delta from previous position
   let deltaX, deltaY;
   if (pointerLockState.isLocked) {
@@ -15412,6 +15921,14 @@ function onMouseMove(event) {
 }
 
 function onMouseUp(event) {
+  // Handle drawer drag end
+  if (drawerState.isDraggingDrawer) {
+    drawerState.isDraggingDrawer = false;
+    drawerState.draggedDrawerIndex = -1;
+    saveState();
+    return;
+  }
+
   // Handle laptop lid drag end (before other handlers)
   if (isLidDragging && lidDragState.laptop) {
     // End lid dragging and save state
@@ -15597,6 +16114,22 @@ function onMouseUp(event) {
   }
 
   if (isDragging && selectedObject) {
+    // Check for drawer placement first
+    const targetDrawer = findDrawerUnderObject(selectedObject);
+    if (targetDrawer >= 0) {
+      // Put object in drawer
+      putObjectInDrawer(selectedObject, targetDrawer);
+      isDragging = false;
+      dragLayerOffset = 0;
+      selectedObject = null;
+      return;
+    }
+
+    // Check if object is being taken from a drawer (dragged outside drawer)
+    if (selectedObject.userData.inDrawer !== undefined) {
+      takeObjectFromDrawer(selectedObject);
+    }
+
     // Check if object is being dropped beyond desk bounds (start falling)
     const deskHalfWidth = CONFIG.desk.width / 2;
     const deskHalfDepth = CONFIG.desk.depth / 2;
@@ -26959,6 +27492,12 @@ async function saveStateImmediate() {
         data.rotationZ = obj.rotation.z;
       }
 
+      // Save drawer placement info
+      if (obj.userData.inDrawer !== undefined) {
+        data.inDrawer = obj.userData.inDrawer;
+        data.drawerPosition = obj.userData.drawerPosition;
+      }
+
       // Save type-specific data
       switch (obj.userData.type) {
         case 'photo-frame':
@@ -27344,6 +27883,21 @@ async function saveStateImmediate() {
       ignoreShortcuts: document.getElementById('ignore-shortcuts-checkbox')?.checked || false,
       muteOtherApps: document.getElementById('mute-other-apps-checkbox')?.checked || false,
       showControlHints: document.getElementById('show-control-hints-checkbox')?.checked || false
+    },
+    // Drawer state
+    drawers: {
+      openAmounts: [...drawerState.targetOpenAmounts],
+      // Store indices of objects in each drawer (references to objects array indices)
+      contents: drawerState.contents.map(drawerContents =>
+        drawerContents.map(obj => {
+          // Find index in deskObjects
+          const idx = deskObjects.indexOf(obj);
+          return {
+            objectIndex: idx,
+            drawerPosition: obj.userData.drawerPosition
+          };
+        }).filter(item => item.objectIndex >= 0)
+      )
     }
   };
 
@@ -28084,6 +28638,66 @@ async function loadState() {
             }
           }
         });
+
+        // Third pass: restore drawer placements
+        result.state.objects.forEach((objData, index) => {
+          if (objData.inDrawer !== undefined) {
+            const obj = deskObjects[index];
+            if (obj) {
+              // Put object into drawer
+              const drawerIndex = objData.inDrawer;
+              const drawerPosition = objData.drawerPosition || { x: 0, z: 0 };
+
+              // Manually set drawer state without calling putObjectInDrawer
+              // (to avoid extra saves during load)
+              obj.userData.inDrawer = drawerIndex;
+              obj.userData.drawerPosition = drawerPosition;
+
+              if (drawerState.drawers[drawerIndex]) {
+                const container = drawerState.drawerContainers[drawerIndex];
+
+                // Reparent object to drawer container
+                scene.remove(obj);
+                container.add(obj);
+
+                // Set object position relative to container
+                obj.position.set(drawerPosition.x, obj.userData.originalY || 0, drawerPosition.z);
+
+                // Add to drawer contents tracking
+                if (!drawerState.contents[drawerIndex].includes(obj)) {
+                  drawerState.contents[drawerIndex].push(obj);
+                }
+
+                // Mark for lazy loading if complex
+                if (['books', 'magazine', 'laptop'].includes(obj.userData.type)) {
+                  obj.userData.needsLazyLoad = true;
+                }
+              }
+            }
+          }
+        });
+      }
+
+      // Restore drawer open amounts
+      if (result.state.drawers) {
+        for (let i = 0; i < CONFIG.drawers.count; i++) {
+          if (result.state.drawers.openAmounts && result.state.drawers.openAmounts[i] !== undefined) {
+            drawerState.targetOpenAmounts[i] = result.state.drawers.openAmounts[i];
+            drawerState.openAmounts[i] = result.state.drawers.openAmounts[i];
+            // Update drawer position
+            if (drawerState.drawers[i]) {
+              drawerState.drawers[i].position.z = CONFIG.desk.depth / 2 - CONFIG.drawers.depth / 2 + drawerState.openAmounts[i];
+            }
+          }
+        }
+
+        // Update visibility of objects based on drawer open state
+        for (let i = 0; i < drawerState.contents.length; i++) {
+          const isOpen = drawerState.openAmounts[i] > 0.1;
+          drawerState.contents[i].forEach(obj => {
+            obj.visible = isOpen;
+          });
+        }
       } else {
         // Add default objects if no saved objects
         addObjectToDesk('clock', { x: -2, z: -1 });
@@ -28123,6 +28737,9 @@ function animate() {
   try {
     // Update physics
     updatePhysics();
+
+    // Update drawer animations
+    updateDrawerAnimations();
 
     // Update tipping objects at desk edge
     updateTippingObjects();

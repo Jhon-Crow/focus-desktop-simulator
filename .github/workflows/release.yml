@@ -18,6 +18,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
+      actions: write
 
     steps:
       - name: Checkout code
@@ -56,22 +57,53 @@ jobs:
           git tag -a "v${{ inputs.version }}" -m "Release v${{ inputs.version }}"
           git push origin "v${{ inputs.version }}"
 
+      - name: Trigger build workflow
+        id: trigger_build
+        run: |
+          echo "Triggering build workflow for tag v${{ inputs.version }}..."
+
+          # Trigger the build workflow via workflow_dispatch on the tag
+          gh workflow run build.yml --ref "v${{ inputs.version }}"
+
+          # Wait a moment for the run to be registered
+          sleep 5
+
+          # Get the run ID of the triggered workflow
+          for i in {1..12}; do
+            RUN_ID=$(gh run list --workflow=build.yml --limit=5 --json databaseId,headBranch,status,createdAt --jq '.[] | select(.headBranch == "v${{ inputs.version }}") | .databaseId' | head -1)
+            if [ -n "$RUN_ID" ]; then
+              echo "Found build run: $RUN_ID"
+              echo "run_id=$RUN_ID" >> $GITHUB_OUTPUT
+              break
+            fi
+            echo "Waiting for build run to appear..."
+            sleep 5
+          done
+
+          if [ -z "$RUN_ID" ]; then
+            echo "Error: Could not find triggered build run"
+            exit 1
+          fi
+        env:
+          GH_TOKEN: ${{ github.token }}
+
       - name: Wait for build workflow
         run: |
-          echo "Waiting for build workflow to complete..."
-          sleep 10
+          echo "Waiting for build workflow (run ${{ steps.trigger_build.outputs.run_id }}) to complete..."
 
           # Wait up to 15 minutes for the build to complete
           for i in {1..90}; do
-            status=$(gh run list --workflow=build.yml --branch="v${{ inputs.version }}" --limit=1 --json conclusion --jq '.[0].conclusion')
+            status=$(gh run view ${{ steps.trigger_build.outputs.run_id }} --json status,conclusion --jq '.conclusion // .status')
+            echo "Build status: $status"
+
             if [ "$status" = "success" ]; then
               echo "Build completed successfully"
               exit 0
-            elif [ "$status" = "failure" ]; then
-              echo "Build failed"
+            elif [ "$status" = "failure" ] || [ "$status" = "cancelled" ]; then
+              echo "Build failed or was cancelled"
               exit 1
             fi
-            echo "Build status: $status, waiting..."
+
             sleep 10
           done
 

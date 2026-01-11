@@ -7183,6 +7183,7 @@ function createCardDeck(options = {}) {
     deckTitle: options.deckTitle || '',
     showTitleOnBack: options.showTitleOnBack !== undefined ? options.showTitleOnBack : true,
     customBackImage: options.customBackImage || null, // Data URL for custom back image
+    diamondColor: options.diamondColor || 'rgba(255,255,255,0.3)', // Diamond pattern color
     // Card templates for this deck
     cardTemplates: options.cardTemplates || [
       // Default empty card template
@@ -7190,7 +7191,7 @@ function createCardDeck(options = {}) {
     ],
     // Colors
     mainColor: options.mainColor || '#1e3a5f', // Dark blue deck box
-    accentColor: options.accentColor || '#c41e3a', // Red card back pattern
+    accentColor: options.accentColor || '#c41e3a', // Red card back background color
     // State
     cardsDrawn: options.cardsDrawn || 0
   };
@@ -7270,8 +7271,8 @@ function createCardDeck(options = {}) {
   backCtx.fillStyle = group.userData.accentColor;
   backCtx.fillRect(0, 0, 128, 180);
 
-  // Add a simple pattern
-  backCtx.strokeStyle = 'rgba(255,255,255,0.3)';
+  // Add a simple pattern with diamond color
+  backCtx.strokeStyle = group.userData.diamondColor || 'rgba(255,255,255,0.3)';
   backCtx.lineWidth = 2;
   // Diamond pattern
   for (let i = 0; i < 5; i++) {
@@ -7340,9 +7341,10 @@ function createCard(options = {}) {
     backImage: options.backImage || null, // Data URL for custom back
     backTitle: options.backTitle || '',
     showTitleOnBack: options.showTitleOnBack !== undefined ? options.showTitleOnBack : false,
+    diamondColor: options.diamondColor || 'rgba(255,255,255,0.3)', // Diamond pattern color
     // Colors
     mainColor: options.mainColor || '#ffffff', // Card front background
-    accentColor: options.accentColor || '#1a1a1a', // Text color
+    accentColor: options.accentColor || '#1a1a1a', // Text color on front, card back background color
     // Image fit settings: 'contain' (fit within area), 'cover' (fill area), 'fill' (full card, no overlay)
     frontImageFit: options.frontImageFit || 'contain',
     backImageFit: options.backImageFit || 'fill', // Default to fill for back image (full card background)
@@ -7526,8 +7528,9 @@ function drawCardFromDeck(deckObject) {
     backImage: deckData.customBackImage,
     backTitle: deckData.deckTitle,
     showTitleOnBack: deckData.showTitleOnBack,
+    diamondColor: deckData.diamondColor,
     mainColor: '#ffffff',
-    accentColor: '#1a1a1a',
+    accentColor: deckData.accentColor || '#1a1a1a', // Use deck's accent color for card back
     isFlipped: false, // Start with back showing
     sourceDeckId: deckObject.userData.id
   };
@@ -7921,12 +7924,12 @@ function updateCardVisuals(cardObject) {
 
 // Helper function to draw the default card back pattern
 function drawDefaultBackPattern(ctx, cardData) {
-  // Fill with back color
-  ctx.fillStyle = cardData.backColor || '#c41e3a';
+  // Fill with accent color (main card back color)
+  ctx.fillStyle = cardData.accentColor || cardData.backColor || '#c41e3a';
   ctx.fillRect(0, 0, 128, 180);
 
-  // Add diamond pattern
-  ctx.strokeStyle = 'rgba(255,255,255,0.3)';
+  // Add diamond pattern with separate diamond color
+  ctx.strokeStyle = cardData.diamondColor || 'rgba(255,255,255,0.3)';
   ctx.lineWidth = 2;
   for (let i = 0; i < 5; i++) {
     for (let j = 0; j < 7; j++) {
@@ -7961,8 +7964,8 @@ function updateDeckVisuals(deckObject) {
     backCtx.fillStyle = deckData.accentColor || '#c41e3a';
     backCtx.fillRect(0, 0, 128, 180);
 
-    // Add pattern
-    backCtx.strokeStyle = 'rgba(255,255,255,0.3)';
+    // Add pattern with diamond color
+    backCtx.strokeStyle = deckData.diamondColor || 'rgba(255,255,255,0.3)';
     backCtx.lineWidth = 2;
     for (let i = 0; i < 5; i++) {
       for (let j = 0; j < 7; j++) {
@@ -17314,6 +17317,38 @@ function updateCustomizationPanel(object) {
           </div>
         </div>
 
+        <div class="customization-group" style="margin-top: 15px; padding-top: 15px; border-top: 1px solid rgba(255,255,255,0.1);">
+          <div style="color: rgba(255,255,255,0.9); font-weight: bold; margin-bottom: 12px;">🎨 Card Back Colors</div>
+          <div style="margin-bottom: 12px;">
+            <label style="color: rgba(255,255,255,0.7); display: block; margin-bottom: 8px; font-size: 12px;">Background Color</label>
+            <div id="card-back-colors" style="display: flex; flex-wrap: wrap; gap: 8px;">
+              <div class="color-swatch${object.userData.accentColor === '#c41e3a' ? ' selected' : ''}" style="background: #c41e3a; width: 32px; height: 32px; border-radius: 8px; cursor: pointer; border: 2px solid ${object.userData.accentColor === '#c41e3a' ? '#fff' : 'transparent'};" data-color="#c41e3a"></div>
+              <div class="color-swatch${object.userData.accentColor === '#1a1a1a' ? ' selected' : ''}" style="background: #1a1a1a; width: 32px; height: 32px; border-radius: 8px; cursor: pointer; border: 2px solid ${object.userData.accentColor === '#1a1a1a' ? '#fff' : 'rgba(255,255,255,0.3)'};" data-color="#1a1a1a"></div>
+              <div class="color-swatch${object.userData.accentColor === '#3b82f6' ? ' selected' : ''}" style="background: #3b82f6; width: 32px; height: 32px; border-radius: 8px; cursor: pointer; border: 2px solid ${object.userData.accentColor === '#3b82f6' ? '#fff' : 'transparent'};" data-color="#3b82f6"></div>
+              <div class="color-swatch${object.userData.accentColor === '#22c55e' ? ' selected' : ''}" style="background: #22c55e; width: 32px; height: 32px; border-radius: 8px; cursor: pointer; border: 2px solid ${object.userData.accentColor === '#22c55e' ? '#fff' : 'transparent'};" data-color="#22c55e"></div>
+              <div class="color-swatch${object.userData.accentColor === '#f59e0b' ? ' selected' : ''}" style="background: #f59e0b; width: 32px; height: 32px; border-radius: 8px; cursor: pointer; border: 2px solid ${object.userData.accentColor === '#f59e0b' ? '#fff' : 'transparent'};" data-color="#f59e0b"></div>
+              <div class="color-swatch${object.userData.accentColor === '#8b5cf6' ? ' selected' : ''}" style="background: #8b5cf6; width: 32px; height: 32px; border-radius: 8px; cursor: pointer; border: 2px solid ${object.userData.accentColor === '#8b5cf6' ? '#fff' : 'transparent'};" data-color="#8b5cf6"></div>
+              <div class="color-swatch${object.userData.accentColor === '#ec4899' ? ' selected' : ''}" style="background: #ec4899; width: 32px; height: 32px; border-radius: 8px; cursor: pointer; border: 2px solid ${object.userData.accentColor === '#ec4899' ? '#fff' : 'transparent'};" data-color="#ec4899"></div>
+              <div class="color-swatch${object.userData.accentColor === '#64748b' ? ' selected' : ''}" style="background: #64748b; width: 32px; height: 32px; border-radius: 8px; cursor: pointer; border: 2px solid ${object.userData.accentColor === '#64748b' ? '#fff' : 'transparent'};" data-color="#64748b"></div>
+            </div>
+            <div style="color: rgba(255,255,255,0.5); font-size: 11px; margin-top: 6px;">Main color of the card back (when no image or image doesn't fill)</div>
+          </div>
+          <div>
+            <label style="color: rgba(255,255,255,0.7); display: block; margin-bottom: 8px; font-size: 12px;">Diamond Pattern Color</label>
+            <div id="card-diamond-colors" style="display: flex; flex-wrap: wrap; gap: 8px;">
+              <div class="color-swatch${(object.userData.diamondColor || 'rgba(255,255,255,0.3)') === 'rgba(255,255,255,0.3)' ? ' selected' : ''}" style="background: rgba(255,255,255,0.3); width: 32px; height: 32px; border-radius: 8px; cursor: pointer; border: 2px solid ${(object.userData.diamondColor || 'rgba(255,255,255,0.3)') === 'rgba(255,255,255,0.3)' ? '#fff' : 'rgba(255,255,255,0.3)'};" data-color="rgba(255,255,255,0.3)"></div>
+              <div class="color-swatch${object.userData.diamondColor === '#ffffff' ? ' selected' : ''}" style="background: #ffffff; width: 32px; height: 32px; border-radius: 8px; cursor: pointer; border: 2px solid ${object.userData.diamondColor === '#ffffff' ? '#fff' : 'transparent'};" data-color="#ffffff"></div>
+              <div class="color-swatch${object.userData.diamondColor === '#fbbf24' ? ' selected' : ''}" style="background: #fbbf24; width: 32px; height: 32px; border-radius: 8px; cursor: pointer; border: 2px solid ${object.userData.diamondColor === '#fbbf24' ? '#fff' : 'transparent'};" data-color="#fbbf24"></div>
+              <div class="color-swatch${object.userData.diamondColor === '#60a5fa' ? ' selected' : ''}" style="background: #60a5fa; width: 32px; height: 32px; border-radius: 8px; cursor: pointer; border: 2px solid ${object.userData.diamondColor === '#60a5fa' ? '#fff' : 'transparent'};" data-color="#60a5fa"></div>
+              <div class="color-swatch${object.userData.diamondColor === '#34d399' ? ' selected' : ''}" style="background: #34d399; width: 32px; height: 32px; border-radius: 8px; cursor: pointer; border: 2px solid ${object.userData.diamondColor === '#34d399' ? '#fff' : 'transparent'};" data-color="#34d399"></div>
+              <div class="color-swatch${object.userData.diamondColor === '#f472b6' ? ' selected' : ''}" style="background: #f472b6; width: 32px; height: 32px; border-radius: 8px; cursor: pointer; border: 2px solid ${object.userData.diamondColor === '#f472b6' ? '#fff' : 'transparent'};" data-color="#f472b6"></div>
+              <div class="color-swatch${object.userData.diamondColor === '#c084fc' ? ' selected' : ''}" style="background: #c084fc; width: 32px; height: 32px; border-radius: 8px; cursor: pointer; border: 2px solid ${object.userData.diamondColor === '#c084fc' ? '#fff' : 'transparent'};" data-color="#c084fc"></div>
+              <div class="color-swatch${object.userData.diamondColor === '#94a3b8' ? ' selected' : ''}" style="background: #94a3b8; width: 32px; height: 32px; border-radius: 8px; cursor: pointer; border: 2px solid ${object.userData.diamondColor === '#94a3b8' ? '#fff' : 'transparent'};" data-color="#94a3b8"></div>
+            </div>
+            <div style="color: rgba(255,255,255,0.5); font-size: 11px; margin-top: 6px;">Color of the diamond pattern on the card back</div>
+          </div>
+        </div>
+
         <div class="customization-group" style="margin-top: 15px;">
           <button id="card-flip-edit" style="width: 100%; padding: 12px; background: rgba(79, 70, 229, 0.3); border: 1px solid rgba(79, 70, 229, 0.5); border-radius: 8px; color: #fff; cursor: pointer; font-size: 13px;">
             🔄 Flip Card
@@ -18909,6 +18944,48 @@ function setupCardCustomizationHandlers(object) {
         updateCustomizationPanel(object);
       });
     }
+
+    // Card back color swatches
+    const backColorSwatches = document.querySelectorAll('#card-back-colors .color-swatch');
+    backColorSwatches.forEach(swatch => {
+      swatch.addEventListener('click', () => {
+        const color = swatch.dataset.color;
+        object.userData.accentColor = color;
+        updateCardVisuals(object);
+        saveState();
+        // Update swatch selection visuals
+        backColorSwatches.forEach(s => {
+          const borderColor = s.dataset.color === color ? '#fff' : (s.dataset.color === '#1a1a1a' ? 'rgba(255,255,255,0.3)' : 'transparent');
+          s.style.borderColor = borderColor;
+          if (s.dataset.color === color) {
+            s.classList.add('selected');
+          } else {
+            s.classList.remove('selected');
+          }
+        });
+      });
+    });
+
+    // Card diamond color swatches
+    const diamondColorSwatches = document.querySelectorAll('#card-diamond-colors .color-swatch');
+    diamondColorSwatches.forEach(swatch => {
+      swatch.addEventListener('click', () => {
+        const color = swatch.dataset.color;
+        object.userData.diamondColor = color;
+        updateCardVisuals(object);
+        saveState();
+        // Update swatch selection visuals
+        diamondColorSwatches.forEach(s => {
+          const borderColor = s.dataset.color === color ? '#fff' : (s.dataset.color === 'rgba(255,255,255,0.3)' ? 'rgba(255,255,255,0.3)' : 'transparent');
+          s.style.borderColor = borderColor;
+          if (s.dataset.color === color) {
+            s.classList.add('selected');
+          } else {
+            s.classList.remove('selected');
+          }
+        });
+      });
+    });
 
     // Flip card button
     if (flipBtn) {

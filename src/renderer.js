@@ -3165,11 +3165,12 @@ function createDrawers() {
   const drawerGroup = new THREE.Group();
   drawerGroup.name = 'drawerGroup';
 
-  // Calculate starting position (left side of desk, under surface)
+  // Calculate starting position (left side of desk, on the desk surface)
   // Drawers are positioned at negative X (left from camera perspective)
-  const startX = -CONFIG.desk.width / 2 + dc.width / 2 + 0.3; // Left edge with margin
-  const startZ = CONFIG.desk.depth / 2 - dc.depth / 2; // Near edge of desk (closer to camera)
-  const startY = -dc.height - dc.spacing; // Below desk surface
+  // Position drawers on the desk surface as a drawer unit/pedestal
+  const startX = -CONFIG.desk.width / 2 + dc.width / 2 + 0.5; // Left edge with margin
+  const startZ = CONFIG.desk.depth / 2 - dc.depth / 2 - 0.5; // Slightly back from front edge
+  const startY = dc.height / 2 + 0.05; // First drawer on top of desk surface
 
   for (let i = 0; i < dc.count; i++) {
     // Each drawer is a group containing: outer box, inner space, handle
@@ -3388,6 +3389,8 @@ function findDrawerUnderMouse(mousePosition, cameraRef) {
 // Update drawer sliding animations and visibility of objects inside
 function updateDrawerAnimations() {
   const dc = CONFIG.drawers;
+  // Base Z position for drawers (same as createDrawers startZ)
+  const baseZ = CONFIG.desk.depth / 2 - dc.depth / 2 - 0.5;
 
   for (let i = 0; i < drawerState.drawers.length; i++) {
     const drawer = drawerState.drawers[i];
@@ -3400,7 +3403,7 @@ function updateDrawerAnimations() {
       drawerState.openAmounts[i] += diff * dc.slideSpeed;
 
       // Update drawer position (slides along Z axis towards camera)
-      drawer.position.z = CONFIG.desk.depth / 2 - dc.depth / 2 + drawerState.openAmounts[i];
+      drawer.position.z = baseZ + drawerState.openAmounts[i];
     }
 
     // Update visibility of objects in drawer based on open amount
@@ -3431,6 +3434,10 @@ function toggleDrawer(drawerIndex) {
   const isCurrentlyOpen = drawerState.targetOpenAmounts[drawerIndex] > dc.maxOpenAmount / 2;
 
   drawerState.targetOpenAmounts[drawerIndex] = isCurrentlyOpen ? 0 : dc.maxOpenAmount;
+  console.log('[Drawer] Toggle drawer', drawerIndex, isCurrentlyOpen ? 'closing' : 'opening');
+  activityLog.add('DRAWER', isCurrentlyOpen ? 'Drawer closing' : 'Drawer opening', {
+    drawerIndex: drawerIndex
+  });
 
   // Save state when drawer state changes
   saveState();
@@ -3440,6 +3447,7 @@ function toggleDrawer(drawerIndex) {
 function openDrawer(drawerIndex) {
   if (drawerIndex < 0 || drawerIndex >= CONFIG.drawers.count) return;
 
+  console.log('[Drawer] Opening drawer', drawerIndex);
   drawerState.targetOpenAmounts[drawerIndex] = CONFIG.drawers.maxOpenAmount;
   saveState();
 }
@@ -3448,6 +3456,7 @@ function openDrawer(drawerIndex) {
 function closeDrawer(drawerIndex) {
   if (drawerIndex < 0 || drawerIndex >= CONFIG.drawers.count) return;
 
+  console.log('[Drawer] Closing drawer', drawerIndex);
   drawerState.targetOpenAmounts[drawerIndex] = 0;
   saveState();
 }
@@ -3457,8 +3466,13 @@ function setDrawerOpenAmount(drawerIndex, amount) {
   if (drawerIndex < 0 || drawerIndex >= CONFIG.drawers.count) return;
 
   const dc = CONFIG.drawers;
-  drawerState.targetOpenAmounts[drawerIndex] = Math.max(0, Math.min(dc.maxOpenAmount, amount));
-  drawerState.openAmounts[drawerIndex] = drawerState.targetOpenAmounts[drawerIndex]; // Immediate update for drag
+  const clampedAmount = Math.max(0, Math.min(dc.maxOpenAmount, amount));
+  drawerState.targetOpenAmounts[drawerIndex] = clampedAmount;
+  drawerState.openAmounts[drawerIndex] = clampedAmount; // Immediate update for drag
+
+  // Update drawer position immediately (for smooth drag feedback)
+  const baseZ = CONFIG.desk.depth / 2 - dc.depth / 2 - 0.5;
+  drawerState.drawers[drawerIndex].position.z = baseZ + clampedAmount;
 }
 
 // Put an object into a drawer
@@ -3510,7 +3524,12 @@ function putObjectInDrawer(object, drawerIndex) {
   // Hide object if drawer is closed
   object.visible = drawerState.openAmounts[drawerIndex] > 0.1;
 
-  console.log('Put object', object.userData.type, 'in drawer', drawerIndex);
+  console.log('[Drawer] Put object', object.userData.type, 'in drawer', drawerIndex);
+  activityLog.add('DRAWER', 'Object stored in drawer', {
+    objectType: object.userData.type,
+    objectId: object.userData.id,
+    drawerIndex: drawerIndex
+  });
   saveState();
   return true;
 }
@@ -3554,7 +3573,12 @@ function takeObjectFromDrawer(object) {
   object.position.set(worldX, worldY, worldZ);
   object.visible = true;
 
-  console.log('Took object', object.userData.type, 'from drawer', drawerIndex);
+  console.log('[Drawer] Took object', object.userData.type, 'from drawer', drawerIndex);
+  activityLog.add('DRAWER', 'Object taken from drawer', {
+    objectType: object.userData.type,
+    objectId: object.userData.id,
+    drawerIndex: drawerIndex
+  });
   saveState();
   return true;
 }
@@ -14867,13 +14891,20 @@ function onMouseDown(event) {
   updateMousePosition(event);
 
   // Check for drawer interaction first (drag to open/close)
-  const drawerIndex = findDrawerUnderMouse(mouse, camera);
+  // Use raw click coordinates for drawer detection (ignore pointer lock)
+  // This allows clicking on drawers even when pointer is locked
+  const rect = renderer.domElement.getBoundingClientRect();
+  const rawMouseX = ((event.clientX - rect.left) / rect.width) * 2 - 1;
+  const rawMouseY = -((event.clientY - rect.top) / rect.height) * 2 + 1;
+  const rawMouse = new THREE.Vector2(rawMouseX, rawMouseY);
+  const drawerIndex = findDrawerUnderMouse(rawMouse, camera);
   if (drawerIndex >= 0) {
     // Start dragging the drawer
     drawerState.isDraggingDrawer = true;
     drawerState.draggedDrawerIndex = drawerIndex;
     drawerState.dragStartZ = event.clientY;
     drawerState.dragStartOpenAmount = drawerState.openAmounts[drawerIndex];
+    console.log('[Drawer] Started dragging drawer', drawerIndex, 'from open amount:', drawerState.dragStartOpenAmount);
     return;
   }
 
@@ -15512,9 +15543,14 @@ function onMouseMove(event) {
     const deltaY = event.clientY - drawerState.dragStartZ;
     // Convert screen movement to drawer open amount
     // Dragging down (positive deltaY) opens the drawer
-    const sensitivity = 0.01;
+    // Sensitivity: 0.02 means 80 pixels drag = full open (maxOpenAmount 1.6)
+    const sensitivity = 0.02;
     const newOpenAmount = drawerState.dragStartOpenAmount + deltaY * sensitivity;
-    setDrawerOpenAmount(drawerState.draggedDrawerIndex, newOpenAmount);
+    const clampedAmount = Math.max(0, Math.min(CONFIG.drawers.maxOpenAmount, newOpenAmount));
+    setDrawerOpenAmount(drawerState.draggedDrawerIndex, clampedAmount);
+    console.log('[Drawer] Dragging drawer', drawerState.draggedDrawerIndex,
+      'deltaY:', deltaY.toFixed(1),
+      'newAmount:', clampedAmount.toFixed(2));
     return;
   }
 
@@ -15923,6 +15959,16 @@ function onMouseMove(event) {
 function onMouseUp(event) {
   // Handle drawer drag end
   if (drawerState.isDraggingDrawer) {
+    const drawerIndex = drawerState.draggedDrawerIndex;
+    const finalAmount = drawerState.openAmounts[drawerIndex];
+    const isOpen = finalAmount > 0.1;
+
+    console.log('[Drawer] Stopped dragging drawer', drawerIndex, 'final amount:', finalAmount.toFixed(2), isOpen ? '(open)' : '(closed)');
+    activityLog.add('DRAWER', isOpen ? 'Drawer opened' : 'Drawer closed', {
+      drawerIndex: drawerIndex,
+      openAmount: finalAmount.toFixed(2)
+    });
+
     drawerState.isDraggingDrawer = false;
     drawerState.draggedDrawerIndex = -1;
     saveState();
@@ -28680,13 +28726,14 @@ async function loadState() {
 
       // Restore drawer open amounts
       if (result.state.drawers) {
+        const baseZ = CONFIG.desk.depth / 2 - CONFIG.drawers.depth / 2 - 0.5;
         for (let i = 0; i < CONFIG.drawers.count; i++) {
           if (result.state.drawers.openAmounts && result.state.drawers.openAmounts[i] !== undefined) {
             drawerState.targetOpenAmounts[i] = result.state.drawers.openAmounts[i];
             drawerState.openAmounts[i] = result.state.drawers.openAmounts[i];
             // Update drawer position
             if (drawerState.drawers[i]) {
-              drawerState.drawers[i].position.z = CONFIG.desk.depth / 2 - CONFIG.drawers.depth / 2 + drawerState.openAmounts[i];
+              drawerState.drawers[i].position.z = baseZ + drawerState.openAmounts[i];
             }
           }
         }

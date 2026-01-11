@@ -10019,38 +10019,32 @@ function findDrawableObjectUnderPen() {
 function worldToDrawingCoords(worldPos, drawableObject) {
   if (!drawableObject) return null;
 
-  // Get object's world position and rotation
-  const objPos = new THREE.Vector3();
-  drawableObject.getWorldPosition(objPos);
+  // Transform world position to local object space using inverse world matrix
+  // This properly handles all 3D rotations (X, Y, Z axes and combinations)
+  const localPos = worldPos.clone();
 
-  // Calculate local offset
-  const localX = worldPos.x - objPos.x;
-  const localZ = worldPos.z - objPos.z;
+  // Get the object's world matrix and invert it
+  drawableObject.updateMatrixWorld(true);
+  const inverseMatrix = new THREE.Matrix4().copy(drawableObject.matrixWorld).invert();
 
-  // Get object dimensions with scale applied
+  // Transform world position to local coordinates
+  localPos.applyMatrix4(inverseMatrix);
+
+  // Get object dimensions (base dimensions without scale - scale is already in the matrix)
   const baseWidth = drawableObject.userData.type === 'notebook' ? 0.4 : 0.28;
   const baseDepth = drawableObject.userData.type === 'notebook' ? 0.55 : 0.4;
-  const scale = drawableObject.userData.scale || drawableObject.scale.x || 1.0;
-  const width = baseWidth * scale;
-  const depth = baseDepth * scale;
 
-  // Convert to normalized coordinates (0-1)
-  const normalizedX = (localX / width) + 0.5;
-  const normalizedY = (localZ / depth) + 0.5;
-
-  // Apply object rotation (simplified - just Y rotation)
-  const cos = Math.cos(-drawableObject.rotation.y);
-  const sin = Math.sin(-drawableObject.rotation.y);
-  const centeredX = normalizedX - 0.5;
-  const centeredY = normalizedY - 0.5;
-  const rotatedX = centeredX * cos - centeredY * sin + 0.5;
-  const rotatedY = centeredX * sin + centeredY * cos + 0.5;
+  // In local space: X is width direction, Z is depth direction
+  // Convert local position to normalized coordinates (0-1)
+  // Note: localPos.x and localPos.z are now in object-local space
+  const normalizedX = (localPos.x / baseWidth) + 0.5;
+  const normalizedY = (localPos.z / baseDepth) + 0.5;
 
   // Convert to canvas coordinates (512x512 for drawing)
   const canvasSize = 512;
   return {
-    x: Math.floor(rotatedX * canvasSize),
-    y: Math.floor(rotatedY * canvasSize)
+    x: Math.floor(normalizedX * canvasSize),
+    y: Math.floor(normalizedY * canvasSize)
   };
 }
 

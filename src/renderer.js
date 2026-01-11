@@ -99,6 +99,195 @@ let debugState = {
   showCameraRay: false   // Show camera crosshair ray for debugging
 };
 
+// ============================================================================
+// MEMORY MONITORING UTILITY
+// ============================================================================
+// Provides real-time memory usage information for debugging memory leaks.
+// Access via console: memoryMonitor.getStats(), memoryMonitor.startMonitoring()
+
+const memoryMonitor = {
+  intervalId: null,
+  enabled: false,
+  history: [],
+  maxHistory: 100,
+
+  /**
+   * Get current memory statistics
+   * @returns {Object} Memory statistics object
+   */
+  getStats() {
+    const stats = {
+      timestamp: Date.now(),
+      deskObjects: deskObjects.length,
+      fallenObjects: fallenObjectsState.objects.length,
+      tippingObjects: fallenObjectsState.tippingObjects.length,
+      fallingObjects: fallenObjectsState.fallingObjects.length,
+      debugHelpers: debugState.collisionHelpers.length,
+      activityLogEntries: activityLog.entries.length,
+      frictionSounds: frictionSoundState.size,
+      physicsVelocities: physicsState.velocities.size,
+      physicsAngularVelocities: physicsState.angularVelocities.size
+    };
+
+    // Add JS heap info if available (Chrome/Electron)
+    if (performance && performance.memory) {
+      stats.jsHeapSizeLimit = Math.round(performance.memory.jsHeapSizeLimit / 1024 / 1024) + ' MB';
+      stats.totalJSHeapSize = Math.round(performance.memory.totalJSHeapSize / 1024 / 1024) + ' MB';
+      stats.usedJSHeapSize = Math.round(performance.memory.usedJSHeapSize / 1024 / 1024) + ' MB';
+    }
+
+    // Count Three.js scene objects
+    if (scene) {
+      let geometryCount = 0;
+      let materialCount = 0;
+      let textureCount = 0;
+
+      scene.traverse((child) => {
+        if (child.geometry) geometryCount++;
+        if (child.material) {
+          if (Array.isArray(child.material)) {
+            materialCount += child.material.length;
+            child.material.forEach(m => {
+              if (m.map) textureCount++;
+            });
+          } else {
+            materialCount++;
+            if (child.material.map) textureCount++;
+          }
+        }
+      });
+
+      stats.sceneChildren = scene.children.length;
+      stats.geometries = geometryCount;
+      stats.materials = materialCount;
+      stats.textures = textureCount;
+    }
+
+    return stats;
+  },
+
+  /**
+   * Log current memory stats to console
+   */
+  log() {
+    const stats = this.getStats();
+    console.log('=== Memory Stats ===');
+    console.table(stats);
+    return stats;
+  },
+
+  /**
+   * Start periodic monitoring (logs stats every interval)
+   * @param {number} intervalMs - Interval in milliseconds (default: 10000 = 10 seconds)
+   */
+  startMonitoring(intervalMs = 10000) {
+    if (this.intervalId) {
+      console.log('Memory monitoring already running');
+      return;
+    }
+
+    this.enabled = true;
+    console.log(`Starting memory monitoring (every ${intervalMs/1000}s)`);
+
+    this.intervalId = setInterval(() => {
+      const stats = this.getStats();
+      this.history.push(stats);
+
+      // Trim history to prevent memory buildup
+      if (this.history.length > this.maxHistory) {
+        this.history.shift();
+      }
+
+      // Check for potential memory issues
+      if (performance && performance.memory) {
+        const usedMB = performance.memory.usedJSHeapSize / 1024 / 1024;
+        const limitMB = performance.memory.jsHeapSizeLimit / 1024 / 1024;
+        const usagePercent = (usedMB / limitMB) * 100;
+
+        if (usagePercent > 80) {
+          console.warn(`⚠️ High memory usage: ${usedMB.toFixed(1)}MB (${usagePercent.toFixed(1)}% of limit)`);
+        }
+      }
+
+      // Check for unusual object counts
+      if (deskObjects.length > 100) {
+        console.warn(`⚠️ High desk object count: ${deskObjects.length}`);
+      }
+      if (activityLog.entries.length > 8000) {
+        console.warn(`⚠️ Activity log nearly full: ${activityLog.entries.length}/${activityLog.maxEntries}`);
+      }
+
+      console.log(`[Memory] Objects: ${deskObjects.length}, Heap: ${stats.usedJSHeapSize || 'N/A'}`);
+    }, intervalMs);
+  },
+
+  /**
+   * Stop periodic monitoring
+   */
+  stopMonitoring() {
+    if (this.intervalId) {
+      clearInterval(this.intervalId);
+      this.intervalId = null;
+      this.enabled = false;
+      console.log('Memory monitoring stopped');
+    }
+  },
+
+  /**
+   * Get memory usage trend (positive = growing, negative = shrinking)
+   * @returns {Object} Trend information
+   */
+  getTrend() {
+    if (this.history.length < 2) {
+      return { message: 'Not enough data (need at least 2 samples)' };
+    }
+
+    const first = this.history[0];
+    const last = this.history[this.history.length - 1];
+    const durationMs = last.timestamp - first.timestamp;
+
+    const trend = {
+      samples: this.history.length,
+      durationSeconds: Math.round(durationMs / 1000),
+      deskObjectsDelta: last.deskObjects - first.deskObjects,
+      geometriesDelta: (last.geometries || 0) - (first.geometries || 0),
+      materialsDelta: (last.materials || 0) - (first.materials || 0)
+    };
+
+    if (performance && performance.memory) {
+      trend.heapDeltaMB = (
+        performance.memory.usedJSHeapSize / 1024 / 1024 -
+        (first.usedJSHeapSize ? parseFloat(first.usedJSHeapSize) : 0)
+      ).toFixed(2);
+    }
+
+    return trend;
+  },
+
+  /**
+   * Force garbage collection (if available in debug mode)
+   */
+  forceGC() {
+    if (typeof gc === 'function') {
+      gc();
+      console.log('Forced garbage collection');
+    } else {
+      console.log('gc() not available. Run Electron with --js-flags="--expose-gc" to enable.');
+    }
+  },
+
+  /**
+   * Clear history
+   */
+  clearHistory() {
+    this.history = [];
+    console.log('Memory monitor history cleared');
+  }
+};
+
+// Expose to window for console access
+window.memoryMonitor = memoryMonitor;
+
 // Fallen objects state (objects that have fallen off the table onto the floor)
 let fallenObjectsState = {
   objects: [],            // Array of objects on the floor, ordered by fall time (last fallen first)
@@ -8511,6 +8700,130 @@ function addObjectToDesk(type, options = {}) {
   return object;
 }
 
+// ============================================================================
+// THREE.JS MEMORY MANAGEMENT
+// ============================================================================
+// Proper disposal of Three.js resources to prevent memory leaks.
+// Three.js objects contain GPU resources (geometries, materials, textures)
+// that are NOT automatically garbage collected - they must be explicitly disposed.
+// See: https://threejs.org/docs/#manual/en/introduction/How-to-dispose-of-objects
+
+/**
+ * Recursively dispose of a Three.js object and all its children.
+ * This properly cleans up geometries, materials, textures, and other GPU resources.
+ * @param {THREE.Object3D} object - The object to dispose
+ */
+function disposeThreeObject(object) {
+  if (!object) return;
+
+  // First, recursively dispose all children
+  while (object.children.length > 0) {
+    disposeThreeObject(object.children[0]);
+    object.remove(object.children[0]);
+  }
+
+  // Dispose geometry
+  if (object.geometry) {
+    object.geometry.dispose();
+  }
+
+  // Dispose material(s)
+  if (object.material) {
+    if (Array.isArray(object.material)) {
+      object.material.forEach(material => disposeMaterial(material));
+    } else {
+      disposeMaterial(object.material);
+    }
+  }
+
+  // Clean up userData references that may hold large data
+  if (object.userData) {
+    // Clean up audio elements
+    if (object.userData.audioElement) {
+      object.userData.audioElement.pause();
+      object.userData.audioElement.src = '';
+      object.userData.audioElement = null;
+    }
+
+    // Disconnect audio nodes
+    if (object.userData.sourceNode) {
+      try { object.userData.sourceNode.disconnect(); } catch (e) {}
+      object.userData.sourceNode = null;
+    }
+
+    if (object.userData.effectNodes) {
+      const nodes = object.userData.effectNodes;
+      if (nodes.panner) try { nodes.panner.disconnect(); } catch (e) {}
+      if (nodes.gain) try { nodes.gain.disconnect(); } catch (e) {}
+      object.userData.effectNodes = null;
+    }
+
+    // Dispose textures stored in userData
+    if (object.userData.screenTexture) {
+      object.userData.screenTexture.dispose();
+      object.userData.screenTexture = null;
+    }
+    if (object.userData.bootScreenTexture) {
+      object.userData.bootScreenTexture.dispose();
+      object.userData.bootScreenTexture = null;
+    }
+    if (object.userData.photoTexture) {
+      object.userData.photoTexture.dispose();
+      object.userData.photoTexture = null;
+    }
+
+    // Clear canvas references
+    if (object.userData.screenCanvas) {
+      object.userData.screenCanvas = null;
+    }
+    if (object.userData.screenCtx) {
+      object.userData.screenCtx = null;
+    }
+
+    // Clear large data URLs to free memory
+    // Note: We keep pdfDataUrl/photoDataUrl/etc for state persistence
+    // but clear any temporary/runtime data
+    if (object.userData.pdfDocument) {
+      object.userData.pdfDocument.destroy();
+      object.userData.pdfDocument = null;
+    }
+
+    // Clear drawing lines array references
+    if (object.userData.drawingLines) {
+      object.userData.drawingLines = null;
+    }
+
+    // Clear function references that may create closures
+    if (object.userData.createTitleTexture) {
+      object.userData.createTitleTexture = null;
+    }
+  }
+}
+
+/**
+ * Dispose a single material and all its textures
+ * @param {THREE.Material} material - The material to dispose
+ */
+function disposeMaterial(material) {
+  if (!material) return;
+
+  // Dispose all texture properties
+  const textureProperties = [
+    'map', 'lightMap', 'bumpMap', 'normalMap', 'specularMap',
+    'envMap', 'alphaMap', 'aoMap', 'displacementMap', 'emissiveMap',
+    'gradientMap', 'metalnessMap', 'roughnessMap'
+  ];
+
+  textureProperties.forEach(prop => {
+    if (material[prop]) {
+      material[prop].dispose();
+    }
+  });
+
+  // Dispose the material itself
+  material.dispose();
+}
+
 function removeObject(object) {
   const index = deskObjects.indexOf(object);
   if (index > -1) {
@@ -8523,11 +8836,20 @@ function removeObject(object) {
 
     deskObjects.splice(index, 1);
     scene.remove(object);
+
+    // Properly dispose Three.js resources (geometries, materials, textures)
+    disposeThreeObject(object);
+
     // Clean up physics data
     physicsState.velocities.delete(object.userData.id);
     physicsState.angularVelocities.delete(object.userData.id);
     physicsState.tiltState.delete(object.userData.id);
     physicsState.tiltVelocities.delete(object.userData.id);
+
+    // Clean up friction sound state
+    if (frictionSoundState.has(object.userData.id)) {
+      stopFrictionSound(object);
+    }
 
     // Delete drawing file if this is a notebook or paper with drawings
     if ((object.userData.type === 'notebook' || object.userData.type === 'paper') &&
@@ -8555,11 +8877,20 @@ function clearAllObjects() {
   while (deskObjects.length > 0) {
     const obj = deskObjects.pop();
     scene.remove(obj);
+
+    // Properly dispose Three.js resources (geometries, materials, textures)
+    disposeThreeObject(obj);
+
     // Clean up physics data
     physicsState.velocities.delete(obj.userData.id);
     physicsState.angularVelocities.delete(obj.userData.id);
     physicsState.tiltState.delete(obj.userData.id);
     physicsState.tiltVelocities.delete(obj.userData.id);
+
+    // Clean up friction sound state
+    if (frictionSoundState.has(obj.userData.id)) {
+      stopFrictionSound(obj);
+    }
 
     // Delete drawing file if this is a notebook or paper with drawings
     if ((obj.userData.type === 'notebook' || obj.userData.type === 'paper') &&
@@ -8567,6 +8898,9 @@ function clearAllObjects() {
       deleteDrawingFile(obj);
     }
   }
+
+  // Clear all friction sounds (in case any were missed)
+  frictionSoundState.clear();
 
   // Clear debug visualization helpers
   if (debugState.showCollisionRadii) {

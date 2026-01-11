@@ -7335,6 +7335,7 @@ function createCard(options = {}) {
     // Card content
     title: options.title || '',
     description: options.description || '',
+    descriptionFontSize: options.descriptionFontSize || 10, // Font size for description in pixels
     frontImage: options.frontImage || null, // Data URL for front image
     // Back styling (inherited from deck or custom)
     backColor: options.backColor || '#c41e3a',
@@ -7686,20 +7687,22 @@ function updateCardVisuals(cardObject) {
       // If no front image, description starts higher (around y=35, right after title)
       if (cardData.description) {
         frontCtx.fillStyle = cardData.accentColor || '#1a1a1a';
-        frontCtx.font = '10px Arial';
+        const fontSize = cardData.descriptionFontSize || 10;
+        frontCtx.font = `${fontSize}px Arial`;
         frontCtx.textAlign = 'center';
         const words = cardData.description.split(' ');
         let line = '';
         // Start description at different Y depending on whether we have a front image
         let y = cardData.frontImage ? 110 : 35;
         const maxWidth = 110;
+        const lineHeight = Math.ceil(fontSize * 1.4); // Dynamic line height based on font size
         words.forEach(word => {
           const testLine = line + word + ' ';
           const metrics = frontCtx.measureText(testLine);
           if (metrics.width > maxWidth && line !== '') {
             frontCtx.fillText(line, 64, y);
             line = word + ' ';
-            y += 14;
+            y += lineHeight;
           } else {
             line = testLine;
           }
@@ -17270,6 +17273,11 @@ function updateCustomizationPanel(object) {
             <textarea id="card-description-edit" placeholder="Enter card description"
                       style="width: 100%; height: 70px; padding: 10px; background: rgba(255,255,255,0.1); border: 1px solid rgba(255,255,255,0.2); border-radius: 8px; color: #fff; resize: vertical; box-sizing: border-box;">${object.userData.description || ''}</textarea>
           </div>
+          <div style="margin-top: 12px;">
+            <label style="color: rgba(255,255,255,0.7); display: block; margin-bottom: 8px; font-size: 12px;">Description Font Size: <span id="card-description-font-size-value">${object.userData.descriptionFontSize || 10}</span>px</label>
+            <input type="range" id="card-description-font-size-edit" min="6" max="20" step="1" value="${object.userData.descriptionFontSize || 10}"
+                   style="width: 100%; cursor: pointer;">
+          </div>
         </div>
 
         <div class="customization-group" style="margin-top: 15px; padding-top: 15px; border-top: 1px solid rgba(255,255,255,0.1);">
@@ -18782,6 +18790,8 @@ function setupCardCustomizationHandlers(object) {
   setTimeout(() => {
     const titleInput = document.getElementById('card-title-edit');
     const descriptionInput = document.getElementById('card-description-edit');
+    const descriptionFontSizeInput = document.getElementById('card-description-font-size-edit');
+    const descriptionFontSizeValue = document.getElementById('card-description-font-size-value');
     const frontImageInput = document.getElementById('card-front-image-edit');
     const frontImageBtn = document.getElementById('card-front-image-btn-edit');
     const frontImageClearBtn = document.getElementById('card-front-image-clear-edit');
@@ -18812,6 +18822,17 @@ function setupCardCustomizationHandlers(object) {
     if (descriptionInput) {
       descriptionInput.addEventListener('input', () => {
         object.userData.description = descriptionInput.value;
+        updateCardVisuals(object);
+        saveState();
+      });
+    }
+
+    // Description font size slider - live update
+    if (descriptionFontSizeInput && descriptionFontSizeValue) {
+      descriptionFontSizeInput.addEventListener('input', () => {
+        const fontSize = parseInt(descriptionFontSizeInput.value);
+        object.userData.descriptionFontSize = fontSize;
+        descriptionFontSizeValue.textContent = fontSize;
         updateCardVisuals(object);
         saveState();
       });

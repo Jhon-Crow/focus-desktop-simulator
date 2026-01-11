@@ -1,0 +1,115 @@
+name: Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Release version (e.g., 1.0.0)'
+        required: true
+        type: string
+      prerelease:
+        description: 'Mark as pre-release'
+        required: false
+        type: boolean
+        default: false
+
+jobs:
+  create-release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Validate version format
+        run: |
+          if ! [[ "${{ inputs.version }}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "Error: Version must be in format X.Y.Z (e.g., 1.0.0)"
+            exit 1
+          fi
+
+      - name: Check if tag exists
+        run: |
+          if git rev-parse "v${{ inputs.version }}" >/dev/null 2>&1; then
+            echo "Error: Tag v${{ inputs.version }} already exists"
+            exit 1
+          fi
+
+      - name: Update package.json version
+        run: |
+          npm version ${{ inputs.version }} --no-git-tag-version
+
+      - name: Commit version bump
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add package.json package-lock.json
+          git commit -m "chore: bump version to ${{ inputs.version }}"
+          git push
+
+      - name: Create and push tag
+        run: |
+          git tag -a "v${{ inputs.version }}" -m "Release v${{ inputs.version }}"
+          git push origin "v${{ inputs.version }}"
+
+      - name: Wait for build workflow
+        run: |
+          echo "Waiting for build workflow to complete..."
+          sleep 10
+
+          # Wait up to 15 minutes for the build to complete
+          for i in {1..90}; do
+            status=$(gh run list --workflow=build.yml --branch="v${{ inputs.version }}" --limit=1 --json conclusion --jq '.[0].conclusion')
+            if [ "$status" = "success" ]; then
+              echo "Build completed successfully"
+              exit 0
+            elif [ "$status" = "failure" ]; then
+              echo "Build failed"
+              exit 1
+            fi
+            echo "Build status: $status, waiting..."
+            sleep 10
+          done
+
+          echo "Timeout waiting for build"
+          exit 1
+        env:
+          GH_TOKEN: ${{ github.token }}
+
+      - name: Generate release notes
+        id: release_notes
+        run: |
+          # Get the previous tag
+          PREV_TAG=$(git describe --tags --abbrev=0 HEAD^ 2>/dev/null || echo "")
+
+          if [ -z "$PREV_TAG" ]; then
+            echo "First release of Focus Desktop Simulator" > release_notes.md
+            echo "" >> release_notes.md
+            echo "## Features" >> release_notes.md
+            echo "- Isometric 3D desk view with realistic lighting" >> release_notes.md
+            echo "- Drag & drop interactive objects" >> release_notes.md
+            echo "- Customizable desk accessories" >> release_notes.md
+            echo "- State persistence" >> release_notes.md
+            echo "- Real-time clock display" >> release_notes.md
+          else
+            echo "## What's Changed" > release_notes.md
+            echo "" >> release_notes.md
+            git log $PREV_TAG..HEAD --pretty=format:"- %s" --no-merges >> release_notes.md
+          fi
+
+          echo "" >> release_notes.md
+          echo "" >> release_notes.md
+          echo "## Installation" >> release_notes.md
+          echo "Download the installer or portable version below and run it on Windows." >> release_notes.md
+
+      - name: Update release with notes
+        run: |
+          gh release edit "v${{ inputs.version }}" \
+            --notes-file release_notes.md \
+            ${{ inputs.prerelease && '--prerelease' || '' }}
+        env:
+          GH_TOKEN: ${{ github.token }}

@@ -27295,6 +27295,7 @@ async function saveStateImmediate() {
           // Save card content
           data.title = obj.userData.title || '';
           data.description = obj.userData.description || '';
+          data.descriptionFontSize = obj.userData.descriptionFontSize || 10;
           data.isFlipped = obj.userData.isFlipped || false;
           // Save back styling
           data.backColor = obj.userData.backColor;
@@ -28024,6 +28025,7 @@ async function loadState() {
                   obj.userData.name = objData.title || 'Card';
                 }
                 if (objData.description !== undefined) obj.userData.description = objData.description;
+                if (objData.descriptionFontSize !== undefined) obj.userData.descriptionFontSize = objData.descriptionFontSize;
                 if (objData.isFlipped !== undefined) obj.userData.isFlipped = objData.isFlipped;
                 // Restore back styling
                 if (objData.backColor) obj.userData.backColor = objData.backColor;

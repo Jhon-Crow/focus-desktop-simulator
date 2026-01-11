@@ -1,6 +1,6 @@
 {
   "name": "focus-desktop-simulator",
-  "version": "0.21.2",
+  "version": "0.21.3",
   "description": "A high-performance desktop simulator - focus tool for Windows with isometric 3D desk and interactive objects",
   "main": "src/main.js",
   "scripts": {

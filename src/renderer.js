@@ -125,6 +125,7 @@ let drawerState = {
   draggedDrawerIndex: -1,
   dragStartZ: 0,
   dragStartOpenAmount: 0,
+  accumulatedDragY: 0,   // Accumulated Y movement for pointer lock mode
   drawerGroup: null      // Parent group for all drawers
 };
 
@@ -14911,6 +14912,7 @@ function onMouseDown(event) {
     drawerState.draggedDrawerIndex = drawerIndex;
     drawerState.dragStartZ = event.clientY;
     drawerState.dragStartOpenAmount = drawerState.openAmounts[drawerIndex];
+    drawerState.accumulatedDragY = 0; // Reset accumulated movement for pointer lock mode
     console.log('[Drawer] Started dragging drawer', drawerIndex, 'from open amount:', drawerState.dragStartOpenAmount);
     return;
   }
@@ -15547,7 +15549,16 @@ function onMouseDown(event) {
 function onMouseMove(event) {
   // Handle drawer dragging
   if (drawerState.isDraggingDrawer && drawerState.draggedDrawerIndex >= 0) {
-    const deltaY = event.clientY - drawerState.dragStartZ;
+    let deltaY;
+    if (pointerLockState.isLocked) {
+      // When pointer is locked, clientY doesn't change, so use movementY
+      const movementY = event.movementY || event.mozMovementY || event.webkitMovementY || 0;
+      drawerState.accumulatedDragY += movementY;
+      deltaY = drawerState.accumulatedDragY;
+    } else {
+      // Normal mode: use difference from start position
+      deltaY = event.clientY - drawerState.dragStartZ;
+    }
     // Convert screen movement to drawer open amount
     // Dragging down (positive deltaY) opens the drawer
     // Sensitivity: 0.02 means 80 pixels drag = full open (maxOpenAmount 1.6)
